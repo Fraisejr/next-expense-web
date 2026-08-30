@@ -10,7 +10,7 @@ import type { Account, AppData, Category, Transaction } from './types'
 
 type Page = 'overview' | 'transactions' | 'budgets' | 'accounts'
 type Modal = 'transaction' | 'account' | 'category' | null
-const STORAGE_KEY = 'next-expense-data-v7'
+const STORAGE_KEY = 'next-expense-data-v8'
 
 const money = new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' })
 const monthName = new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric' })

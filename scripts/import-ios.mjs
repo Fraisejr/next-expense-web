@@ -49,6 +49,24 @@ const decimalToMinor = (value) => {
   return result
 }
 
+const importTimeZone = 'Europe/Paris'
+const localDateFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: importTimeZone,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
+const iosTimestampToLocalDate = (value) => {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}) ([+-])(\d{2})(\d{2})$/)
+  if (!match) return null
+  const [, year, month, day, hour, minute, second, sign, offsetHour, offsetMinute] = match
+  const instant = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}${sign}${offsetHour}:${offsetMinute}`)
+  if (Number.isNaN(instant.getTime())) return null
+  const parts = Object.fromEntries(localDateFormatter.formatToParts(instant).map((part) => [part.type, part.value]))
+  return `${parts.year}-${parts.month}-${parts.day}`
+}
+
 const [transactionContents, budgetContents] = await Promise.all([
   readFile(resolve(transactionsPath), 'utf8'),
   readFile(resolve(budgetsPath), 'utf8'),
@@ -57,7 +75,11 @@ const [transactionContents, budgetContents] = await Promise.all([
 const transactionRows = parseRows(transactionContents, 15)
 const budgetRows = parseRows(budgetContents, 4)
 
-const selectedRows = transactionRows.filter(({ values }) => values[1].startsWith(period))
+const datedTransactionRows = transactionRows.map((row) => ({
+  ...row,
+  localDate: iosTimestampToLocalDate(row.values[1]),
+}))
+const selectedRows = datedTransactionRows.filter(({ localDate }) => localDate?.startsWith(period))
 const invalidRows = []
 const skippedRows = []
 const importedRows = []
@@ -73,7 +95,7 @@ for (const row of selectedRows) {
   }
   const issues = []
   if (!account) issues.push('missing account')
-  if (!/^\d{4}-\d{2}-\d{2}/.test(dateFull)) issues.push('invalid date')
+  if (!row.localDate) issues.push('invalid date')
   if (!/^\d+$/.test(amount)) issues.push('invalid amount')
   if (currency !== 'EUR') issues.push(`unsupported currency ${currency || '(blank)'}`)
   if (transfer === 'true' && !toAccount) issues.push('missing transfer destination')
@@ -89,7 +111,7 @@ for (const row of selectedRows) {
   accountNames.add(account)
   if (toAccount) accountNames.add(toAccount)
   if (categoryName) categoryNames.add(categoryName)
-  importedRows.push({ ...row, account, date: dateFull.slice(0, 10), payee, categoryName, memo, amountMinor: Number(amount), type, toAccount })
+  importedRows.push({ ...row, account, date: row.localDate, payee, categoryName, memo, amountMinor: Number(amount), type, toAccount })
 }
 
 const [year, month] = period.split('-').map(Number)
@@ -183,6 +205,7 @@ const trueIncomeMinor = sum('income') - refundsMinor
 const data = { accounts, categories, transactions }
 const report = {
   period,
+  timeZone: importTimeZone,
   sourceRows: transactionRows.length,
   selectedRows: selectedRows.length,
   importedRows: transactions.length,
