@@ -73,6 +73,7 @@ function App() {
   const [viewedMonth, setViewedMonth] = useState(() => new Date())
   const [search, setSearch] = useState('')
   const [mobileNav, setMobileNav] = useState(false)
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null)
 
   useEffect(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(data)), [data])
 
@@ -106,6 +107,7 @@ function App() {
   const expenseCategories = data.categories.filter((c) => c.kind === 'expense')
   const totalBudget = expenseCategories.reduce((sum, c) => sum + c.budgetMinor, 0)
   const pageTitle = navItems.find((item) => item.id === page)?.label ?? 'Overview'
+  const selectedCategory = data.categories.find((category) => category.id === selectedCategoryId)
 
   function moveMonth(delta: number) {
     setViewedMonth((current) => new Date(current.getFullYear(), current.getMonth() + delta, 1))
@@ -188,14 +190,14 @@ function App() {
             income={income} expenses={expenses} net={net} totalBalance={totalBalance}
             totalBudget={totalBudget} categorySpending={categorySpending}
             onAllTransactions={() => setPage('transactions')} onAddAccount={() => setModal('account')}
-            onAddCategory={() => setModal('category')}
+            onAddCategory={() => setModal('category')} onSelectCategory={setSelectedCategoryId}
           />
         )}
         {page === 'transactions' && (
           <TransactionsPage transactions={transactions} accounts={data.accounts} categories={data.categories} search={search} setSearch={setSearch} />
         )}
         {page === 'budgets' && (
-          <BudgetsPage categories={expenseCategories} categorySpending={categorySpending} onAdd={() => setModal('category')} />
+          <BudgetsPage categories={expenseCategories} categorySpending={categorySpending} onAdd={() => setModal('category')} onSelectCategory={setSelectedCategoryId} />
         )}
         {page === 'accounts' && (
           <AccountsPage accounts={data.accounts} totalBalance={totalBalance} onAdd={() => setModal('account')} />
@@ -209,13 +211,24 @@ function App() {
           {modal === 'category' && <CategoryForm onSubmit={addCategory} />}
         </ModalShell>
       )}
+      {selectedCategory && (
+        <ModalShell title={selectedCategory.name} onClose={() => setSelectedCategoryId(null)}>
+          <CategoryDetail
+            category={selectedCategory}
+            spent={categorySpending(selectedCategory.id)}
+            transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)}
+            categories={data.categories}
+            accounts={data.accounts}
+          />
+        </ModalShell>
+      )}
     </div>
   )
 }
 
-function Overview({ accounts, categories, transactionCategories, transactions, income, expenses, net, totalBalance, totalBudget, categorySpending, onAllTransactions, onAddAccount, onAddCategory }: {
+function Overview({ accounts, categories, transactionCategories, transactions, income, expenses, net, totalBalance, totalBudget, categorySpending, onAllTransactions, onAddAccount, onAddCategory, onSelectCategory }: {
   accounts: Account[]; categories: Category[]; transactionCategories: Category[]; transactions: Transaction[]; income: number; expenses: number; net: number; totalBalance: number; totalBudget: number
-  categorySpending: (id: string) => number; onAllTransactions: () => void; onAddAccount: () => void; onAddCategory: () => void
+  categorySpending: (id: string) => number; onAllTransactions: () => void; onAddAccount: () => void; onAddCategory: () => void; onSelectCategory: (id: string) => void
 }) {
   const budgetUsed = totalBudget ? Math.round((expenses / totalBudget) * 100) : 0
   return (
@@ -246,7 +259,7 @@ function Overview({ accounts, categories, transactionCategories, transactions, i
             <div><span>Available</span><strong className={totalBudget - expenses < 0 ? 'negative' : ''}>{formatMoney(totalBudget - expenses)}</strong></div>
           </div>
           <div className="category-list">
-            {categories.map((category) => <CategoryRow key={category.id} category={category} spent={categorySpending(category.id)} />)}
+            {categories.map((category) => <CategoryRow key={category.id} category={category} spent={categorySpending(category.id)} onSelect={() => onSelectCategory(category.id)} />)}
           </div>
         </div>
 
@@ -278,18 +291,18 @@ function MetricCard({ label, value, icon, tone, detail }: { label: string; value
   return <div className="metric-card"><div className={`metric-icon ${tone}`}>{icon}</div><span>{label}</span><strong>{formatMoney(value)}</strong><small>{detail}</small></div>
 }
 
-function CategoryRow({ category, spent }: { category: Category; spent: number }) {
+function CategoryRow({ category, spent, onSelect }: { category: Category; spent: number; onSelect: () => void }) {
   const Icon = categoryIcons[category.icon as keyof typeof categoryIcons] ?? Sparkles
   const percent = category.budgetMinor ? Math.round((spent / category.budgetMinor) * 100) : 0
   return (
-    <div className="category-row">
+    <button type="button" className="category-row" onClick={onSelect} aria-label={`View ${category.name} transactions`}>
       <span className="category-icon" style={{ color: category.color, background: `${category.color}18` }}><Icon size={18} /></span>
       <div className="category-progress">
         <div><strong>{category.name}</strong><span>{formatMoney(spent)} <i>of {formatMoney(category.budgetMinor)}</i></span></div>
         <div className="progress-track"><span style={{ width: `${Math.min(percent, 100)}%`, background: percent > 100 ? '#ae4c38' : category.color }} /></div>
       </div>
       <b className={percent > 100 ? 'negative' : ''}>{percent}%</b>
-    </div>
+    </button>
   )
 }
 
@@ -332,8 +345,8 @@ function TransactionsPage({ transactions, accounts, categories, search, setSearc
   )
 }
 
-function BudgetsPage({ categories, categorySpending, onAdd }: { categories: Category[]; categorySpending: (id: string) => number; onAdd: () => void }) {
-  return <div className="page-content narrow-page"><div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>Category budgets</h2></div><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button></div><div className="category-list roomy">{categories.map(c => <CategoryRow key={c.id} category={c} spent={categorySpending(c.id)} />)}</div></div></div>
+function BudgetsPage({ categories, categorySpending, onAdd, onSelectCategory }: { categories: Category[]; categorySpending: (id: string) => number; onAdd: () => void; onSelectCategory: (id: string) => void }) {
+  return <div className="page-content narrow-page"><div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>Category budgets</h2></div><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button></div><div className="category-list roomy">{categories.map(c => <CategoryRow key={c.id} category={c} spent={categorySpending(c.id)} onSelect={() => onSelectCategory(c.id)} />)}</div></div></div>
 }
 
 function AccountsPage({ accounts, totalBalance, onAdd }: { accounts: Account[]; totalBalance: number; onAdd: () => void }) {
@@ -342,6 +355,22 @@ function AccountsPage({ accounts, totalBalance, onAdd }: { accounts: Account[]; 
 
 function ModalShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}><div className="modal"><div className="modal-heading"><div><span className="eyebrow">Next Expense</span><h2>{title}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></div>{children}</div></div>
+}
+
+function CategoryDetail({ category, spent, transactions, categories, accounts }: { category: Category; spent: number; transactions: Transaction[]; categories: Category[]; accounts: Account[] }) {
+  const remaining = category.budgetMinor - spent
+  return <div className="category-detail">
+    <div className="category-detail-summary">
+      <div><span>Net spent</span><strong>{formatMoney(spent)}</strong></div>
+      <div><span>Budget</span><strong>{formatMoney(category.budgetMinor)}</strong></div>
+      <div><span>Remaining</span><strong className={remaining < 0 ? 'negative' : ''}>{formatMoney(remaining)}</strong></div>
+    </div>
+    <div className="category-detail-heading"><span>{transactions.length} transaction{transactions.length === 1 ? '' : 's'} this month</span></div>
+    <div className="category-detail-list">
+      {transactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} />)}
+      {!transactions.length && <div className="empty-state compact-empty"><ReceiptText size={24} /><h3>No transactions yet</h3></div>}
+    </div>
+  </div>
 }
 
 function TransactionForm({ accounts, categories, onSubmit }: { accounts: Account[]; categories: Category[]; onSubmit: (t: Omit<Transaction, 'id'>) => void }) {
