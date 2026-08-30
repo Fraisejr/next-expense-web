@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Personal finance imports stay local and must never enter Git history.
+public/*.local.json
+data/private/
+src/imported-data.json
+data/import-report.json
