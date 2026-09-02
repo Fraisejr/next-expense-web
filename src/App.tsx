@@ -3,14 +3,14 @@ import {
   ArrowDownLeft, ArrowLeftRight, ArrowRight, ArrowUpRight, BadgeEuro, Banknote, BriefcaseBusiness,
   BarChart3, CalendarDays, CarFront, ChevronDown, ChevronLeft, ChevronRight, CircleHelp,
   CreditCard, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Plus, ReceiptText, Search, Settings,
-  RefreshCw, ShoppingBasket, Sparkles, Target, Utensils, WalletCards, X,
+  RefreshCw, ShoppingBasket, Sparkles, Target, UsersRound, Utensils, WalletCards, X,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { createAccount, createCategory, createTransaction, linkBankAccount, loadWorkspace, saveBankSync, saveBudget, updateTaxRate, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
+import { assignPayeeMapping, createAccount, createCategory, createTransaction, ensurePayees, linkBankAccount, loadWorkspace, saveBankSync, saveBudget, updateTaxRate, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
 import { neon } from './neon'
-import type { Account, AccountScope, AppData, Category, ReportGroup, Transaction } from './types'
+import type { Account, AccountScope, AppData, Category, Payee, ReportGroup, Transaction } from './types'
 
-type Page = 'overview' | 'transactions' | 'budgets' | 'reports' | 'accounts'
+type Page = 'overview' | 'transactions' | 'payees' | 'budgets' | 'reports' | 'accounts'
 type Modal = 'transaction' | 'account' | 'category' | 'bank' | null
 const BANK_LINK_STORAGE_KEY = 'next-expense-gocardless-link'
 const moneyFormatters = new Map<string, Intl.NumberFormat>()
@@ -49,6 +49,7 @@ const categoryIcons = {
 const navItems: { id: Page; label: string; icon: typeof House; path: string }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard, path: '/' },
   { id: 'transactions', label: 'Transactions', icon: ReceiptText, path: '/transactions' },
+  { id: 'payees', label: 'Payees', icon: UsersRound, path: '/payees' },
   { id: 'budgets', label: 'Budgets', icon: Target, path: '/budgets' },
   { id: 'reports', label: 'Performance', icon: BarChart3, path: '/performance' },
 ]
@@ -159,9 +160,12 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
 
   const accountMatch = matchPath('/accounts/:accountId', location.pathname)
   const categoryMatch = matchPath('/categories/:categoryId', location.pathname)
+  const payeeMatch = matchPath('/payees/:payeeId', location.pathname)
   const page: Page = accountMatch ? 'accounts'
     : categoryMatch ? 'budgets'
+      : payeeMatch ? 'payees'
       : location.pathname === '/transactions' ? 'transactions'
+        : location.pathname === '/payees' ? 'payees'
         : location.pathname === '/budgets' ? 'budgets'
           : location.pathname === '/performance' ? 'reports'
             : location.pathname === '/accounts' ? 'accounts'
@@ -238,7 +242,8 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   const totalBudget = expenseCategories.reduce((sum, category) => sum + budgetForCategory(category.id), 0)
   const selectedCategory = data.categories.find((category) => category.id === categoryMatch?.params.categoryId)
   const selectedAccount = data.accounts.find((account) => account.id === accountMatch?.params.accountId)
-  const pageTitle = selectedAccount?.name ?? selectedCategory?.name ?? navItems.find((item) => item.id === page)?.label ?? (page === 'accounts' ? 'Accounts' : 'Overview')
+  const selectedPayee = data.payees.find((payee) => payee.id === payeeMatch?.params.payeeId)
+  const pageTitle = selectedAccount?.name ?? selectedCategory?.name ?? selectedPayee?.name ?? navItems.find((item) => item.id === page)?.label ?? (page === 'accounts' ? 'Accounts' : 'Overview')
   const personalAccounts = activeAccounts.filter((account) => account.scope === 'Personal')
   const companyAccounts = activeAccounts.filter((account) => account.scope === 'Company')
 
@@ -309,13 +314,16 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   }
 
   async function addTransaction(transaction: Omit<Transaction, 'id'>) {
-    const nextTransaction = { ...transaction, id: uid() }
     try {
       setSyncError('')
+      const resolvedPayees = transaction.type === 'transfer' ? [] : await ensurePayees(workspace.workspaceId, [transaction.payee])
+      const resolvedPayee = resolvedPayees[0]
+      const nextTransaction = { ...transaction, id: uid(), payeeId: resolvedPayee?.id }
       await createTransaction(workspace.workspaceId, nextTransaction)
     setData((current) => ({
       ...current,
       transactions: [...current.transactions, nextTransaction],
+      payees: resolvedPayee && !current.payees.some((payee) => payee.id === resolvedPayee.id) ? [...current.payees, resolvedPayee] : current.payees,
       accounts: current.accounts.map((account) => {
         if (transaction.type === 'transfer') {
           if (account.id === transaction.accountId) return { ...account, balanceMinor: account.balanceMinor - transaction.amountMinor }
@@ -329,6 +337,39 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     setModal(null)
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not save the transaction.')
+    }
+  }
+
+  async function mapUnmatchedPayee(sourceName: string, payeeId: string) {
+    try {
+      setSyncError('')
+      const transactionIds = new Set(await assignPayeeMapping(workspace.workspaceId, sourceName, payeeId))
+      const payee = data.payees.find((item) => item.id === payeeId)
+      setData((current) => ({
+        ...current,
+        transactions: current.transactions.map((transaction) => transactionIds.has(transaction.id)
+          ? { ...transaction, payeeId, payee: payee?.name ?? transaction.payee }
+          : transaction),
+      }))
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'Could not map the bank description.')
+    }
+  }
+
+  async function createPayeeFromUnmatched(sourceName: string, payeeName: string) {
+    try {
+      setSyncError('')
+      const [payee] = await ensurePayees(workspace.workspaceId, [payeeName])
+      const transactionIds = new Set(await assignPayeeMapping(workspace.workspaceId, sourceName, payee.id))
+      setData((current) => ({
+        ...current,
+        payees: current.payees.some((item) => item.id === payee.id) ? current.payees : [...current.payees, payee],
+        transactions: current.transactions.map((transaction) => transactionIds.has(transaction.id)
+          ? { ...transaction, payeeId: payee.id, payee: payee.name }
+          : transaction),
+      }))
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'Could not create and map the payee.')
     }
   }
 
@@ -418,14 +459,14 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         <header className="topbar">
           <div className="topbar-title">
             <button className="icon-button mobile-menu" aria-label="Open menu" onClick={() => setMobileNav(!mobileNav)}><Menu size={21} /></button>
-            <div><span className="eyebrow">{selectedAccount ? 'Accounts' : selectedCategory ? 'Categories' : 'Personal budget'}</span><h1>{pageTitle}</h1></div>
+            <div><span className="eyebrow">{selectedAccount ? 'Accounts' : selectedCategory ? 'Categories' : selectedPayee ? 'Payees' : page === 'payees' ? 'Directory' : 'Personal budget'}</span><h1>{pageTitle}</h1></div>
           </div>
           <div className="top-actions">
-            <div className="month-switcher">
+            {page !== 'payees' && <div className="month-switcher">
               <button aria-label="Previous month" onClick={() => moveMonth(-1)}><ChevronLeft size={17} /></button>
               <label><CalendarDays size={16} /><input aria-label="Select month" type="month" value={selectedMonthKey} onInput={(event) => selectMonth((event.target as HTMLInputElement).value)} /></label>
               <button aria-label="Next month" onClick={() => moveMonth(1)}><ChevronRight size={17} /></button>
-            </div>
+            </div>}
             <button className="primary-button" onClick={() => setModal('transaction')}><Plus size={18} />Add transaction</button>
           </div>
         </header>
@@ -444,6 +485,9 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         {page === 'transactions' && (
           <TransactionsPage transactions={transactions} accounts={data.accounts} categories={data.categories} search={search} setSearch={setSearch} />
         )}
+        {page === 'payees' && !selectedPayee && (
+          <PayeesPage payees={data.payees} transactions={data.transactions} onSelectPayee={(id) => goTo(`/payees/${id}`)} onMapPayee={mapUnmatchedPayee} onCreatePayee={createPayeeFromUnmatched} />
+        )}
         {page === 'budgets' && !selectedCategory && (
           <BudgetsPage categories={data.categories} categorySpending={categorySpending} budgetForCategory={budgetForCategory} onAdd={() => setModal('category')} onSelectCategory={(id) => goTo(`/categories/${id}`)} />
         )}
@@ -459,11 +503,14 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         {selectedCategory && (
           <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} accounts={data.accounts} onUpdateBudget={updateBudget} onBack={() => goTo('/budgets')} onSelectCategory={(id) => goTo(`/categories/${id}`)} />
         )}
+        {selectedPayee && (
+          <PayeeDetailPage payee={selectedPayee} transactions={data.transactions.filter((transaction) => transaction.payeeId === selectedPayee.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/payees')} />
+        )}
       </main>
 
       {modal && (
         <ModalShell title={modal === 'transaction' ? 'Add transaction' : modal === 'account' ? 'Create account' : modal === 'category' ? 'Create category' : `Connect ${bankTarget?.name ?? 'account'}`} onClose={() => setModal(null)}>
-          {modal === 'transaction' && <TransactionForm accounts={activeAccounts} categories={data.categories} onSubmit={addTransaction} />}
+          {modal === 'transaction' && <TransactionForm accounts={activeAccounts} categories={data.categories} payees={data.payees} onSubmit={addTransaction} />}
           {modal === 'account' && <AccountForm onSubmit={addAccount} />}
           {modal === 'category' && <CategoryForm onSubmit={addCategory} />}
           {modal === 'bank' && bankTarget && <BankLinkForm account={bankTarget} workspaceId={workspace.workspaceId} onComplete={() => window.location.reload()} />}
@@ -641,7 +688,7 @@ function TransactionRow({ transaction, categories, accounts, compact = false, fo
     <div className={compact ? 'transaction-row compact' : 'transaction-row'}>
       <span className="transaction-icon" style={{ color: isTransfer ? '#587486' : category?.color, background: isTransfer ? '#e5ecef' : `${category?.color ?? '#777'}18` }}><Icon size={18} /></span>
       <div>
-        <strong>{isTransfer ? `Transfer to ${destinationAccount?.name ?? 'account'}` : transaction.merchant}</strong>
+        <strong>{isTransfer ? `Transfer to ${destinationAccount?.name ?? 'account'}` : transaction.payee}</strong>
         <span>{isTransfer ? `${sourceAccount?.name ?? 'Account'} → ${destinationAccount?.name ?? 'Account'}` : category?.name ?? 'Uncategorised'} · {shortDate.format(new Date(`${transaction.date}T12:00:00`))}</span>
       </div>
       <b className={transaction.type === 'income' || transferIsIncoming ? 'positive' : isTransfer && !focusAccountId ? 'transfer-amount' : ''}>{prefix}{formatMoney(transaction.amountMinor, transaction.currency)}</b>
@@ -650,7 +697,7 @@ function TransactionRow({ transaction, categories, accounts, compact = false, fo
 }
 
 function TransactionsPage({ transactions, accounts, categories, search, setSearch }: { transactions: Transaction[]; accounts: Account[]; categories: Category[]; search: string; setSearch: (value: string) => void }) {
-  const filtered = transactions.filter((t) => `${t.merchant} ${t.note ?? ''} ${categories.find(c => c.id === t.categoryId)?.name ?? ''}`.toLowerCase().includes(search.toLowerCase()))
+  const filtered = transactions.filter((t) => `${t.payee} ${t.note ?? ''} ${categories.find(c => c.id === t.categoryId)?.name ?? ''}`.toLowerCase().includes(search.toLowerCase()))
   return (
     <div className="page-content narrow-page">
       <div className="panel full-panel">
@@ -668,6 +715,113 @@ function TransactionsPage({ transactions, accounts, categories, search, setSearc
       </div>
     </div>
   )
+}
+
+type PayeeSort = 'transactions' | 'alphabetical'
+
+function PayeesPage({ payees, transactions, onSelectPayee, onMapPayee, onCreatePayee }: {
+  payees: Payee[]
+  transactions: Transaction[]
+  onSelectPayee: (id: string) => void
+  onMapPayee: (sourceName: string, payeeId: string) => Promise<void>
+  onCreatePayee: (sourceName: string, payeeName: string) => Promise<void>
+}) {
+  const [sort, setSort] = useState<PayeeSort>('transactions')
+  const [search, setSearch] = useState('')
+  const [mappingTargets, setMappingTargets] = useState<Record<string, string>>({})
+  const [newPayeeNames, setNewPayeeNames] = useState<Record<string, string>>({})
+  const [pending, setPending] = useState('')
+  const unmatchedByName = new Map<string, { sourceName: string; count: number; lastTransaction: string }>()
+  for (const transaction of transactions) {
+    if (transaction.payeeId || transaction.type === 'transfer') continue
+    const sourceName = (transaction.payeeRaw ?? transaction.payee).normalize('NFKC').trim()
+    if (!sourceName) continue
+    const key = sourceName.toLocaleLowerCase('en')
+    const current = unmatchedByName.get(key)
+    unmatchedByName.set(key, {
+      sourceName: current?.sourceName ?? sourceName,
+      count: (current?.count ?? 0) + 1,
+      lastTransaction: !current || transaction.date > current.lastTransaction ? transaction.date : current.lastTransaction,
+    })
+  }
+  const unmatched = [...unmatchedByName.entries()].sort((left, right) => right[1].count - left[1].count || left[1].sourceName.localeCompare(right[1].sourceName))
+  const alphabeticalPayees = [...payees].sort((left, right) => left.name.localeCompare(right.name))
+  const rows = payees.map((payee) => {
+    const payeeTransactions = transactions.filter((transaction) => transaction.payeeId === payee.id)
+    return {
+      payee,
+      count: payeeTransactions.length,
+      lastTransaction: payeeTransactions.reduce((latest, transaction) => transaction.date > latest ? transaction.date : latest, ''),
+    }
+  }).filter((row) => row.payee.name.toLocaleLowerCase('en').includes(search.trim().toLocaleLowerCase('en')))
+    .sort((left, right) => sort === 'alphabetical'
+      ? left.payee.name.localeCompare(right.payee.name)
+      : right.count - left.count || left.payee.name.localeCompare(right.payee.name))
+
+  return <div className="page-content narrow-page">
+    <div className="panel full-panel">
+      <div className="panel-heading payee-heading">
+        <div><span className="eyebrow">Directory</span><h2>{payees.length} payee{payees.length === 1 ? '' : 's'}</h2></div>
+        <div className="payee-controls">
+          <label className="search-box"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search payees" /></label>
+          <label className="sort-box"><span>Sort by</span><select value={sort} onChange={(event) => setSort(event.target.value as PayeeSort)}><option value="transactions">Most transactions</option><option value="alphabetical">Alphabetical</option></select></label>
+        </div>
+      </div>
+      {unmatched.length > 0 && <section className="unmatched-payees">
+        <div className="unmatched-heading"><div><span className="eyebrow">Needs review</span><h3>{unmatched.length} unmatched bank description{unmatched.length === 1 ? '' : 's'}</h3></div><p>Map each description to a payee. The choice is remembered for future imports.</p></div>
+        <div className="unmatched-list">{unmatched.map(([key, item]) => {
+          const targetId = mappingTargets[key] ?? ''
+          const newName = newPayeeNames[key] ?? item.sourceName
+          const isPending = pending === key
+          return <div className="unmatched-row" key={key}>
+            <div className="unmatched-source"><strong>{item.sourceName}</strong><span>{item.count} transaction{item.count === 1 ? '' : 's'} · latest {shortDate.format(new Date(`${item.lastTransaction}T12:00:00`))}</span></div>
+            <div className="unmatched-action"><select aria-label={`Map ${item.sourceName} to an existing payee`} value={targetId} onChange={(event) => setMappingTargets((current) => ({ ...current, [key]: event.target.value }))}><option value="">Choose existing payee</option>{alphabeticalPayees.map((payee) => <option key={payee.id} value={payee.id}>{payee.name}</option>)}</select><button className="secondary-button" disabled={!targetId || isPending} onClick={async () => { setPending(key); await onMapPayee(item.sourceName, targetId); setPending('') }}>Map</button></div>
+            <span className="unmatched-or">or</span>
+            <div className="unmatched-action"><input aria-label={`New payee name for ${item.sourceName}`} value={newName} onChange={(event) => setNewPayeeNames((current) => ({ ...current, [key]: event.target.value }))} /><button className="secondary-button" disabled={!newName.trim() || isPending} onClick={async () => { setPending(key); await onCreatePayee(item.sourceName, newName.trim()); setPending('') }}>{isPending ? 'Saving…' : 'Create new'}</button></div>
+          </div>
+        })}</div>
+      </section>}
+      <div className="payee-table-header"><span>Payee</span><span>Last transaction</span><span>Transactions</span></div>
+      <div className="payee-list">
+        {rows.map(({ payee, count, lastTransaction }) => <button type="button" className="payee-row" key={payee.id} onClick={() => onSelectPayee(payee.id)}>
+          <span className="payee-avatar">{payee.name.slice(0, 1).toLocaleUpperCase('en')}</span>
+          <span className="payee-name"><strong>{payee.name}</strong><small>{count ? 'View transaction history' : 'No linked transactions yet'}</small></span>
+          <span className="payee-last">{lastTransaction ? shortDate.format(new Date(`${lastTransaction}T12:00:00`)) : '—'}</span>
+          <span className="payee-count">{count}</span>
+          <ChevronRight size={17} />
+        </button>)}
+        {!rows.length && <div className="empty-state"><UsersRound size={28} /><h3>No payees found</h3><p>{search ? 'Try a different search.' : 'Payees will appear when transactions are added.'}</p></div>}
+      </div>
+    </div>
+  </div>
+}
+
+function PayeeDetailPage({ payee, transactions, categories, accounts, onBack }: { payee: Payee; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onBack: () => void }) {
+  const sortedTransactions = [...transactions].sort((left, right) => right.date.localeCompare(left.date))
+  const expenseCount = transactions.filter((transaction) => transaction.type === 'expense').length
+  const incomeCount = transactions.filter((transaction) => transaction.type === 'income').length
+  return <div className="page-content narrow-page">
+    <div className="entity-page-toolbar"><button className="entity-back" onClick={onBack}><ChevronLeft size={16} />All payees</button></div>
+    <div className="panel entity-detail-panel">
+      <div className="entity-heading payee-detail-heading">
+        <span className="entity-heading-icon payee-detail-icon">{payee.name.slice(0, 1).toLocaleUpperCase('en')}</span>
+        <div><span className="eyebrow">Payee</span><h2>{payee.name}</h2></div>
+      </div>
+      <div className="payee-summary">
+        <div><span>All transactions</span><strong>{transactions.length}</strong></div>
+        <div><span>Expenses</span><strong>{expenseCount}</strong></div>
+        <div><span>Income</span><strong>{incomeCount}</strong></div>
+      </div>
+      <div className="table-header"><span>Description</span><span>Account</span><span>Amount</span></div>
+      <div className="transaction-list-full">
+        {sortedTransactions.map((transaction) => <div className="transaction-table-row" key={transaction.id}>
+          <TransactionRow transaction={transaction} categories={categories} accounts={accounts} />
+          <span className="account-name">{accounts.find((account) => account.id === transaction.accountId)?.name}</span>
+        </div>)}
+        {!sortedTransactions.length && <div className="empty-state"><ReceiptText size={28} /><h3>No linked transactions</h3><p>This payee is in the register but has no transaction history.</p></div>}
+      </div>
+    </div>
+  </div>
 }
 
 function BudgetsPage({ categories, categorySpending, budgetForCategory, onAdd, onSelectCategory }: { categories: Category[]; categorySpending: (id: string) => number; budgetForCategory: (id: string) => number; onAdd: () => void; onSelectCategory: (id: string) => void }) {
@@ -953,10 +1107,10 @@ function BankLinkForm({ account, workspaceId, onComplete }: { account: Account; 
   </form>
 }
 
-function TransactionForm({ accounts, categories, onSubmit }: { accounts: Account[]; categories: Category[]; onSubmit: (t: Omit<Transaction, 'id'>) => void }) {
+function TransactionForm({ accounts, categories, payees, onSubmit }: { accounts: Account[]; categories: Category[]; payees: Payee[]; onSubmit: (t: Omit<Transaction, 'id'>) => void }) {
   const [type, setType] = useState<Transaction['type']>('expense')
   const [amount, setAmount] = useState('')
-  const [merchant, setMerchant] = useState('')
+  const [payee, setPayee] = useState('')
   const [note, setNote] = useState('')
   const [date, setDate] = useState(todayInParis)
   const latestDate = todayInParis()
@@ -976,16 +1130,16 @@ function TransactionForm({ accounts, categories, onSubmit }: { accounts: Account
     if (!amountMinor || !accountId) return
     if (type === 'transfer') {
       if (!toAccountId || toAccountId === accountId) return
-      onSubmit({ amountMinor, merchant: 'Transfer', note, date, accountId, toAccountId, type, currency: accounts.find((account) => account.id === accountId)?.currency ?? 'EUR' })
+      onSubmit({ amountMinor, payee: 'Transfer', note, date, accountId, toAccountId, type, currency: accounts.find((account) => account.id === accountId)?.currency ?? 'EUR' })
       return
     }
-    if (!merchant || !categoryId) return
-    onSubmit({ amountMinor, merchant, note, date, accountId, categoryId, type, currency: accounts.find((account) => account.id === accountId)?.currency ?? 'EUR' })
+    if (!payee.trim() || !categoryId) return
+    onSubmit({ amountMinor, payee: payee.trim(), note, date, accountId, categoryId, type, currency: accounts.find((account) => account.id === accountId)?.currency ?? 'EUR' })
   }
   return <form onSubmit={submit} className="form">
     <div className="segmented three-way"><button type="button" className={type === 'expense' ? 'active' : ''} onClick={() => changeType('expense')}>Expense</button><button type="button" className={type === 'income' ? 'active income' : ''} onClick={() => changeType('income')}>Income</button><button type="button" className={type === 'transfer' ? 'active transfer' : ''} onClick={() => changeType('transfer')}>Transfer</button></div>
     <label className="amount-field"><span>Amount</span><div><b>{accounts.find((account) => account.id === accountId)?.currency ?? 'EUR'}</b><input autoFocus required min="0.01" step="0.01" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" /></div></label>
-    {type !== 'transfer' && <div className="form-grid"><label><span>Merchant or source</span><input required value={merchant} onChange={(e) => setMerchant(e.target.value)} placeholder="e.g. Green Market" /></label><label><span>Date</span><input required type="date" max={latestDate} value={date} onChange={(e) => setDate(e.target.value)} /></label></div>}
+    {type !== 'transfer' && <div className="form-grid"><label><span>Payee</span><input required list="payee-options" value={payee} onChange={(e) => setPayee(e.target.value)} placeholder="e.g. Green Market" /><datalist id="payee-options">{payees.map((item) => <option key={item.id} value={item.name} />)}</datalist></label><label><span>Date</span><input required type="date" max={latestDate} value={date} onChange={(e) => setDate(e.target.value)} /></label></div>}
     {type === 'transfer' && <label><span>Date</span><input required type="date" max={latestDate} value={date} onChange={(e) => setDate(e.target.value)} /></label>}
     <div className="form-grid">
       <label><span>{type === 'transfer' ? 'From account' : 'Account'}</span><select value={accountId} onChange={(e) => {

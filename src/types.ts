@@ -36,6 +36,11 @@ export type Category = {
   reportGroup: ReportGroup
 }
 
+export type Payee = {
+  id: string
+  name: string
+}
+
 export type Budget = {
   id: string
   month: string
@@ -47,7 +52,8 @@ export type Budget = {
 export type Transaction = {
   id: string
   date: string
-  merchant: string
+  payee: string
+  payeeId?: string
   note?: string
   amountMinor: number
   destinationAmountMinor?: number
@@ -65,6 +71,7 @@ export type Transaction = {
 export type AppData = {
   accounts: Account[]
   categories: Category[]
+  payees: Payee[]
   budgets: Budget[]
   transactions: Transaction[]
   settings: {

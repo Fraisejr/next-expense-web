@@ -1,5 +1,5 @@
 import { neon } from './neon'
-import type { Account, AccountScope, AppData, BankRateLimit, Budget, Category, ReportGroup, Transaction } from './types'
+import type { Account, AccountScope, AppData, BankRateLimit, Budget, Category, Payee, ReportGroup, Transaction } from './types'
 
 type Row = Record<string, unknown>
 
@@ -11,6 +11,10 @@ export class WorkspaceNotLinkedError extends Error {
 
 function number(value: unknown) {
   return Number(value ?? 0)
+}
+
+function normalizedPayeeName(value: string) {
+  return value.normalize('NFKC').trim().toLocaleLowerCase('en')
 }
 
 async function allRows(table: string, columns = '*', orderColumn = 'id'): Promise<Row[]> {
@@ -73,12 +77,13 @@ export async function loadWorkspace(): Promise<LoadedWorkspace> {
   ])
   if (workspaceResult.error) throw workspaceResult.error
 
-  const payees = new Map(payeeRows.map((row) => [row.id as string, row.name as string]))
+  const payeeNames = new Map(payeeRows.map((row) => [row.id as string, row.name as string]))
   const periods = new Map(periodRows.map((row) => [row.id as string, `${row.year}-${String(row.month).padStart(2, '0')}`]))
   const transactions: Transaction[] = transactionRows.map((row) => ({
     id: row.id as string,
     date: row.transaction_date as string,
-    merchant: (row.payee_name || payees.get(row.payee_id as string) || row.memo || 'Unknown payee') as string,
+    payee: (payeeNames.get(row.payee_id as string) || row.payee_name || row.memo || 'Unknown payee') as string,
+    payeeId: (row.payee_id as string | null) ?? undefined,
     note: (row.memo as string | null) ?? undefined,
     amountMinor: number(row.amount_minor),
     destinationAmountMinor: row.destination_amount_minor ? number(row.destination_amount_minor) : undefined,
@@ -119,6 +124,10 @@ export async function loadWorkspace(): Promise<LoadedWorkspace> {
     icon: (row.icon as string | null) ?? 'sparkles',
     reportGroup: row.report_group as ReportGroup,
   }))
+  const payees: Payee[] = payeeRows.map((row) => ({
+    id: row.id as string,
+    name: row.name as string,
+  }))
   const budgets: Budget[] = budgetRows.flatMap((row) => {
     const month = periods.get(row.period_id as string)
     return month ? [{
@@ -139,6 +148,7 @@ export async function loadWorkspace(): Promise<LoadedWorkspace> {
     data: {
       accounts,
       categories,
+      payees,
       budgets,
       transactions,
       settings: { estimatedCompanyTaxRateBps: number(workspace.estimated_company_tax_rate_bps) },
@@ -174,6 +184,114 @@ export async function createCategory(workspaceId: string, category: Category) {
     icon: category.icon,
   })
   if (error) throw error
+}
+
+async function resolvePayees(workspaceId: string, sourceNames: string[], createMissing: boolean): Promise<Array<Payee | undefined>> {
+  const names = [...new Set(sourceNames.map((name) => name.normalize('NFKC').trim()).filter(Boolean))]
+  if (!names.length) return []
+
+  const [payeeResult, mappingResult] = await Promise.all([
+    neon.from('payees').select('id,name').eq('workspace_id', workspaceId).order('id', { ascending: true }),
+    neon.from('payee_mappings').select('normalized_name,payee_id').eq('workspace_id', workspaceId).order('id', { ascending: true }),
+  ])
+  if (payeeResult.error) throw payeeResult.error
+  if (mappingResult.error) throw mappingResult.error
+
+  const payees = (payeeResult.data ?? []).map((row) => ({ id: String(row.id), name: String(row.name) }))
+  const payeeById = new Map(payees.map((payee) => [payee.id, payee]))
+  const payeeByName = new Map<string, Payee>()
+  for (const row of mappingResult.data ?? []) {
+    const payee = payeeById.get(String(row.payee_id))
+    const normalized = String(row.normalized_name)
+    if (payee && !payeeByName.has(normalized)) payeeByName.set(normalized, payee)
+  }
+  for (const payee of payees) {
+    const normalized = normalizedPayeeName(payee.name)
+    if (!payeeByName.has(normalized)) payeeByName.set(normalized, payee)
+  }
+
+  if (createMissing) {
+    for (const name of names) {
+      const normalized = normalizedPayeeName(name)
+      if (payeeByName.has(normalized)) continue
+      const payee = { id: crypto.randomUUID(), name }
+      const { error } = await neon.from('payees').insert({
+        id: payee.id,
+        workspace_id: workspaceId,
+        name: payee.name,
+      })
+      if (error) throw error
+      payeeByName.set(normalized, payee)
+      payeeById.set(payee.id, payee)
+      payees.push(payee)
+    }
+  }
+
+  const mappings = names.flatMap((sourceName) => {
+    const normalizedName = normalizedPayeeName(sourceName)
+    const payee = payeeByName.get(normalizedName)
+    return payee ? [{
+      id: crypto.randomUUID(),
+      workspace_id: workspaceId,
+      normalized_name: normalizedName,
+      source_name: sourceName,
+      payee_id: payee.id,
+    }] : []
+  })
+  if (mappings.length) {
+    const { error: mappingError } = await neon.from('payee_mappings')
+      .upsert(mappings, { onConflict: 'workspace_id,source_name,payee_id', ignoreDuplicates: true })
+    if (mappingError) throw mappingError
+  }
+
+  return names.map((name) => payeeByName.get(normalizedPayeeName(name)))
+}
+
+export async function ensurePayees(workspaceId: string, sourceNames: string[]): Promise<Payee[]> {
+  return (await resolvePayees(workspaceId, sourceNames, true)) as Payee[]
+}
+
+async function findPayees(workspaceId: string, sourceNames: string[]) {
+  return resolvePayees(workspaceId, sourceNames, false)
+}
+
+export async function assignPayeeMapping(workspaceId: string, sourceName: string, payeeId: string): Promise<string[]> {
+  const normalizedName = normalizedPayeeName(sourceName)
+  const { error: mappingError } = await neon.from('payee_mappings').upsert({
+    id: crypto.randomUUID(),
+    workspace_id: workspaceId,
+    normalized_name: normalizedName,
+    source_name: sourceName.normalize('NFKC').trim(),
+    payee_id: payeeId,
+  }, { onConflict: 'workspace_id,source_name,payee_id', ignoreDuplicates: true })
+  if (mappingError) throw mappingError
+
+  const matchedIds: string[] = []
+  const pageSize = 1000
+  for (let start = 0; ; start += pageSize) {
+    const { data, error } = await neon.from('transactions')
+      .select('id,payee_name')
+      .eq('workspace_id', workspaceId)
+      .is('payee_id', null)
+      .neq('transaction_type', 'transfer')
+      .order('id', { ascending: true })
+      .range(start, start + pageSize - 1)
+    if (error) throw error
+    const rows = (data ?? []) as unknown as Row[]
+    matchedIds.push(...rows
+      .filter((row) => normalizedPayeeName(String(row.payee_name ?? '')) === normalizedName)
+      .map((row) => String(row.id)))
+    if (rows.length < pageSize) break
+  }
+
+  for (let start = 0; start < matchedIds.length; start += 200) {
+    const { error } = await neon.from('transactions')
+      .update({ payee_id: payeeId })
+      .eq('workspace_id', workspaceId)
+      .in('id', matchedIds.slice(start, start + 200))
+    if (error) throw error
+  }
+  return matchedIds
 }
 
 async function ensurePeriod(workspaceId: string, monthKey: string) {
@@ -219,6 +337,7 @@ export async function createTransaction(workspaceId: string, transaction: Transa
     destination_account_id: transaction.toAccountId ?? null,
     period_id: periodId,
     category_id: transaction.categoryId ?? null,
+    payee_id: transaction.payeeId ?? null,
     transaction_date: transaction.date,
     source_timestamp: `${transaction.date}T12:00:00Z`,
     source_created_at: new Date().toISOString(),
@@ -226,7 +345,7 @@ export async function createTransaction(workspaceId: string, transaction: Transa
     destination_amount_minor: transaction.destinationAmountMinor ?? (transaction.type === 'transfer' ? transaction.amountMinor : 0),
     currency: transaction.currency,
     transaction_type: transaction.type,
-    payee_name: transaction.merchant,
+    payee_name: transaction.payee,
     memo: transaction.note ?? null,
     posted: true,
     reconciled: true,
@@ -407,6 +526,14 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
     .filter((transaction) => !legacyCutoff || transaction.date > legacyCutoff)
     .filter((transaction) => transaction.date <= todayInParis())
 
+  const sourcePayeeNames = [...new Set(newTransactions.map((transaction) => transaction.payee.normalize('NFKC').trim()).filter(Boolean))]
+  const resolvedPayees = await findPayees(workspaceId, sourcePayeeNames)
+  const payeeIdByName = new Map<string, string>()
+  sourcePayeeNames.forEach((name, index) => {
+    const payee = resolvedPayees[index]
+    if (payee) payeeIdByName.set(normalizedPayeeName(name), payee.id)
+  })
+
   const periodIds = new Map<string, string>()
   const rows: Row[] = []
   for (const transaction of newTransactions) {
@@ -428,6 +555,7 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
       destination_amount_minor: 0,
       currency: transaction.currency,
       transaction_type: transaction.type,
+      payee_id: payeeIdByName.get(normalizedPayeeName(transaction.payee)) ?? null,
       payee_name: transaction.payee,
       memo: transaction.note || null,
       provider_transaction_id: transaction.providerTransactionId,
