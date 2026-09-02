@@ -127,11 +127,17 @@ for (const { values } of budgetRows) {
 // only the two unambiguous income categories are classified as income. Refunds
 // remain attached to their normal expense category.
 const incomeCategoryNames = new Set(['Salary', 'Other income', 'Uncategorised income'])
+const reportGroupFor = (name) => {
+  if (incomeCategoryNames.has(name)) return 'income'
+  if (/tax|irpf|cuota ss/i.test(name)) return 'tax'
+  if (/capital gain|investment appreciation|valuation gain/i.test(name)) return 'capital_gain'
+  return 'expense'
+}
 
 const colors = ['#cc7048', '#738c5a', '#d49b4d', '#9b6a71', '#5d7d91', '#7f7062', '#607d68', '#8b6d8f']
-const iconFor = (name, kind) => {
+const iconFor = (name, reportGroup) => {
   const lower = name.toLowerCase()
-  if (kind === 'income') return 'briefcase'
+  if (reportGroup === 'income') return 'briefcase'
   if (lower.includes('home') || lower.includes('apartment')) return 'house'
   if (lower.includes('grocer')) return 'basket'
   if (lower.includes('car') || lower.includes('transport')) return 'car'
@@ -142,19 +148,26 @@ const iconFor = (name, kind) => {
 
 const categoryList = [...categoryNames].sort((a, b) => a.localeCompare(b))
 const categories = categoryList.map((name, index) => {
-  const kind = incomeCategoryNames.has(name) ? 'income' : 'expense'
+  const reportGroup = reportGroupFor(name)
   return {
-    id: `ios-category-${slug(name)}-${kind}`,
+    id: `ios-category-${slug(name)}-${reportGroup}`,
     name,
-    budgetMinor: periodBudgets.get(name) ?? 0,
     color: colors[index % colors.length],
-    icon: iconFor(name, kind),
-    kind,
+    icon: iconFor(name, reportGroup),
+    reportGroup,
   }
 })
 const categoryIds = new Map(categories.map((category) => [category.name, category.id]))
+const budgets = [...periodBudgets.entries()].map(([categoryName, amountMinor]) => ({
+  id: `ios-budget-${period}-${slug(categoryName)}-personal`,
+  month: period,
+  categoryId: categoryIds.get(categoryName),
+  scope: 'Personal',
+  amountMinor,
+}))
 
 const accountColors = ['#234e46', '#d68853', '#777a6d', '#5d7d91', '#8b6d8f']
+const companyAccountPattern = /inspiraeon|företag|revolut pro/i
 const sortedAccountNames = [...accountNames].sort((a, b) => a.localeCompare(b))
 const accounts = sortedAccountNames.map((name, index) => ({
   id: `ios-account-${slug(name)}`,
@@ -163,6 +176,7 @@ const accounts = sortedAccountNames.map((name, index) => ({
   balanceMinor: 0,
   color: accountColors[index % accountColors.length],
   currency: 'EUR',
+  scope: companyAccountPattern.test(name) ? 'Company' : 'Personal',
 }))
 const accountIds = new Map(accounts.map((account) => [account.name, account.id]))
 
@@ -196,13 +210,13 @@ for (const transaction of transactions) {
   }
 }
 
-const categoryKinds = new Map(categories.map((category) => [category.id, category.kind]))
+const categoryGroups = new Map(categories.map((category) => [category.id, category.reportGroup]))
 const sum = (type) => transactions.filter((transaction) => transaction.type === type).reduce((total, transaction) => total + transaction.amountMinor, 0)
 const refundsMinor = transactions
-  .filter((transaction) => transaction.type === 'income' && categoryKinds.get(transaction.categoryId) === 'expense')
+  .filter((transaction) => transaction.type === 'income' && categoryGroups.get(transaction.categoryId) === 'expense')
   .reduce((total, transaction) => total + transaction.amountMinor, 0)
 const trueIncomeMinor = sum('income') - refundsMinor
-const data = { accounts, categories, transactions }
+const data = { accounts, categories, budgets, transactions, settings: { estimatedCompanyTaxRateBps: 2000 } }
 const report = {
   period,
   timeZone: importTimeZone,
@@ -211,8 +225,9 @@ const report = {
   importedRows: transactions.length,
   skippedRows,
   invalidRows,
-  accounts: accounts.map(({ name, balanceMinor }) => ({ name, provisionalBalanceMinor: balanceMinor })),
-  categories: categories.map(({ name, kind, budgetMinor }) => ({ name, kind, budgetMinor })),
+  accounts: accounts.map(({ name, scope, balanceMinor }) => ({ name, scope, provisionalBalanceMinor: balanceMinor })),
+  categories: categories.map(({ name, reportGroup }) => ({ name, reportGroup })),
+  budgets: budgets.map(({ month, categoryId, scope, amountMinor }) => ({ month, categoryId, scope, amountMinor })),
   rawTotalsMinor: { incomeFlagged: sum('income'), expenses: sum('expense'), transfers: sum('transfer') },
   reportingTotalsMinor: { income: trueIncomeMinor, refunds: refundsMinor, expensesNetOfRefunds: sum('expense') - refundsMinor },
 }

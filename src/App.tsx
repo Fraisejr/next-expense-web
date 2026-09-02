@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
   ArrowDownLeft, ArrowLeftRight, ArrowRight, ArrowUpRight, BadgeEuro, Banknote, BriefcaseBusiness,
-  CalendarDays, CarFront, ChevronDown, ChevronLeft, ChevronRight, CircleHelp,
+  BarChart3, CalendarDays, CarFront, ChevronDown, ChevronLeft, ChevronRight, CircleHelp,
   CreditCard, House, LayoutDashboard, Menu, Plus, ReceiptText, Search, Settings,
   ShoppingBasket, Sparkles, Target, Utensils, WalletCards, X,
 } from 'lucide-react'
 import { seedData } from './data'
-import type { Account, AppData, Category, Transaction } from './types'
+import type { Account, AccountScope, AppData, Category, ReportGroup, Transaction } from './types'
 
-type Page = 'overview' | 'transactions' | 'budgets' | 'accounts'
+type Page = 'overview' | 'transactions' | 'budgets' | 'reports' | 'accounts'
 type Modal = 'transaction' | 'account' | 'category' | null
-const STORAGE_KEY = 'next-expense-data-v8'
+const STORAGE_KEY = 'next-expense-data-v9'
 
 const money = new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' })
 const monthName = new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric' })
@@ -44,6 +44,7 @@ const navItems: { id: Page; label: string; icon: typeof House }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'transactions', label: 'Transactions', icon: ReceiptText },
   { id: 'budgets', label: 'Budgets', icon: Target },
+  { id: 'reports', label: 'Performance', icon: BarChart3 },
   { id: 'accounts', label: 'Accounts', icon: WalletCards },
 ]
 
@@ -54,6 +55,10 @@ function uid() {
 function inMonth(date: string, viewed: Date) {
   const d = new Date(`${date}T12:00:00`)
   return d.getMonth() === viewed.getMonth() && d.getFullYear() === viewed.getFullYear()
+}
+
+function toMonthKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 }
 
 function loadData(): AppData {
@@ -74,6 +79,7 @@ function App() {
   const [search, setSearch] = useState('')
   const [mobileNav, setMobileNav] = useState(false)
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null)
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null)
 
   useEffect(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(data)), [data])
 
@@ -91,23 +97,39 @@ function App() {
       .sort((a, b) => b.date.localeCompare(a.date)),
     [data.transactions, viewedMonth],
   )
-  const categoryKind = (categoryId?: string) => data.categories.find((category) => category.id === categoryId)?.kind
-  const refunds = transactions
-    .filter((t) => t.type === 'income' && categoryKind(t.categoryId) === 'expense')
-    .reduce((sum, t) => sum + t.amountMinor, 0)
+  const selectedMonthKey = toMonthKey(viewedMonth)
+  const categoryGroup = (categoryId?: string) => data.categories.find((category) => category.id === categoryId)?.reportGroup
   const income = transactions
-    .filter((t) => t.type === 'income' && categoryKind(t.categoryId) !== 'expense')
-    .reduce((sum, t) => sum + t.amountMinor, 0)
-  const expenses = transactions.filter((t) => t.type === 'expense').reduce((sum, t) => sum + t.amountMinor, 0) - refunds
-  const net = income - expenses
+    .filter((t) => categoryGroup(t.categoryId) === 'income')
+    .reduce((sum, t) => sum + (t.type === 'income' ? t.amountMinor : t.type === 'expense' ? -t.amountMinor : 0), 0)
+  const expenses = transactions
+    .filter((t) => categoryGroup(t.categoryId) === 'expense')
+    .reduce((sum, t) => sum + (t.type === 'expense' ? t.amountMinor : t.type === 'income' ? -t.amountMinor : 0), 0)
+  const taxesPaid = transactions
+    .filter((t) => categoryGroup(t.categoryId) === 'tax')
+    .reduce((sum, t) => sum + (t.type === 'expense' ? t.amountMinor : t.type === 'income' ? -t.amountMinor : 0), 0)
+  const capitalGains = transactions
+    .filter((t) => categoryGroup(t.categoryId) === 'capital_gain')
+    .reduce((sum, t) => sum + (t.type === 'income' ? t.amountMinor : t.type === 'expense' ? -t.amountMinor : 0), 0)
+  const net = income - expenses - taxesPaid + capitalGains
   const totalBalance = data.accounts.reduce((sum, account) => sum + account.balanceMinor, 0)
-  const categorySpending = (id: string) => transactions
-    .filter((t) => t.categoryId === id && t.type !== 'transfer')
-    .reduce((sum, t) => sum + (t.type === 'expense' ? t.amountMinor : -t.amountMinor), 0)
-  const expenseCategories = data.categories.filter((c) => c.kind === 'expense')
-  const totalBudget = expenseCategories.reduce((sum, c) => sum + c.budgetMinor, 0)
+  const categorySpending = (id: string) => {
+    const group = categoryGroup(id)
+    return transactions
+      .filter((t) => t.categoryId === id && t.type !== 'transfer')
+      .reduce((sum, t) => {
+        const direction = t.type === 'income' ? 1 : -1
+        return sum + (group === 'income' || group === 'capital_gain' ? direction : -direction) * t.amountMinor
+      }, 0)
+  }
+  const expenseCategories = data.categories.filter((c) => c.reportGroup === 'expense')
+  const budgetForCategory = (categoryId: string) => data.budgets
+    .filter((budget) => budget.month === selectedMonthKey && budget.categoryId === categoryId)
+    .reduce((sum, budget) => sum + budget.amountMinor, 0)
+  const totalBudget = expenseCategories.reduce((sum, category) => sum + budgetForCategory(category.id), 0)
   const pageTitle = navItems.find((item) => item.id === page)?.label ?? 'Overview'
   const selectedCategory = data.categories.find((category) => category.id === selectedCategoryId)
+  const selectedAccount = data.accounts.find((account) => account.id === selectedAccountId)
 
   function moveMonth(delta: number) {
     setViewedMonth((current) => new Date(current.getFullYear(), current.getMonth() + delta, 1))
@@ -118,9 +140,26 @@ function App() {
     setModal(null)
   }
 
-  function addCategory(category: Omit<Category, 'id'>) {
-    setData((current) => ({ ...current, categories: [...current.categories, { ...category, id: uid() }] }))
+  function addCategory(category: Omit<Category, 'id'>, budgetMinor: number, scope: AccountScope) {
+    const categoryId = uid()
+    setData((current) => ({
+      ...current,
+      categories: [...current.categories, { ...category, id: categoryId }],
+      budgets: budgetMinor ? [...current.budgets, { id: uid(), month: selectedMonthKey, categoryId, scope, amountMinor: budgetMinor }] : current.budgets,
+    }))
     setModal(null)
+  }
+
+  function updateBudget(categoryId: string, amountMinor: number, scope: AccountScope) {
+    setData((current) => {
+      const existing = current.budgets.find((budget) => budget.month === selectedMonthKey && budget.categoryId === categoryId && budget.scope === scope)
+      return {
+        ...current,
+        budgets: existing
+          ? current.budgets.map((budget) => budget.id === existing.id ? { ...budget, amountMinor } : budget)
+          : [...current.budgets, { id: uid(), month: selectedMonthKey, categoryId, scope, amountMinor }],
+      }
+    })
   }
 
   function addTransaction(transaction: Omit<Transaction, 'id'>) {
@@ -188,19 +227,22 @@ function App() {
           <Overview
             accounts={data.accounts} categories={expenseCategories} transactionCategories={data.categories} transactions={transactions}
             income={income} expenses={expenses} net={net} totalBalance={totalBalance}
-            totalBudget={totalBudget} categorySpending={categorySpending}
+            totalBudget={totalBudget} categorySpending={categorySpending} budgetForCategory={budgetForCategory}
             onAllTransactions={() => setPage('transactions')} onAddAccount={() => setModal('account')}
-            onAddCategory={() => setModal('category')} onSelectCategory={setSelectedCategoryId}
+            onAddCategory={() => setModal('category')} onSelectCategory={setSelectedCategoryId} onSelectAccount={setSelectedAccountId}
           />
         )}
         {page === 'transactions' && (
           <TransactionsPage transactions={transactions} accounts={data.accounts} categories={data.categories} search={search} setSearch={setSearch} />
         )}
         {page === 'budgets' && (
-          <BudgetsPage categories={expenseCategories} categorySpending={categorySpending} onAdd={() => setModal('category')} onSelectCategory={setSelectedCategoryId} />
+          <BudgetsPage categories={data.categories} categorySpending={categorySpending} budgetForCategory={budgetForCategory} onAdd={() => setModal('category')} onSelectCategory={setSelectedCategoryId} />
+        )}
+        {page === 'reports' && (
+          <ReportsPage data={data} viewedMonth={viewedMonth} onUpdateTaxRate={(estimatedCompanyTaxRateBps) => setData((current) => ({ ...current, settings: { ...current.settings, estimatedCompanyTaxRateBps } }))} />
         )}
         {page === 'accounts' && (
-          <AccountsPage accounts={data.accounts} totalBalance={totalBalance} onAdd={() => setModal('account')} />
+          <AccountsPage accounts={data.accounts} totalBalance={totalBalance} onAdd={() => setModal('account')} onSelectAccount={setSelectedAccountId} />
         )}
       </main>
 
@@ -216,7 +258,19 @@ function App() {
           <CategoryDetail
             category={selectedCategory}
             spent={categorySpending(selectedCategory.id)}
+            budget={budgetForCategory(selectedCategory.id)}
             transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)}
+            categories={data.categories}
+            accounts={data.accounts}
+            onUpdateBudget={updateBudget}
+          />
+        </ModalShell>
+      )}
+      {selectedAccount && (
+        <ModalShell title={selectedAccount.name} onClose={() => setSelectedAccountId(null)}>
+          <AccountDetail
+            account={selectedAccount}
+            transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)}
             categories={data.categories}
             accounts={data.accounts}
           />
@@ -226,9 +280,9 @@ function App() {
   )
 }
 
-function Overview({ accounts, categories, transactionCategories, transactions, income, expenses, net, totalBalance, totalBudget, categorySpending, onAllTransactions, onAddAccount, onAddCategory, onSelectCategory }: {
+function Overview({ accounts, categories, transactionCategories, transactions, income, expenses, net, totalBalance, totalBudget, categorySpending, budgetForCategory, onAllTransactions, onAddAccount, onAddCategory, onSelectCategory, onSelectAccount }: {
   accounts: Account[]; categories: Category[]; transactionCategories: Category[]; transactions: Transaction[]; income: number; expenses: number; net: number; totalBalance: number; totalBudget: number
-  categorySpending: (id: string) => number; onAllTransactions: () => void; onAddAccount: () => void; onAddCategory: () => void; onSelectCategory: (id: string) => void
+  categorySpending: (id: string) => number; budgetForCategory: (id: string) => number; onAllTransactions: () => void; onAddAccount: () => void; onAddCategory: () => void; onSelectCategory: (id: string) => void; onSelectAccount: (id: string) => void
 }) {
   const budgetUsed = totalBudget ? Math.round((expenses / totalBudget) * 100) : 0
   return (
@@ -259,7 +313,7 @@ function Overview({ accounts, categories, transactionCategories, transactions, i
             <div><span>Available</span><strong className={totalBudget - expenses < 0 ? 'negative' : ''}>{formatMoney(totalBudget - expenses)}</strong></div>
           </div>
           <div className="category-list">
-            {categories.map((category) => <CategoryRow key={category.id} category={category} spent={categorySpending(category.id)} onSelect={() => onSelectCategory(category.id)} />)}
+            {categories.map((category) => <CategoryRow key={category.id} category={category} spent={categorySpending(category.id)} budget={budgetForCategory(category.id)} onSelect={() => onSelectCategory(category.id)} />)}
           </div>
         </div>
 
@@ -267,11 +321,11 @@ function Overview({ accounts, categories, transactionCategories, transactions, i
           <div className="panel accounts-panel">
             <div className="panel-heading compact"><h2>Accounts</h2><button className="icon-button" aria-label="Add account" onClick={onAddAccount}><Plus size={18} /></button></div>
             {accounts.map((account) => (
-              <div className="account-row" key={account.id}>
+              <button type="button" className="account-row" key={account.id} onClick={() => onSelectAccount(account.id)} aria-label={`View ${account.name} transactions`}>
                 <span className="account-dot" style={{ background: account.color }}><CreditCard size={17} /></span>
-                <div><strong>{account.name}</strong><span>{account.type}</span></div>
+                <div><strong>{account.name}</strong><span>{account.scope} · {account.type}</span></div>
                 <b>{formatMoney(account.balanceMinor)}</b>
-              </div>
+              </button>
             ))}
           </div>
 
@@ -291,14 +345,14 @@ function MetricCard({ label, value, icon, tone, detail }: { label: string; value
   return <div className="metric-card"><div className={`metric-icon ${tone}`}>{icon}</div><span>{label}</span><strong>{formatMoney(value)}</strong><small>{detail}</small></div>
 }
 
-function CategoryRow({ category, spent, onSelect }: { category: Category; spent: number; onSelect: () => void }) {
+function CategoryRow({ category, spent, budget, onSelect }: { category: Category; spent: number; budget: number; onSelect: () => void }) {
   const Icon = categoryIcons[category.icon as keyof typeof categoryIcons] ?? Sparkles
-  const percent = category.budgetMinor ? Math.round((spent / category.budgetMinor) * 100) : 0
+  const percent = budget ? Math.round((spent / budget) * 100) : 0
   return (
     <button type="button" className="category-row" onClick={onSelect} aria-label={`View ${category.name} transactions`}>
       <span className="category-icon" style={{ color: category.color, background: `${category.color}18` }}><Icon size={18} /></span>
       <div className="category-progress">
-        <div><strong>{category.name}</strong><span>{formatMoney(spent)} <i>of {formatMoney(category.budgetMinor)}</i></span></div>
+        <div><strong>{category.name}</strong><span>{formatMoney(spent)} <i>of {formatMoney(budget)}</i></span></div>
         <div className="progress-track"><span style={{ width: `${Math.min(percent, 100)}%`, background: percent > 100 ? '#ae4c38' : category.color }} /></div>
       </div>
       <b className={percent > 100 ? 'negative' : ''}>{percent}%</b>
@@ -306,11 +360,13 @@ function CategoryRow({ category, spent, onSelect }: { category: Category; spent:
   )
 }
 
-function TransactionRow({ transaction, categories, accounts, compact = false }: { transaction: Transaction; categories: Category[]; accounts: Account[]; compact?: boolean }) {
+function TransactionRow({ transaction, categories, accounts, compact = false, focusAccountId }: { transaction: Transaction; categories: Category[]; accounts: Account[]; compact?: boolean; focusAccountId?: string }) {
   const category = categories.find((item) => item.id === transaction.categoryId)
   const sourceAccount = accounts.find((item) => item.id === transaction.accountId)
   const destinationAccount = accounts.find((item) => item.id === transaction.toAccountId)
   const isTransfer = transaction.type === 'transfer'
+  const transferIsIncoming = isTransfer && transaction.toAccountId === focusAccountId
+  const prefix = transaction.type === 'income' || transferIsIncoming ? '+' : transaction.type === 'expense' || (isTransfer && focusAccountId) ? '−' : ''
   const Icon = isTransfer ? ArrowLeftRight : category ? (categoryIcons[category.icon as keyof typeof categoryIcons] ?? Sparkles) : ReceiptText
   return (
     <div className={compact ? 'transaction-row compact' : 'transaction-row'}>
@@ -319,7 +375,7 @@ function TransactionRow({ transaction, categories, accounts, compact = false }: 
         <strong>{isTransfer ? `Transfer to ${destinationAccount?.name ?? 'account'}` : transaction.merchant}</strong>
         <span>{isTransfer ? `${sourceAccount?.name ?? 'Account'} → ${destinationAccount?.name ?? 'Account'}` : category?.name ?? 'Uncategorised'} · {shortDate.format(new Date(`${transaction.date}T12:00:00`))}</span>
       </div>
-      <b className={transaction.type === 'income' ? 'positive' : isTransfer ? 'transfer-amount' : ''}>{transaction.type === 'income' ? '+' : transaction.type === 'expense' ? '−' : ''}{formatMoney(transaction.amountMinor)}</b>
+      <b className={transaction.type === 'income' || transferIsIncoming ? 'positive' : isTransfer && !focusAccountId ? 'transfer-amount' : ''}>{prefix}{formatMoney(transaction.amountMinor)}</b>
     </div>
   )
 }
@@ -345,29 +401,130 @@ function TransactionsPage({ transactions, accounts, categories, search, setSearc
   )
 }
 
-function BudgetsPage({ categories, categorySpending, onAdd, onSelectCategory }: { categories: Category[]; categorySpending: (id: string) => number; onAdd: () => void; onSelectCategory: (id: string) => void }) {
-  return <div className="page-content narrow-page"><div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>Category budgets</h2></div><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button></div><div className="category-list roomy">{categories.map(c => <CategoryRow key={c.id} category={c} spent={categorySpending(c.id)} onSelect={() => onSelectCategory(c.id)} />)}</div></div></div>
+function BudgetsPage({ categories, categorySpending, budgetForCategory, onAdd, onSelectCategory }: { categories: Category[]; categorySpending: (id: string) => number; budgetForCategory: (id: string) => number; onAdd: () => void; onSelectCategory: (id: string) => void }) {
+  const incomeCategories = categories.filter((category) => category.reportGroup === 'income')
+  const expenseCategories = categories.filter((category) => category.reportGroup === 'expense')
+  const taxCategories = categories.filter((category) => category.reportGroup === 'tax')
+  const section = (title: string, subtitle: string, rows: Category[]) => <section className="budget-section"><div className="budget-section-heading"><div><h3>{title}</h3><span>{subtitle}</span></div></div><div className="category-list roomy">{rows.map((category) => <CategoryRow key={category.id} category={category} spent={categorySpending(category.id)} budget={budgetForCategory(category.id)} onSelect={() => onSelectCategory(category.id)} />)}</div></section>
+  return <div className="page-content narrow-page"><div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>Income, expense & tax plan</h2></div><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button></div>{section('Planned income', 'Actual income compared with this month’s plan', incomeCategories)}{section('Expense budgets', 'Net spending compared with this month’s budget', expenseCategories)}{taxCategories.length > 0 && section('Tax plan', 'Recorded tax costs compared with this month’s plan', taxCategories)}</div></div>
 }
 
-function AccountsPage({ accounts, totalBalance, onAdd }: { accounts: Account[]; totalBalance: number; onAdd: () => void }) {
-  return <div className="page-content narrow-page"><div className="accounts-title"><div><span className="eyebrow">Provisional net worth</span><strong>{formatMoney(totalBalance)}</strong></div><button className="secondary-button" onClick={onAdd}><Plus size={17} />New account</button></div><div className="account-card-grid">{accounts.map(account => <div className="large-account-card" key={account.id}><div className="large-account-top"><span style={{ background: account.color }}><Banknote size={20} /></span><small>{account.type}</small></div><h3>{account.name}</h3><strong>{formatMoney(account.balanceMinor)}</strong><p>Provisional balance</p></div>)}</div></div>
+type ReportScope = 'Combined' | AccountScope
+type ReportPeriod = 'month' | 'year'
+
+function ReportsPage({ data, viewedMonth, onUpdateTaxRate }: { data: AppData; viewedMonth: Date; onUpdateTaxRate: (rateBps: number) => void }) {
+  const [scope, setScope] = useState<ReportScope>('Combined')
+  const [period, setPeriod] = useState<ReportPeriod>('month')
+  const monthKey = toMonthKey(viewedMonth)
+  const yearKey = String(viewedMonth.getFullYear())
+  const accountById = new Map(data.accounts.map((account) => [account.id, account]))
+  const categoryById = new Map(data.categories.map((category) => [category.id, category]))
+  const inPeriod = (date: string) => period === 'month' ? date.startsWith(monthKey) : date.startsWith(yearKey)
+  const scopeMatches = (accountScope?: AccountScope) => scope === 'Combined' || accountScope === scope
+  const reportTransactions = data.transactions.filter((transaction) => inPeriod(transaction.date) && transaction.type !== 'transfer' && scopeMatches(accountById.get(transaction.accountId)?.scope))
+  const companyTransactions = data.transactions.filter((transaction) => inPeriod(transaction.date) && transaction.type !== 'transfer' && accountById.get(transaction.accountId)?.scope === 'Company')
+  const budgetInPeriod = (month: string) => period === 'month' ? month === monthKey : month.startsWith(yearKey)
+  const reportBudgets = data.budgets.filter((budget) => budgetInPeriod(budget.month) && (scope === 'Combined' || budget.scope === scope))
+  const companyBudgets = data.budgets.filter((budget) => budgetInPeriod(budget.month) && budget.scope === 'Company')
+
+  const totalTransactionsForGroup = (transactions: Transaction[], group: ReportGroup) => transactions
+    .filter((transaction) => categoryById.get(transaction.categoryId ?? '')?.reportGroup === group)
+    .reduce((sum, transaction) => {
+      const direction = transaction.type === 'income' ? 1 : -1
+      return sum + (group === 'income' || group === 'capital_gain' ? direction : -direction) * transaction.amountMinor
+    }, 0)
+  const totalBudgetsForGroup = (budgets: AppData['budgets'], group: ReportGroup) => budgets
+    .filter((budget) => categoryById.get(budget.categoryId)?.reportGroup === group)
+    .reduce((sum, budget) => sum + budget.amountMinor, 0)
+  const estimatedTax = (profitMinor: number) => Math.max(0, Math.round(profitMinor * data.settings.estimatedCompanyTaxRateBps / 10_000))
+
+  const actualIncome = totalTransactionsForGroup(reportTransactions, 'income')
+  const actualExpenses = totalTransactionsForGroup(reportTransactions, 'expense')
+  const recordedTaxes = totalTransactionsForGroup(reportTransactions, 'tax')
+  const capitalGains = totalTransactionsForGroup(reportTransactions, 'capital_gain')
+  const companyActualProfit = totalTransactionsForGroup(companyTransactions, 'income') - totalTransactionsForGroup(companyTransactions, 'expense')
+  const companyTaxEstimate = scope === 'Personal' ? 0 : estimatedTax(companyActualProfit)
+  const actualExcludingGains = actualIncome - actualExpenses - recordedTaxes - companyTaxEstimate
+  const actualIncludingGains = actualExcludingGains + capitalGains
+
+  const forecastIncome = totalBudgetsForGroup(reportBudgets, 'income')
+  const forecastExpenses = totalBudgetsForGroup(reportBudgets, 'expense')
+  const plannedTaxes = totalBudgetsForGroup(reportBudgets, 'tax')
+  const companyForecastProfit = totalBudgetsForGroup(companyBudgets, 'income') - totalBudgetsForGroup(companyBudgets, 'expense')
+  const forecastTax = scope === 'Personal' ? 0 : estimatedTax(companyForecastProfit)
+  const forecastExcludingGains = forecastIncome - forecastExpenses - plannedTaxes - forecastTax
+
+  const scopeOptions: ReportScope[] = ['Combined', 'Personal', 'Company']
+  return <div className="page-content narrow-page report-page">
+    <div className="report-toolbar">
+      <div className="segmented report-segmented">{scopeOptions.map((option) => <button key={option} className={scope === option ? 'active transfer' : ''} onClick={() => setScope(option)}>{option}</button>)}</div>
+      <div className="segmented"><button className={period === 'month' ? 'active transfer' : ''} onClick={() => setPeriod('month')}>Month</button><button className={period === 'year' ? 'active transfer' : ''} onClick={() => setPeriod('year')}>Year</button></div>
+    </div>
+    <section className="report-hero">
+      <div><span className="eyebrow">{scope} performance · {period === 'month' ? monthName.format(viewedMonth) : yearKey}</span><h2>Economic result</h2><p>Income, expenses and estimated company tax across the accounts you selected.</p></div>
+      <label className="tax-rate-field"><span>Company tax planning rate</span><div><input type="number" min="0" max="100" step="0.1" value={data.settings.estimatedCompanyTaxRateBps / 100} onChange={(event) => onUpdateTaxRate(Math.max(0, Math.round(Number(event.target.value) * 100)))} /><b>%</b></div><small>Planning estimate only</small></label>
+    </section>
+    <div className="report-comparison">
+      <ReportColumn title="Forecast" subtitle="From monthly budgets" income={forecastIncome} expenses={forecastExpenses} tax={forecastTax} otherTax={plannedTaxes} otherTaxLabel="Other planned taxes" resultExcluding={forecastExcludingGains} capitalGains={0} resultIncluding={forecastExcludingGains} />
+      <ReportColumn title="Actual" subtitle="From recorded activity" income={actualIncome} expenses={actualExpenses} tax={companyTaxEstimate} otherTax={recordedTaxes} otherTaxLabel="Other recorded taxes" resultExcluding={actualExcludingGains} capitalGains={capitalGains} resultIncluding={actualIncludingGains} />
+    </div>
+    <div className="report-footnote"><CircleHelp size={16} /><p>Company tax is estimated from tagged company income minus tagged company expenses. Transfers are excluded. Capital gains remain separate so you can compare performance with and without them.</p></div>
+  </div>
+}
+
+function ReportColumn({ title, subtitle, income, expenses, tax, otherTax, otherTaxLabel, resultExcluding, capitalGains, resultIncluding }: { title: string; subtitle: string; income: number; expenses: number; tax: number; otherTax: number; otherTaxLabel: string; resultExcluding: number; capitalGains: number; resultIncluding: number }) {
+  const row = (label: string, value: number, tone?: string) => <div className={`report-row ${tone ?? ''}`}><span>{label}</span><strong>{formatMoney(value)}</strong></div>
+  return <section className="panel report-column"><div className="report-column-heading"><div><span className="eyebrow">{subtitle}</span><h3>{title}</h3></div></div>{row('Income', income, 'income-row')}{row('Expenses', -expenses)}{row('Calculated company tax', -tax)}{otherTax !== 0 && row(otherTaxLabel, -otherTax)}<div className="report-divider" />{row('Result excluding capital gains', resultExcluding, 'result-row')}{row('Capital gains / losses', capitalGains)}{row('Result including capital gains', resultIncluding, 'result-row final-result')}</section>
+}
+
+function AccountsPage({ accounts, totalBalance, onAdd, onSelectAccount }: { accounts: Account[]; totalBalance: number; onAdd: () => void; onSelectAccount: (id: string) => void }) {
+  return <div className="page-content narrow-page"><div className="accounts-title"><div><span className="eyebrow">Provisional net worth</span><strong>{formatMoney(totalBalance)}</strong></div><button className="secondary-button" onClick={onAdd}><Plus size={17} />New account</button></div><div className="account-card-grid">{accounts.map(account => <button type="button" className="large-account-card" key={account.id} onClick={() => onSelectAccount(account.id)} aria-label={`View ${account.name} transactions`}><div className="large-account-top"><span style={{ background: account.color }}><Banknote size={20} /></span><small>{account.scope} · {account.type}</small></div><h3>{account.name}</h3><strong>{formatMoney(account.balanceMinor)}</strong><p>Provisional balance</p></button>)}</div></div>
 }
 
 function ModalShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}><div className="modal"><div className="modal-heading"><div><span className="eyebrow">Next Expense</span><h2>{title}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></div>{children}</div></div>
 }
 
-function CategoryDetail({ category, spent, transactions, categories, accounts }: { category: Category; spent: number; transactions: Transaction[]; categories: Category[]; accounts: Account[] }) {
-  const remaining = category.budgetMinor - spent
+function CategoryDetail({ category, spent, budget, transactions, categories, accounts, onUpdateBudget }: { category: Category; spent: number; budget: number; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onUpdateBudget: (categoryId: string, amountMinor: number, scope: AccountScope) => void }) {
+  const [budgetInput, setBudgetInput] = useState((budget / 100).toFixed(2))
+  const [budgetScope, setBudgetScope] = useState<AccountScope>('Personal')
+  const remaining = budget - spent
+  const saveBudget = () => {
+    const amountMinor = parseMoneyToMinor(budgetInput)
+    if (amountMinor === null) return
+    onUpdateBudget(category.id, amountMinor, budgetScope)
+  }
   return <div className="category-detail">
     <div className="category-detail-summary">
       <div><span>Net spent</span><strong>{formatMoney(spent)}</strong></div>
-      <div><span>Budget</span><strong>{formatMoney(category.budgetMinor)}</strong></div>
+      <div><span>Budget</span><strong>{formatMoney(budget)}</strong></div>
       <div><span>Remaining</span><strong className={remaining < 0 ? 'negative' : ''}>{formatMoney(remaining)}</strong></div>
+    </div>
+    <div className="budget-editor">
+      <label><span>Monthly plan</span><input type="number" min="0" step="0.01" value={budgetInput} onChange={(event) => setBudgetInput(event.target.value)} /></label>
+      <label><span>Account tag</span><select value={budgetScope} onChange={(event) => setBudgetScope(event.target.value as AccountScope)}><option>Personal</option><option>Company</option></select></label>
+      <button className="secondary-button" type="button" onClick={saveBudget}>Update budget</button>
     </div>
     <div className="category-detail-heading"><span>{transactions.length} transaction{transactions.length === 1 ? '' : 's'} this month</span></div>
     <div className="category-detail-list">
       {transactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} />)}
+      {!transactions.length && <div className="empty-state compact-empty"><ReceiptText size={24} /><h3>No transactions yet</h3></div>}
+    </div>
+  </div>
+}
+
+function AccountDetail({ account, transactions, categories, accounts }: { account: Account; transactions: Transaction[]; categories: Category[]; accounts: Account[] }) {
+  const incoming = transactions.reduce((sum, transaction) => sum + (transaction.type === 'income' || transaction.toAccountId === account.id ? transaction.amountMinor : 0), 0)
+  const outgoing = transactions.reduce((sum, transaction) => sum + (transaction.type === 'expense' || (transaction.type === 'transfer' && transaction.accountId === account.id) ? transaction.amountMinor : 0), 0)
+  return <div className="category-detail account-detail">
+    <div className="category-detail-summary">
+      <div><span>Current balance</span><strong>{formatMoney(account.balanceMinor)}</strong></div>
+      <div><span>Money in</span><strong className="positive">{formatMoney(incoming)}</strong></div>
+      <div><span>Money out</span><strong>{formatMoney(outgoing)}</strong></div>
+    </div>
+    <div className="category-detail-heading"><span>{transactions.length} transaction{transactions.length === 1 ? '' : 's'} this month</span><b>{account.scope} · {account.type}</b></div>
+    <div className="category-detail-list">
+      {transactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} focusAccountId={account.id} />)}
       {!transactions.length && <div className="empty-state compact-empty"><ReceiptText size={24} /><h3>No transactions yet</h3></div>}
     </div>
   </div>
@@ -381,11 +538,13 @@ function TransactionForm({ accounts, categories, onSubmit }: { accounts: Account
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? '')
   const [toAccountId, setToAccountId] = useState(accounts[1]?.id ?? '')
-  const relevant = categories.filter((c) => c.kind === type)
-  const [categoryId, setCategoryId] = useState(categories.find(c => c.kind === 'expense')?.id ?? '')
+  const relevant = categories.filter((category) => type === 'income'
+    ? ['income', 'capital_gain', 'expense'].includes(category.reportGroup)
+    : ['expense', 'tax', 'capital_gain'].includes(category.reportGroup))
+  const [categoryId, setCategoryId] = useState(categories.find(c => c.reportGroup === 'expense')?.id ?? '')
   function changeType(next: Transaction['type']) {
     setType(next)
-    if (next !== 'transfer') setCategoryId(categories.find(c => c.kind === next)?.id ?? '')
+    if (next !== 'transfer') setCategoryId(categories.find(c => c.reportGroup === next)?.id ?? categories[0]?.id ?? '')
   }
   function submit(e: FormEvent) {
     e.preventDefault()
@@ -420,15 +579,15 @@ function TransactionForm({ accounts, categories, onSubmit }: { accounts: Account
 }
 
 function AccountForm({ onSubmit }: { onSubmit: (a: Omit<Account, 'id'>) => void }) {
-  const [name, setName] = useState(''); const [type, setType] = useState<Account['type']>('Checking'); const [balance, setBalance] = useState('')
-  function submit(e: FormEvent) { e.preventDefault(); const balanceMinor = parseMoneyToMinor(balance || '0', true); if (!name || balanceMinor === null) return; onSubmit({ name, type, balanceMinor, currency: 'EUR', color: type === 'Savings' ? '#d68853' : type === 'Cash' ? '#777a6d' : '#234e46' }) }
-  return <form className="form" onSubmit={submit}><label><span>Account name</span><input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Everyday checking" /></label><div className="form-grid"><label><span>Account type</span><select value={type} onChange={e => setType(e.target.value as Account['type'])}><option>Checking</option><option>Savings</option><option>Cash</option></select></label><label><span>Current balance</span><input type="number" step="0.01" value={balance} onChange={e => setBalance(e.target.value)} placeholder="0.00" /></label></div><button className="primary-button form-submit">Create account<ArrowRight size={18} /></button></form>
+  const [name, setName] = useState(''); const [type, setType] = useState<Account['type']>('Checking'); const [balance, setBalance] = useState(''); const [scope, setScope] = useState<AccountScope>('Personal')
+  function submit(e: FormEvent) { e.preventDefault(); const balanceMinor = parseMoneyToMinor(balance || '0', true); if (!name || balanceMinor === null) return; onSubmit({ name, type, scope, balanceMinor, currency: 'EUR', color: type === 'Savings' ? '#d68853' : type === 'Cash' ? '#777a6d' : '#234e46' }) }
+  return <form className="form" onSubmit={submit}><label><span>Account name</span><input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Everyday checking" /></label><div className="form-grid"><label><span>Account type</span><select value={type} onChange={e => setType(e.target.value as Account['type'])}><option>Checking</option><option>Savings</option><option>Cash</option></select></label><label><span>Account tag</span><select value={scope} onChange={e => setScope(e.target.value as AccountScope)}><option>Personal</option><option>Company</option></select></label></div><label><span>Current balance</span><input type="number" step="0.01" value={balance} onChange={e => setBalance(e.target.value)} placeholder="0.00" /></label><button className="primary-button form-submit">Create account<ArrowRight size={18} /></button></form>
 }
 
-function CategoryForm({ onSubmit }: { onSubmit: (c: Omit<Category, 'id'>) => void }) {
-  const [name, setName] = useState(''); const [budget, setBudget] = useState(''); const [kind, setKind] = useState<Category['kind']>('expense')
-  function submit(e: FormEvent) { e.preventDefault(); const budgetMinor = parseMoneyToMinor(budget || '0'); if (!name || budgetMinor === null) return; onSubmit({ name, budgetMinor, kind, color: '#5d7d91', icon: kind === 'income' ? 'briefcase' : 'sparkles' }) }
-  return <form className="form" onSubmit={submit}><label><span>Category name</span><input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Personal care" /></label><div className="form-grid"><label><span>Type</span><select value={kind} onChange={e => setKind(e.target.value as Category['kind'])}><option value="expense">Expense</option><option value="income">Income</option></select></label><label><span>Monthly budget</span><input disabled={kind === 'income'} type="number" min="0" step="1" value={budget} onChange={e => setBudget(e.target.value)} placeholder="0" /></label></div><button className="primary-button form-submit">Create category<ArrowRight size={18} /></button></form>
+function CategoryForm({ onSubmit }: { onSubmit: (c: Omit<Category, 'id'>, budgetMinor: number, scope: AccountScope) => void }) {
+  const [name, setName] = useState(''); const [budget, setBudget] = useState(''); const [reportGroup, setReportGroup] = useState<ReportGroup>('expense'); const [scope, setScope] = useState<AccountScope>('Personal')
+  function submit(e: FormEvent) { e.preventDefault(); const budgetMinor = parseMoneyToMinor(budget || '0'); if (!name || budgetMinor === null) return; onSubmit({ name, reportGroup, color: '#5d7d91', icon: reportGroup === 'income' ? 'briefcase' : 'sparkles' }, budgetMinor, scope) }
+  return <form className="form" onSubmit={submit}><label><span>Category name</span><input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Personal care" /></label><div className="form-grid"><label><span>Report group</span><select value={reportGroup} onChange={e => setReportGroup(e.target.value as ReportGroup)}><option value="income">Income</option><option value="expense">Expense</option><option value="tax">Tax</option><option value="capital_gain">Capital gain/loss</option></select></label><label><span>Account tag</span><select value={scope} onChange={e => setScope(e.target.value as AccountScope)}><option>Personal</option><option>Company</option></select></label></div><label><span>Monthly plan</span><input type="number" min="0" step="0.01" value={budget} onChange={e => setBudget(e.target.value)} placeholder="0.00" /></label><button className="primary-button form-submit">Create category<ArrowRight size={18} /></button></form>
 }
 
 export default App

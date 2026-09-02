@@ -1,6 +1,7 @@
 import type { AppData } from './types'
 
 const today = new Date()
+const currentMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`
 const dateInMonth = (day: number) => {
   const year = today.getFullYear()
   const month = String(today.getMonth() + 1).padStart(2, '0')
@@ -10,18 +11,26 @@ const dateInMonth = (day: number) => {
 
 export const seedData: AppData = {
   accounts: [
-    { id: 'checking', name: 'Everyday checking', type: 'Checking', balanceMinor: 384216, color: '#234e46', currency: 'EUR' },
-    { id: 'savings', name: 'Rainy day', type: 'Savings', balanceMinor: 1248000, color: '#d68853', currency: 'EUR' },
-    { id: 'wallet', name: 'Wallet', type: 'Cash', balanceMinor: 8640, color: '#777a6d', currency: 'EUR' },
+    { id: 'checking', name: 'Everyday checking', type: 'Checking', balanceMinor: 384216, color: '#234e46', currency: 'EUR', scope: 'Personal' },
+    { id: 'savings', name: 'Rainy day', type: 'Savings', balanceMinor: 1248000, color: '#d68853', currency: 'EUR', scope: 'Personal' },
+    { id: 'wallet', name: 'Wallet', type: 'Cash', balanceMinor: 8640, color: '#777a6d', currency: 'EUR', scope: 'Personal' },
   ],
   categories: [
-    { id: 'salary', name: 'Salary', budgetMinor: 0, color: '#2f6f62', icon: 'briefcase', kind: 'income' },
-    { id: 'housing', name: 'Housing', budgetMinor: 145000, color: '#cc7048', icon: 'house', kind: 'expense' },
-    { id: 'groceries', name: 'Groceries', budgetMinor: 52000, color: '#738c5a', icon: 'basket', kind: 'expense' },
-    { id: 'transport', name: 'Transport', budgetMinor: 26000, color: '#d49b4d', icon: 'car', kind: 'expense' },
-    { id: 'dining', name: 'Dining out', budgetMinor: 24000, color: '#9b6a71', icon: 'utensils', kind: 'expense' },
-    { id: 'fun', name: 'Fun & leisure', budgetMinor: 18000, color: '#5d7d91', icon: 'sparkles', kind: 'expense' },
-    { id: 'bills', name: 'Bills', budgetMinor: 39000, color: '#7f7062', icon: 'receipt', kind: 'expense' },
+    { id: 'salary', name: 'Salary', color: '#2f6f62', icon: 'briefcase', reportGroup: 'income' },
+    { id: 'housing', name: 'Housing', color: '#cc7048', icon: 'house', reportGroup: 'expense' },
+    { id: 'groceries', name: 'Groceries', color: '#738c5a', icon: 'basket', reportGroup: 'expense' },
+    { id: 'transport', name: 'Transport', color: '#d49b4d', icon: 'car', reportGroup: 'expense' },
+    { id: 'dining', name: 'Dining out', color: '#9b6a71', icon: 'utensils', reportGroup: 'expense' },
+    { id: 'fun', name: 'Fun & leisure', color: '#5d7d91', icon: 'sparkles', reportGroup: 'expense' },
+    { id: 'bills', name: 'Bills', color: '#7f7062', icon: 'receipt', reportGroup: 'expense' },
+  ],
+  budgets: [
+    { id: 'budget-housing', month: currentMonth, categoryId: 'housing', scope: 'Personal', amountMinor: 145000 },
+    { id: 'budget-groceries', month: currentMonth, categoryId: 'groceries', scope: 'Personal', amountMinor: 52000 },
+    { id: 'budget-transport', month: currentMonth, categoryId: 'transport', scope: 'Personal', amountMinor: 26000 },
+    { id: 'budget-dining', month: currentMonth, categoryId: 'dining', scope: 'Personal', amountMinor: 24000 },
+    { id: 'budget-fun', month: currentMonth, categoryId: 'fun', scope: 'Personal', amountMinor: 18000 },
+    { id: 'budget-bills', month: currentMonth, categoryId: 'bills', scope: 'Personal', amountMinor: 39000 },
   ],
   transactions: [
     { id: 't1', date: dateInMonth(28), merchant: 'Green Market', note: 'Weekly groceries', amountMinor: 8420, type: 'expense', accountId: 'checking', categoryId: 'groceries', currency: 'EUR' },
@@ -33,4 +42,5 @@ export const seedData: AppData = {
     { id: 't7', date: dateInMonth(8), merchant: 'Green Market', amountMinor: 12634, type: 'expense', accountId: 'checking', categoryId: 'groceries', currency: 'EUR' },
     { id: 't8', date: dateInMonth(1), merchant: 'Acme Studio', note: 'Monthly salary', amountMinor: 475000, type: 'income', accountId: 'checking', categoryId: 'salary', currency: 'EUR' },
   ],
+  settings: { estimatedCompanyTaxRateBps: 2000 },
 }

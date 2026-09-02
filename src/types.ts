@@ -1,3 +1,6 @@
+export type AccountScope = 'Personal' | 'Company'
+export type ReportGroup = 'income' | 'expense' | 'tax' | 'capital_gain'
+
 export type Account = {
   id: string
   name: string
@@ -5,15 +8,23 @@ export type Account = {
   balanceMinor: number
   color: string
   currency: 'EUR'
+  scope: AccountScope
 }
 
 export type Category = {
   id: string
   name: string
-  budgetMinor: number
   color: string
   icon: string
-  kind: 'expense' | 'income'
+  reportGroup: ReportGroup
+}
+
+export type Budget = {
+  id: string
+  month: string
+  categoryId: string
+  scope: AccountScope
+  amountMinor: number
 }
 
 export type Transaction = {
@@ -35,5 +46,9 @@ export type Transaction = {
 export type AppData = {
   accounts: Account[]
   categories: Category[]
+  budgets: Budget[]
   transactions: Transaction[]
+  settings: {
+    estimatedCompanyTaxRateBps: number
+  }
 }
