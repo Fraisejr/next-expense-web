@@ -156,7 +156,7 @@ export async function loadWorkspace(): Promise<LoadedWorkspace> {
   }
 }
 
-export async function createAccount(workspaceId: string, account: Account) {
+export async function createAccount(workspaceId: string, account: Account, sortOrder: number) {
   const { error } = await neon.from('accounts').insert({
     id: account.id,
     workspace_id: workspaceId,
@@ -167,9 +167,20 @@ export async function createAccount(workspaceId: string, account: Account) {
     currency: account.currency,
     color: account.color,
     opening_balance_minor: account.balanceMinor,
+    sort_order: sortOrder,
     closed: account.closed,
   })
   if (error) throw error
+}
+
+export async function saveAccountOrder(workspaceId: string, accountIds: string[]) {
+  const results = await Promise.all(accountIds.map((accountId, sortOrder) => neon
+    .from('accounts')
+    .update({ sort_order: sortOrder })
+    .eq('workspace_id', workspaceId)
+    .eq('id', accountId)))
+  const failed = results.find((result) => result.error)
+  if (failed?.error) throw failed.error
 }
 
 export async function createCategory(workspaceId: string, category: Category) {

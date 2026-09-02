@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import {
   ArrowDownLeft, ArrowLeftRight, ArrowRight, ArrowUpRight, BadgeEuro, Banknote, BriefcaseBusiness,
   BarChart3, CalendarDays, CarFront, ChevronDown, ChevronLeft, ChevronRight, CircleHelp,
-  CreditCard, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Plus, ReceiptText, Search, Settings,
+  ArrowDown, ArrowUp, Check, CreditCard, GripVertical, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Plus, ReceiptText, Search, Settings,
   RefreshCw, ShoppingBasket, Sparkles, Target, UsersRound, Utensils, WalletCards, X,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { assignPayeeMapping, createAccount, createCategory, createTransaction, ensurePayees, linkBankAccount, loadWorkspace, saveBankSync, saveBudget, updateTaxRate, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
+import { assignPayeeMapping, createAccount, createCategory, createTransaction, ensurePayees, linkBankAccount, loadWorkspace, saveAccountOrder, saveBankSync, saveBudget, updateTaxRate, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
 import { neon } from './neon'
 import type { Account, AccountScope, AppData, Category, Payee, ReportGroup, Transaction } from './types'
 
@@ -269,11 +269,31 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     const nextAccount = { ...account, id: uid() }
     try {
       setSyncError('')
-      await createAccount(workspace.workspaceId, nextAccount)
+      await createAccount(workspace.workspaceId, nextAccount, data.accounts.length)
       setData((current) => ({ ...current, accounts: [...current.accounts, nextAccount] }))
       setModal(null)
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not save the account.')
+    }
+  }
+
+  async function reorderAccounts(accountIds: string[]) {
+    const requestedIds = new Set(accountIds)
+    const reordered = [
+      ...accountIds.flatMap((id) => {
+        const account = data.accounts.find((item) => item.id === id)
+        return account ? [account] : []
+      }),
+      ...data.accounts.filter((account) => !requestedIds.has(account.id)),
+    ]
+    try {
+      setSyncError('')
+      await saveAccountOrder(workspace.workspaceId, reordered.map((account) => account.id))
+      setData((current) => ({ ...current, accounts: reordered }))
+      return true
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : 'Could not save the account order.')
+      return false
     }
   }
 
@@ -495,7 +515,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <ReportsPage data={data} viewedMonth={viewedMonth} defaultCurrency={workspace.defaultCurrency} onUpdateTaxRate={changeTaxRate} />
         )}
         {page === 'accounts' && !selectedAccount && (
-          <AccountsPage accounts={activeAccounts} totalBalance={totalBalance} onAdd={() => setModal('account')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} />
+          <AccountsPage accounts={activeAccounts} totalBalance={totalBalance} onAdd={() => setModal('account')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onReorder={reorderAccounts} />
         )}
         {selectedAccount && (
           <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
@@ -900,8 +920,97 @@ function ReportColumn({ title, subtitle, income, expenses, tax, otherTax, otherT
   return <section className="panel report-column"><div className="report-column-heading"><div><span className="eyebrow">{subtitle}</span><h3>{title}</h3></div></div>{row('Income', income, 'income-row')}{row('Expenses', -expenses)}{row('Calculated company tax', -tax)}{otherTax !== 0 && row(otherTaxLabel, -otherTax)}<div className="report-divider" />{row('Result excluding capital gains', resultExcluding, 'result-row')}{row('Capital gains / losses', capitalGains)}{row('Result including capital gains', resultIncluding, 'result-row final-result')}</section>
 }
 
-function AccountsPage({ accounts, totalBalance, onAdd, onSelectAccount }: { accounts: Account[]; totalBalance: number; onAdd: () => void; onSelectAccount: (id: string) => void }) {
-  return <div className="page-content narrow-page"><div className="accounts-title"><div><span className="eyebrow">Provisional EUR net worth</span><strong>{formatMoney(totalBalance)}</strong></div><button className="secondary-button" onClick={onAdd}><Plus size={17} />New account</button></div><div className="account-card-grid">{accounts.map(account => <button type="button" className="large-account-card" key={account.id} onClick={() => onSelectAccount(account.id)} aria-label={`View ${account.name} transactions`}><div className="large-account-top"><span style={{ background: account.color }}><Banknote size={20} /></span><small>{account.scope} · {account.type}</small></div><h3>{account.name}</h3><strong>{formatMoney(account.balanceMinor, account.currency)}</strong><p>Provisional balance · {account.currency}</p></button>)}</div></div>
+function AccountsPage({ accounts, totalBalance, onAdd, onSelectAccount, onReorder }: { accounts: Account[]; totalBalance: number; onAdd: () => void; onSelectAccount: (id: string) => void; onReorder: (accountIds: string[]) => Promise<boolean> }) {
+  const [reordering, setReordering] = useState(false)
+  const [orderedIds, setOrderedIds] = useState(() => accounts.map((account) => account.id))
+  const [draggedId, setDraggedId] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!reordering) setOrderedIds(accounts.map((account) => account.id))
+  }, [accounts, reordering])
+
+  const orderedAccounts = orderedIds.flatMap((id) => {
+    const account = accounts.find((item) => item.id === id)
+    return account ? [account] : []
+  })
+
+  function moveAccount(accountId: string, offset: number) {
+    setOrderedIds((current) => {
+      const from = current.indexOf(accountId)
+      const to = from + offset
+      if (from < 0 || to < 0 || to >= current.length) return current
+      const next = [...current]
+      next.splice(from, 1)
+      next.splice(to, 0, accountId)
+      return next
+    })
+  }
+
+  function dropAccount(targetId: string) {
+    if (!draggedId || draggedId === targetId) return
+    setOrderedIds((current) => {
+      const from = current.indexOf(draggedId)
+      const to = current.indexOf(targetId)
+      if (from < 0 || to < 0) return current
+      const next = [...current]
+      next.splice(from, 1)
+      next.splice(to, 0, draggedId)
+      return next
+    })
+    setDraggedId('')
+  }
+
+  function cancelReordering() {
+    setOrderedIds(accounts.map((account) => account.id))
+    setDraggedId('')
+    setReordering(false)
+  }
+
+  async function saveOrder() {
+    setSaving(true)
+    const saved = await onReorder(orderedIds)
+    setSaving(false)
+    if (saved) setReordering(false)
+  }
+
+  return <div className="page-content narrow-page">
+    <div className="accounts-title">
+      <div><span className="eyebrow">Provisional EUR net worth</span><strong>{formatMoney(totalBalance)}</strong></div>
+      <div className="accounts-title-actions">
+        {reordering ? <>
+          <button className="secondary-button" onClick={cancelReordering} disabled={saving}>Cancel</button>
+          <button className="primary-button" onClick={() => void saveOrder()} disabled={saving}><Check size={17} />{saving ? 'Saving…' : 'Save order'}</button>
+        </> : <>
+          {accounts.length > 1 && <button className="secondary-button" onClick={() => setReordering(true)}><GripVertical size={17} />Reorder</button>}
+          <button className="secondary-button" onClick={onAdd}><Plus size={17} />New account</button>
+        </>}
+      </div>
+    </div>
+    {reordering && <p className="reorder-help">Drag accounts into place, or use the arrow buttons. This order is also used in the sidebar.</p>}
+    <div className={reordering ? 'account-card-grid reordering' : 'account-card-grid'}>
+      {orderedAccounts.map((account, index) => reordering ? (
+        <div
+          className={draggedId === account.id ? 'large-account-card reorder-account-card dragging' : 'large-account-card reorder-account-card'}
+          key={account.id}
+          draggable
+          onDragStart={() => setDraggedId(account.id)}
+          onDragEnd={() => setDraggedId('')}
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={() => dropAccount(account.id)}
+        >
+          <div className="large-account-top"><span style={{ background: account.color }}><Banknote size={20} /></span><GripVertical className="reorder-card-handle" size={20} aria-hidden="true" /></div>
+          <h3>{account.name}</h3><strong>{formatMoney(account.balanceMinor, account.currency)}</strong><p>{account.scope} · {account.type} · {account.currency}</p>
+          <div className="reorder-card-actions">
+            <button className="icon-button" onClick={() => moveAccount(account.id, -1)} disabled={index === 0} aria-label={`Move ${account.name} earlier`}><ArrowUp size={16} /></button>
+            <button className="icon-button" onClick={() => moveAccount(account.id, 1)} disabled={index === orderedAccounts.length - 1} aria-label={`Move ${account.name} later`}><ArrowDown size={16} /></button>
+          </div>
+        </div>
+      ) : (
+        <button type="button" className="large-account-card" key={account.id} onClick={() => onSelectAccount(account.id)} aria-label={`View ${account.name} transactions`}><div className="large-account-top"><span style={{ background: account.color }}><Banknote size={20} /></span><small>{account.scope} · {account.type}</small></div><h3>{account.name}</h3><strong>{formatMoney(account.balanceMinor, account.currency)}</strong><p>Provisional balance · {account.currency}</p></button>
+      ))}
+    </div>
+  </div>
 }
 
 function ModalShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
