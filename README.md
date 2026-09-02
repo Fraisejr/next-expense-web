@@ -19,6 +19,12 @@ npm run build
 
 All monetary values are stored as integer minor units (cents). Decimal conversion happens only at input and display boundaries, avoiding floating-point rounding errors in balances and budget calculations.
 
+## Product data decisions
+
+- Split transactions are intentionally unsupported. Migration must ignore legacy split components, including stale split amounts or category references, whenever importing iOS data.
+- Multiple currencies are supported. Transactions and accounts retain their original currency instead of being coerced to EUR.
+- Historical exchange rates are supported and must be preserved during migration for cross-currency balances, transfers, and reporting.
+
 ## Local iOS imports
 
 The importer accepts the tab-separated transaction and budget exports produced by the Next Expense iOS app:
