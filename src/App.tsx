@@ -123,6 +123,10 @@ function App() {
     navigate({ pathname: location.pathname, search: params.toString() }, { replace: true })
   }, [importPending, location.pathname, location.search, navigate, requestedMonth, viewedMonth])
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'auto' })
+  }, [location.pathname])
+
   const transactions = useMemo(
     () => data.transactions
       .filter((t) => inMonth(t.date, viewedMonth))
