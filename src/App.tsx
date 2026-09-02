@@ -5,6 +5,7 @@ import {
   CreditCard, House, LayoutDashboard, Menu, Plus, ReceiptText, Search, Settings,
   ShoppingBasket, Sparkles, Target, Utensils, WalletCards, X,
 } from 'lucide-react'
+import { matchPath, useLocation, useNavigate } from 'react-router-dom'
 import { seedData } from './data'
 import type { Account, AccountScope, AppData, Category, ReportGroup, Transaction } from './types'
 
@@ -40,12 +41,11 @@ const categoryIcons = {
   briefcase: BriefcaseBusiness,
 }
 
-const navItems: { id: Page; label: string; icon: typeof House }[] = [
-  { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-  { id: 'transactions', label: 'Transactions', icon: ReceiptText },
-  { id: 'budgets', label: 'Budgets', icon: Target },
-  { id: 'reports', label: 'Performance', icon: BarChart3 },
-  { id: 'accounts', label: 'Accounts', icon: WalletCards },
+const navItems: { id: Page; label: string; icon: typeof House; path: string }[] = [
+  { id: 'overview', label: 'Overview', icon: LayoutDashboard, path: '/' },
+  { id: 'transactions', label: 'Transactions', icon: ReceiptText, path: '/transactions' },
+  { id: 'budgets', label: 'Budgets', icon: Target, path: '/budgets' },
+  { id: 'reports', label: 'Performance', icon: BarChart3, path: '/performance' },
 ]
 
 function uid() {
@@ -61,6 +61,17 @@ function toMonthKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 }
 
+function fromMonthKey(value: string | null) {
+  if (!value || !/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) return null
+  const [year, month] = value.split('-').map(Number)
+  return new Date(year, month - 1, 1)
+}
+
+function latestTransactionMonth(data: AppData) {
+  const latestDate = data.transactions.reduce((latest, transaction) => transaction.date > latest ? transaction.date : latest, '')
+  return fromMonthKey(latestDate.slice(0, 7)) ?? new Date()
+}
+
 function loadData(): AppData {
   try {
     const saved = localStorage.getItem(STORAGE_KEY)
@@ -71,15 +82,28 @@ function loadData(): AppData {
 }
 
 function App() {
+  const location = useLocation()
+  const navigate = useNavigate()
   const [data, setData] = useState<AppData>(loadData)
   const [shouldLoadLocalImport] = useState(() => !localStorage.getItem(STORAGE_KEY))
-  const [page, setPage] = useState<Page>('overview')
+  const [importPending, setImportPending] = useState(shouldLoadLocalImport)
   const [modal, setModal] = useState<Modal>(null)
-  const [viewedMonth, setViewedMonth] = useState(() => new Date())
   const [search, setSearch] = useState('')
   const [mobileNav, setMobileNav] = useState(false)
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null)
-  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null)
+  const [personalAccountsOpen, setPersonalAccountsOpen] = useState(true)
+  const [companyAccountsOpen, setCompanyAccountsOpen] = useState(true)
+
+  const accountMatch = matchPath('/accounts/:accountId', location.pathname)
+  const categoryMatch = matchPath('/categories/:categoryId', location.pathname)
+  const page: Page = accountMatch ? 'accounts'
+    : categoryMatch ? 'budgets'
+      : location.pathname === '/transactions' ? 'transactions'
+        : location.pathname === '/budgets' ? 'budgets'
+          : location.pathname === '/performance' ? 'reports'
+            : location.pathname === '/accounts' ? 'accounts'
+              : 'overview'
+  const requestedMonth = fromMonthKey(new URLSearchParams(location.search).get('month'))
+  const viewedMonth = requestedMonth ?? latestTransactionMonth(data)
 
   useEffect(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(data)), [data])
 
@@ -89,7 +113,15 @@ function App() {
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then((imported: AppData) => setData(imported))
       .catch(() => undefined)
+      .finally(() => setImportPending(false))
   }, [shouldLoadLocalImport])
+
+  useEffect(() => {
+    if (importPending || requestedMonth) return
+    const params = new URLSearchParams(location.search)
+    params.set('month', toMonthKey(viewedMonth))
+    navigate({ pathname: location.pathname, search: params.toString() }, { replace: true })
+  }, [importPending, location.pathname, location.search, navigate, requestedMonth, viewedMonth])
 
   const transactions = useMemo(
     () => data.transactions
@@ -127,12 +159,28 @@ function App() {
     .filter((budget) => budget.month === selectedMonthKey && budget.categoryId === categoryId)
     .reduce((sum, budget) => sum + budget.amountMinor, 0)
   const totalBudget = expenseCategories.reduce((sum, category) => sum + budgetForCategory(category.id), 0)
-  const pageTitle = navItems.find((item) => item.id === page)?.label ?? 'Overview'
-  const selectedCategory = data.categories.find((category) => category.id === selectedCategoryId)
-  const selectedAccount = data.accounts.find((account) => account.id === selectedAccountId)
+  const selectedCategory = data.categories.find((category) => category.id === categoryMatch?.params.categoryId)
+  const selectedAccount = data.accounts.find((account) => account.id === accountMatch?.params.accountId)
+  const pageTitle = selectedAccount?.name ?? selectedCategory?.name ?? navItems.find((item) => item.id === page)?.label ?? (page === 'accounts' ? 'Accounts' : 'Overview')
+  const personalAccounts = data.accounts.filter((account) => account.scope === 'Personal')
+  const companyAccounts = data.accounts.filter((account) => account.scope === 'Company')
+
+  function pathWithMonth(path: string, month = viewedMonth) {
+    return `${path}?month=${toMonthKey(month)}`
+  }
+
+  function goTo(path: string) {
+    navigate(pathWithMonth(path))
+    setMobileNav(false)
+  }
 
   function moveMonth(delta: number) {
-    setViewedMonth((current) => new Date(current.getFullYear(), current.getMonth() + delta, 1))
+    navigate(pathWithMonth(location.pathname, new Date(viewedMonth.getFullYear(), viewedMonth.getMonth() + delta, 1)))
+  }
+
+  function selectMonth(month: string) {
+    const selected = fromMonthKey(month)
+    if (selected) navigate(pathWithMonth(location.pathname, selected))
   }
 
   function addAccount(account: Omit<Account, 'id'>) {
@@ -189,11 +237,20 @@ function App() {
 
         <nav className="nav-list">
           <p className="nav-label">Workspace</p>
-          {navItems.map(({ id, label, icon: Icon }) => (
-            <button key={id} className={page === id ? 'nav-item active' : 'nav-item'} onClick={() => { setPage(id); setMobileNav(false) }}>
+          {navItems.map(({ id, label, icon: Icon, path }) => (
+            <button key={id} className={page === id ? 'nav-item active' : 'nav-item'} onClick={() => goTo(path)}>
               <Icon size={19} /><span>{label}</span>
             </button>
           ))}
+        </nav>
+
+        <nav className="sidebar-accounts" aria-label="Accounts">
+          <button className={page === 'accounts' && !selectedAccount ? 'account-section-title active' : 'account-section-title'} onClick={() => goTo('/accounts')}>
+            <span><WalletCards size={16} />Accounts</span><b>{formatMoney(totalBalance)}</b>
+          </button>
+          <SidebarAccountGroup label="Personal" accounts={personalAccounts} open={personalAccountsOpen} onToggle={() => setPersonalAccountsOpen((current) => !current)} selectedAccountId={selectedAccount?.id} onSelect={(id) => goTo(`/accounts/${id}`)} />
+          {companyAccounts.length > 0 && <SidebarAccountGroup label="Company" accounts={companyAccounts} open={companyAccountsOpen} onToggle={() => setCompanyAccountsOpen((current) => !current)} selectedAccountId={selectedAccount?.id} onSelect={(id) => goTo(`/accounts/${id}`)} />}
+          <button className="sidebar-add-account" onClick={() => setModal('account')}><Plus size={13} />Add account</button>
         </nav>
 
         <div className="sidebar-bottom">
@@ -211,12 +268,12 @@ function App() {
         <header className="topbar">
           <div className="topbar-title">
             <button className="icon-button mobile-menu" aria-label="Open menu" onClick={() => setMobileNav(!mobileNav)}><Menu size={21} /></button>
-            <div><span className="eyebrow">Personal budget</span><h1>{pageTitle}</h1></div>
+            <div><span className="eyebrow">{selectedAccount ? 'Accounts' : selectedCategory ? 'Categories' : 'Personal budget'}</span><h1>{pageTitle}</h1></div>
           </div>
           <div className="top-actions">
             <div className="month-switcher">
               <button aria-label="Previous month" onClick={() => moveMonth(-1)}><ChevronLeft size={17} /></button>
-              <span><CalendarDays size={16} />{monthName.format(viewedMonth)}</span>
+              <label><CalendarDays size={16} /><input aria-label="Select month" type="month" value={selectedMonthKey} onInput={(event) => selectMonth((event.target as HTMLInputElement).value)} /></label>
               <button aria-label="Next month" onClick={() => moveMonth(1)}><ChevronRight size={17} /></button>
             </div>
             <button className="primary-button" onClick={() => setModal('transaction')}><Plus size={18} />Add transaction</button>
@@ -228,21 +285,27 @@ function App() {
             accounts={data.accounts} categories={expenseCategories} transactionCategories={data.categories} transactions={transactions}
             income={income} expenses={expenses} net={net} totalBalance={totalBalance}
             totalBudget={totalBudget} categorySpending={categorySpending} budgetForCategory={budgetForCategory}
-            onAllTransactions={() => setPage('transactions')} onAddAccount={() => setModal('account')}
-            onAddCategory={() => setModal('category')} onSelectCategory={setSelectedCategoryId} onSelectAccount={setSelectedAccountId}
+            onAllTransactions={() => goTo('/transactions')} onAddAccount={() => setModal('account')}
+            onAddCategory={() => setModal('category')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onSelectAccount={(id) => goTo(`/accounts/${id}`)}
           />
         )}
         {page === 'transactions' && (
           <TransactionsPage transactions={transactions} accounts={data.accounts} categories={data.categories} search={search} setSearch={setSearch} />
         )}
-        {page === 'budgets' && (
-          <BudgetsPage categories={data.categories} categorySpending={categorySpending} budgetForCategory={budgetForCategory} onAdd={() => setModal('category')} onSelectCategory={setSelectedCategoryId} />
+        {page === 'budgets' && !selectedCategory && (
+          <BudgetsPage categories={data.categories} categorySpending={categorySpending} budgetForCategory={budgetForCategory} onAdd={() => setModal('category')} onSelectCategory={(id) => goTo(`/categories/${id}`)} />
         )}
         {page === 'reports' && (
           <ReportsPage data={data} viewedMonth={viewedMonth} onUpdateTaxRate={(estimatedCompanyTaxRateBps) => setData((current) => ({ ...current, settings: { ...current.settings, estimatedCompanyTaxRateBps } }))} />
         )}
-        {page === 'accounts' && (
-          <AccountsPage accounts={data.accounts} totalBalance={totalBalance} onAdd={() => setModal('account')} onSelectAccount={setSelectedAccountId} />
+        {page === 'accounts' && !selectedAccount && (
+          <AccountsPage accounts={data.accounts} totalBalance={totalBalance} onAdd={() => setModal('account')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} />
+        )}
+        {selectedAccount && (
+          <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} />
+        )}
+        {selectedCategory && (
+          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} accounts={data.accounts} onUpdateBudget={updateBudget} onBack={() => goTo('/budgets')} onSelectCategory={(id) => goTo(`/categories/${id}`)} />
         )}
       </main>
 
@@ -253,31 +316,18 @@ function App() {
           {modal === 'category' && <CategoryForm onSubmit={addCategory} />}
         </ModalShell>
       )}
-      {selectedCategory && (
-        <ModalShell title={selectedCategory.name} onClose={() => setSelectedCategoryId(null)}>
-          <CategoryDetail
-            category={selectedCategory}
-            spent={categorySpending(selectedCategory.id)}
-            budget={budgetForCategory(selectedCategory.id)}
-            transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)}
-            categories={data.categories}
-            accounts={data.accounts}
-            onUpdateBudget={updateBudget}
-          />
-        </ModalShell>
-      )}
-      {selectedAccount && (
-        <ModalShell title={selectedAccount.name} onClose={() => setSelectedAccountId(null)}>
-          <AccountDetail
-            account={selectedAccount}
-            transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)}
-            categories={data.categories}
-            accounts={data.accounts}
-          />
-        </ModalShell>
-      )}
     </div>
   )
+}
+
+function SidebarAccountGroup({ label, accounts, open, onToggle, selectedAccountId, onSelect }: { label: AccountScope; accounts: Account[]; open: boolean; onToggle: () => void; selectedAccountId?: string; onSelect: (id: string) => void }) {
+  const subtotal = accounts.reduce((sum, account) => sum + account.balanceMinor, 0)
+  return <div className="sidebar-account-group">
+    <button className="sidebar-account-group-title" onClick={onToggle} aria-expanded={open}>
+      <span><ChevronDown size={12} className={open ? '' : 'collapsed'} />{label}</span><b>{formatMoney(subtotal)}</b>
+    </button>
+    {open && <div className="sidebar-account-list">{accounts.map((account) => <button key={account.id} className={selectedAccountId === account.id ? 'sidebar-account active' : 'sidebar-account'} onClick={() => onSelect(account.id)}><span><i style={{ background: account.color }} />{account.name}</span><b className={account.balanceMinor < 0 ? 'negative' : ''}>{formatMoney(account.balanceMinor)}</b></button>)}</div>}
+  </div>
 }
 
 function Overview({ accounts, categories, transactionCategories, transactions, income, expenses, net, totalBalance, totalBudget, categorySpending, budgetForCategory, onAllTransactions, onAddAccount, onAddCategory, onSelectCategory, onSelectAccount }: {
@@ -483,6 +533,33 @@ function AccountsPage({ accounts, totalBalance, onAdd, onSelectAccount }: { acco
 
 function ModalShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}><div className="modal"><div className="modal-heading"><div><span className="eyebrow">Next Expense</span><h2>{title}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></div>{children}</div></div>
+}
+
+function AccountDetailPage({ account, transactions, categories, accounts, onBack, onSelectAccount }: { account: Account; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onBack: () => void; onSelectAccount: (id: string) => void }) {
+  return <div className="page-content narrow-page entity-page">
+    <div className="entity-page-toolbar">
+      <button className="entity-back" onClick={onBack}><ChevronLeft size={16} />All accounts</button>
+      <label><span>Account</span><select value={account.id} onChange={(event) => onSelectAccount(event.target.value)}>{accounts.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>
+    </div>
+    <section className="panel entity-detail-panel">
+      <div className="entity-heading"><div className="entity-heading-icon" style={{ background: account.color }}><CreditCard size={20} /></div><div><span className="eyebrow">{account.scope} · {account.type}</span><h2>{account.name}</h2></div></div>
+      <AccountDetail account={account} transactions={transactions} categories={categories} accounts={accounts} />
+    </section>
+  </div>
+}
+
+function CategoryDetailPage({ category, spent, budget, transactions, categories, accounts, onUpdateBudget, onBack, onSelectCategory }: { category: Category; spent: number; budget: number; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onUpdateBudget: (categoryId: string, amountMinor: number, scope: AccountScope) => void; onBack: () => void; onSelectCategory: (id: string) => void }) {
+  const Icon = categoryIcons[category.icon as keyof typeof categoryIcons] ?? Sparkles
+  return <div className="page-content narrow-page entity-page">
+    <div className="entity-page-toolbar">
+      <button className="entity-back" onClick={onBack}><ChevronLeft size={16} />All categories</button>
+      <label><span>Category</span><select value={category.id} onChange={(event) => onSelectCategory(event.target.value)}>{categories.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>
+    </div>
+    <section className="panel entity-detail-panel">
+      <div className="entity-heading"><div className="entity-heading-icon" style={{ color: category.color, background: `${category.color}18` }}><Icon size={20} /></div><div><span className="eyebrow">{category.reportGroup.replace('_', ' ')}</span><h2>{category.name}</h2></div></div>
+      <CategoryDetail key={`${category.id}-${budget}`} category={category} spent={spent} budget={budget} transactions={transactions} categories={categories} accounts={accounts} onUpdateBudget={onUpdateBudget} />
+    </section>
+  </div>
 }
 
 function CategoryDetail({ category, spent, budget, transactions, categories, accounts, onUpdateBudget }: { category: Category; spent: number; budget: number; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onUpdateBudget: (categoryId: string, amountMinor: number, scope: AccountScope) => void }) {
