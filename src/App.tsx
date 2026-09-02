@@ -67,11 +67,6 @@ function fromMonthKey(value: string | null) {
   return new Date(year, month - 1, 1)
 }
 
-function latestTransactionMonth(data: AppData) {
-  const latestDate = data.transactions.reduce((latest, transaction) => transaction.date > latest ? transaction.date : latest, '')
-  return fromMonthKey(latestDate.slice(0, 7)) ?? new Date()
-}
-
 function loadData(): AppData {
   try {
     const saved = localStorage.getItem(STORAGE_KEY)
@@ -103,7 +98,7 @@ function App() {
             : location.pathname === '/accounts' ? 'accounts'
               : 'overview'
   const requestedMonth = fromMonthKey(new URLSearchParams(location.search).get('month'))
-  const viewedMonth = requestedMonth ?? latestTransactionMonth(data)
+  const viewedMonth = requestedMonth ?? new Date()
 
   useEffect(() => localStorage.setItem(STORAGE_KEY, JSON.stringify(data)), [data])
 
