@@ -178,6 +178,14 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .entity-heading { display: flex; align-items: center; gap: 12px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
 .entity-heading h2 { margin-top: 4px; font-size: 26px; }
 .entity-heading-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 10px; color: #fff; }
+.entity-heading-action { margin-left: auto; }
+.entity-heading-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.entity-heading-actions button { white-space: nowrap; }
+.spin-icon { animation: spin .9s linear infinite; }
+.bank-sync-status { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 14px; margin-top: 14px; border: 1px solid #dce5df; border-radius: 8px; background: #f2f6f3; color: var(--muted); font-size: 9.5px; }
+.bank-sync-status div { display: grid; gap: 3px; }
+.bank-sync-status strong { color: var(--green); font-size: 10.5px; }
+.bank-sync-status > span { text-align: right; }
 .entity-detail-panel .category-detail-list { max-height: none; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(27, 34, 31, .4); backdrop-filter: blur(4px); animation: fade .18s ease; }
@@ -201,6 +209,11 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .amount-field > div input { height: 58px; padding-left: 8px; border: 0; background: transparent; font-family: 'DM Mono', monospace; font-size: 31px; letter-spacing: -.05em; }
 .amount-field > div input:focus { outline: 0; }
 .form-submit { width: 100%; margin-top: 3px; height: 43px; }
+.bank-link-intro { color: var(--muted); font-size: 11px; line-height: 1.65; }
+.bank-link-intro strong { color: var(--ink); }
+.bank-link-loading { min-height: 54px; display: flex; align-items: center; justify-content: center; gap: 9px; color: var(--muted); background: #f0f1ec; border-radius: 8px; font-size: 10px; }
+.bank-link-loading svg { color: var(--green); animation: spin .9s linear infinite; }
+.bank-link-note { display: block; color: var(--muted); text-align: center; font-size: 8.5px; line-height: 1.5; }
 .category-detail { padding-top: 18px; }
 .category-detail-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; overflow: hidden; background: #dedfd8; border: 1px solid #dedfd8; border-radius: 8px; }
 .category-detail-summary > div { padding: 14px; background: #f3f2ed; }
@@ -248,6 +261,30 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 @keyframes fade { from { opacity: 0 } }
 @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.99) } }
 
+.auth-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 50% 12%, #f8f5eb 0, var(--cream) 42%, #e8ebe4 100%); }
+.auth-card { width: min(100%, 430px); padding: 38px; background: rgba(255,255,255,.84); border: 1px solid rgba(39,55,49,.12); border-radius: 16px; box-shadow: 0 24px 70px rgba(31,45,39,.12); animation: rise .35s ease-out; }
+.auth-brand { margin-bottom: 34px; color: var(--ink); }
+.auth-card h1 { margin-top: 7px; font-size: 35px; }
+.auth-intro { margin: 10px 0 24px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.google-button { width: 100%; min-height: 46px; display: flex; align-items: center; justify-content: center; gap: 11px; color: var(--ink); background: #fff; border: 1px solid #d8dad4; border-radius: 8px; font-weight: 700; }
+.google-button:hover { border-color: #b8bcb4; background: #fafaf7; }
+.google-button span { font-family: Arial, sans-serif; color: #4285f4; font-size: 17px; }
+.auth-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; color: #93978f; font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
+.auth-divider::before, .auth-divider::after { content: ''; height: 1px; flex: 1; background: #e0e1dc; }
+.auth-form { gap: 14px; }
+.auth-error, .sync-error { color: #8f3428; background: #f8e9e4; border: 1px solid #edc8bd; border-radius: 7px; font-size: 10px; line-height: 1.45; }
+.auth-error { padding: 10px 12px; }
+.sync-error { margin: 14px 28px 0; padding: 10px 13px; }
+.auth-mode { width: 100%; margin-top: 18px; color: var(--green); background: transparent; border: 0; font-size: 10px; text-decoration: underline; text-underline-offset: 3px; }
+.status-card { text-align: center; }
+.status-card .auth-brand { justify-content: center; margin-bottom: 28px; }
+.status-card p { margin: 14px auto 20px; max-width: 310px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.status-card .primary-button { margin: 0 auto; }
+.status-spinner { color: var(--green); animation: spin .9s linear infinite; }
+.profile-sign-out { width: 30px; height: 30px; display: grid; place-items: center; margin-left: auto; color: #b9c8c2; background: transparent; border-radius: 6px; }
+.profile-sign-out:hover { color: #fff; background: rgba(255,255,255,.09); }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 @media (max-width: 1100px) {
   .hero-grid { grid-template-columns: 1.5fr repeat(3, 1fr); }
   .balance-card { grid-column: 1 / -1; }
@@ -291,6 +328,12 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .transaction-heading { align-items: stretch; flex-direction: column; }
   .account-card-grid { grid-template-columns: 1fr; }
   .entity-page-toolbar { align-items: stretch; flex-direction: column; }
+  .entity-heading { flex-wrap: wrap; }
+  .entity-heading-action { width: 100%; margin: 5px 0 0; }
+  .entity-heading-actions { width: 100%; margin: 5px 0 0; }
+  .entity-heading-actions button { flex: 1; }
+  .bank-sync-status { align-items: flex-start; flex-direction: column; }
+  .bank-sync-status > span { text-align: left; }
   .entity-page-toolbar label { justify-content: space-between; }
   .entity-page-toolbar select { min-width: 0; width: min(70vw, 300px); }
 }

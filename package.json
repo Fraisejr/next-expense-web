@@ -7,10 +7,12 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "import:ios": "node scripts/import-ios.mjs",
+    "import:ios:archive": "node scripts/import-ios-archive.mjs",
     "lint": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@neondatabase/neon-js": "^0.7.0-beta",
     "@vitejs/plugin-react": "latest",
     "lucide-react": "latest",
     "react": "latest",
@@ -21,6 +23,7 @@
   },
   "devDependencies": {
     "@eslint/js": "latest",
+    "@types/node": "^26.4.1",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "eslint": "latest",

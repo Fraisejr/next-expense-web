@@ -11,9 +11,9 @@ const dateInMonth = (day: number) => {
 
 export const seedData: AppData = {
   accounts: [
-    { id: 'checking', name: 'Everyday checking', type: 'Checking', balanceMinor: 384216, color: '#234e46', currency: 'EUR', scope: 'Personal' },
-    { id: 'savings', name: 'Rainy day', type: 'Savings', balanceMinor: 1248000, color: '#d68853', currency: 'EUR', scope: 'Personal' },
-    { id: 'wallet', name: 'Wallet', type: 'Cash', balanceMinor: 8640, color: '#777a6d', currency: 'EUR', scope: 'Personal' },
+    { id: 'checking', name: 'Everyday checking', type: 'Checking', balanceMinor: 384216, color: '#234e46', currency: 'EUR', scope: 'Personal', closed: false, autoSync: false },
+    { id: 'savings', name: 'Rainy day', type: 'Savings', balanceMinor: 1248000, color: '#d68853', currency: 'EUR', scope: 'Personal', closed: false },
+    { id: 'wallet', name: 'Wallet', type: 'Cash', balanceMinor: 8640, color: '#777a6d', currency: 'EUR', scope: 'Personal', closed: false },
   ],
   categories: [
     { id: 'salary', name: 'Salary', color: '#2f6f62', icon: 'briefcase', reportGroup: 'income' },

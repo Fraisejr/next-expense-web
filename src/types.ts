@@ -7,8 +7,25 @@ export type Account = {
   type: 'Checking' | 'Savings' | 'Cash'
   balanceMinor: number
   color: string
-  currency: 'EUR'
+  currency: string
   scope: AccountScope
+  closed: boolean
+  autoSync?: boolean
+  providerAccountId?: string
+  institutionId?: string
+  country?: string
+  lastSyncedAt?: string
+  connectionStatus?: 'active' | 'expired' | 'revoked' | 'error'
+  rateLimits?: {
+    transactions?: BankRateLimit
+    balances?: BankRateLimit
+  }
+}
+
+export type BankRateLimit = {
+  limit?: number
+  remaining?: number
+  resetSeconds?: number
 }
 
 export type Category = {
@@ -33,14 +50,16 @@ export type Transaction = {
   merchant: string
   note?: string
   amountMinor: number
+  destinationAmountMinor?: number
   type: 'expense' | 'income' | 'transfer'
   accountId: string
   categoryId?: string
   toAccountId?: string
-  currency: 'EUR'
+  currency: string
   payeeRaw?: string
-  source?: 'manual' | 'ios_import'
+  source?: 'manual' | 'ios_import' | 'gocardless'
   sourceRowHash?: string
+  providerTransactionId?: string
 }
 
 export type AppData = {
