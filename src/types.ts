@@ -11,6 +11,7 @@ export type Account = {
   scope: AccountScope
   closed: boolean
   autoSync?: boolean
+  bankImportMode?: 'review' | 'automatic'
   providerAccountId?: string
   institutionId?: string
   country?: string
@@ -39,15 +40,29 @@ export type BankSyncDiagnostic = {
   pendingReturned: number
   malformedIgnored: number
   imported: number
+  staged: number
   bookedImported: number
   pendingImported: number
   duplicates: number
+  transfersMatched: number
   pendingPromoted: number
   cutoffIgnored: number
   futureIgnored: number
   balanceType?: string
   transactionError?: string
   balanceError?: string
+}
+
+export type BankImportCandidate = {
+  id: string
+  accountId: string
+  date: string
+  amountMinor: number
+  currency: string
+  type: 'expense' | 'income'
+  payee: string
+  note?: string
+  posted: boolean
 }
 
 export type Category = {
@@ -98,6 +113,7 @@ export type AppData = {
   payees: Payee[]
   budgets: Budget[]
   transactions: Transaction[]
+  bankImportCandidates: BankImportCandidate[]
   settings: {
     estimatedCompanyTaxRateBps: number
   }

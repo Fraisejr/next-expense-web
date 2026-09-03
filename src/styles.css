@@ -244,6 +244,23 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .bank-sync-status div { display: grid; gap: 3px; }
 .bank-sync-status strong { color: var(--green); font-size: 10.5px; }
 .bank-sync-status > span { text-align: right; }
+.bank-import-review { margin-top: 14px; overflow: hidden; border: 1px solid #dedfd8; border-radius: 9px; background: #f8f7f3; }
+.bank-import-review-heading { display: flex; align-items: center; justify-content: space-between; gap: 22px; padding: 14px; }
+.bank-import-review-heading strong { display: block; margin-top: 4px; font-size: 11px; }
+.bank-import-review-heading p { margin-top: 4px; color: var(--muted); font-size: 9px; line-height: 1.45; }
+.bank-import-mode { flex: 0 0 250px; }
+.bank-review-queue { border-top: 1px solid #dedfd8; background: var(--paper); }
+.bank-review-summary { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; background: #f0f1ec; color: var(--muted); font-size: 9px; }
+.bank-review-summary strong { color: var(--ink); font-size: 9.5px; }
+.bank-review-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 16px; align-items: center; padding: 12px 14px; border-top: 1px solid #e8e8e2; }
+.bank-review-row:first-of-type { border-top: 0; }
+.bank-review-row > div:first-child { min-width: 0; }
+.bank-review-row strong, .bank-review-row span { display: block; }
+.bank-review-row strong { overflow: hidden; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.bank-review-row span { margin-top: 4px; overflow: hidden; color: var(--muted); font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
+.bank-review-row > b { font-family: 'DM Mono', monospace; font-size: 10.5px; font-weight: 500; }
+.bank-review-actions { display: flex; gap: 7px; }
+.bank-review-actions button { height: 32px; padding-inline: 10px; }
 .entity-detail-panel .category-detail-list { max-height: none; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(27, 34, 31, .4); backdrop-filter: blur(4px); animation: fade .18s ease; }
@@ -413,6 +430,10 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .entity-heading-actions button { flex: 1; }
   .bank-sync-status { align-items: flex-start; flex-direction: column; }
   .bank-sync-status > span { text-align: left; }
+  .bank-import-review-heading { align-items: stretch; flex-direction: column; }
+  .bank-import-mode { flex-basis: auto; width: 100%; }
+  .bank-review-row { grid-template-columns: 1fr auto; }
+  .bank-review-actions { grid-column: 1 / -1; }
   .account-balance-summary { grid-template-columns: 1fr 1fr; }
   .account-balance-summary > div:first-child { grid-column: 1 / -1; }
   .entity-page-toolbar label { justify-content: space-between; }

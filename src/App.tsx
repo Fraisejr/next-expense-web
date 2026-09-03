@@ -6,9 +6,9 @@ import {
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { assignPayeeMapping, createAccount, createCategory, createTransaction, ensurePayees, linkBankAccount, loadWorkspace, saveAccountOrder, saveBankSync, saveBudget, updateCategoryHidden, updateTaxRate, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
+import { approveBankImportCandidate, assignPayeeMapping, createAccount, createCategory, createTransaction, ensurePayees, linkBankAccount, loadWorkspace, rejectBankImportCandidate, saveAccountOrder, saveBankSync, saveBudget, updateBankImportMode, updateCategoryHidden, updateTaxRate, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
 import { neon } from './neon'
-import type { Account, AccountScope, AppData, Category, Payee, ReportGroup, Transaction } from './types'
+import type { Account, AccountScope, AppData, BankImportCandidate, Category, Payee, ReportGroup, Transaction } from './types'
 
 type Page = 'overview' | 'transactions' | 'payees' | 'budgets' | 'reports' | 'accounts'
 type Modal = 'transaction' | 'account' | 'category' | 'bank' | null
@@ -168,6 +168,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   const [closedAccountsOpen, setClosedAccountsOpen] = useState(false)
   const [bankTarget, setBankTarget] = useState<Account | null>(null)
   const [syncingAccountId, setSyncingAccountId] = useState('')
+  const [reviewingCandidateId, setReviewingCandidateId] = useState('')
   const [syncNotice, setSyncNotice] = useState<{ accountId: string; message: string } | null>(null)
 
   const accountMatch = matchPath('/accounts/:accountId', location.pathname)
@@ -430,6 +431,34 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
+  async function changeBankImportMode(accountId: string, mode: 'review' | 'automatic') {
+    try {
+      setSyncError('')
+      await updateBankImportMode(workspace.workspaceId, accountId, mode)
+      setData((current) => ({
+        ...current,
+        accounts: current.accounts.map((account) => account.id === accountId ? { ...account, bankImportMode: mode } : account),
+      }))
+    } catch (error) {
+      setSyncError(getErrorMessage(error, 'Could not update the bank import mode.'))
+    }
+  }
+
+  async function decideBankImportCandidate(candidateId: string, decision: 'approve' | 'reject') {
+    try {
+      setSyncError('')
+      setReviewingCandidateId(candidateId)
+      if (decision === 'approve') await approveBankImportCandidate(workspace.workspaceId, candidateId)
+      else await rejectBankImportCandidate(workspace.workspaceId, candidateId)
+      const refreshed = await loadWorkspace()
+      setData(refreshed.data)
+    } catch (error) {
+      setSyncError(getErrorMessage(error, `Could not ${decision} the bank transaction.`))
+    } finally {
+      setReviewingCandidateId('')
+    }
+  }
+
   async function syncBank(account: Account) {
     if (!account.providerAccountId) return
     setSyncError('')
@@ -546,7 +575,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <AccountsPage accounts={activeAccounts} totalBalance={totalBalance} onAdd={() => setModal('account')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onReorder={reorderAccounts} />
         )}
         {selectedAccount && (
-          <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
+          <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} reviewingCandidateId={reviewingCandidateId} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
         )}
         {selectedCategory && (
           <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} accounts={data.accounts} onUpdateBudget={updateBudget} onSetHidden={setCategoryHidden} onBack={() => goTo('/budgets')} onSelectCategory={(id) => goTo(`/categories/${id}`)} />
@@ -1089,7 +1118,7 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
   return <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}><div className="modal"><div className="modal-heading"><div><span className="eyebrow">Next Expense</span><h2>{title}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></div>{children}</div></div>
 }
 
-function AccountDetailPage({ account, transactions, categories, accounts, onBack, onSelectAccount, onLinkBank, onSyncBank, syncing, syncNotice }: { account: Account; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onBack: () => void; onSelectAccount: (id: string) => void; onLinkBank: () => void; onSyncBank: () => void; syncing: boolean; syncNotice: string }) {
+function AccountDetailPage({ account, transactions, candidates, categories, accounts, onBack, onSelectAccount, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, reviewingCandidateId, syncing, syncNotice }: { account: Account; transactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; accounts: Account[]; onBack: () => void; onSelectAccount: (id: string) => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject') => void; reviewingCandidateId: string; syncing: boolean; syncNotice: string }) {
   return <div className="page-content narrow-page entity-page">
     <div className="entity-page-toolbar">
       <button className="entity-back" onClick={onBack}><ChevronLeft size={16} />All accounts</button>
@@ -1098,9 +1127,35 @@ function AccountDetailPage({ account, transactions, categories, accounts, onBack
     <section className="panel entity-detail-panel">
       <div className="entity-heading"><div className="entity-heading-icon" style={{ background: account.color }}><CreditCard size={20} /></div><div><span className="eyebrow">{account.scope} · {account.type}{account.providerAccountId ? ' · Bank connected' : ''}</span><h2>{account.name}</h2></div><div className="entity-heading-actions">{account.providerAccountId && <button className="primary-button" disabled={syncing} onClick={onSyncBank}>{syncing ? <LoaderCircle className="spin-icon" size={16} /> : <RefreshCw size={16} />}{syncing ? 'Syncing…' : 'Sync now'}</button>}<button className="secondary-button" onClick={onLinkBank}><Link2 size={16} />{account.providerAccountId ? 'Reconnect' : 'Connect bank'}</button></div></div>
       {account.providerAccountId && <div className="bank-sync-status"><div><strong>{account.connectionStatus === 'active' ? 'Bank connection active' : 'Bank connected'}</strong><span>{account.lastSyncedAt ? `Last synced ${new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(account.lastSyncedAt))}` : 'Not synced yet'}</span>{account.lastSyncDiagnostic && !syncNotice && <span>{formatSyncDiagnostic(account.lastSyncDiagnostic)}</span>}</div><span>{syncNotice || formatRateLimits(account)}</span></div>}
+      {account.providerAccountId && <BankImportReview account={account} candidates={candidates} reviewingCandidateId={reviewingCandidateId} onModeChange={onImportModeChange} onReview={onReviewCandidate} />}
       <AccountDetail account={account} transactions={transactions} categories={categories} accounts={accounts} />
     </section>
   </div>
+}
+
+function BankImportReview({ account, candidates, reviewingCandidateId, onModeChange, onReview }: { account: Account; candidates: BankImportCandidate[]; reviewingCandidateId: string; onModeChange: (mode: 'review' | 'automatic') => void; onReview: (candidateId: string, decision: 'approve' | 'reject') => void }) {
+  const mode = account.bankImportMode ?? 'review'
+  const pendingNet = candidates.reduce((sum, candidate) => sum + (candidate.type === 'income' ? candidate.amountMinor : -candidate.amountMinor), 0)
+  return <section className="bank-import-review">
+    <div className="bank-import-review-heading">
+      <div><span className="eyebrow">New bank transactions</span><strong>{mode === 'review' ? 'Review before adding' : 'Add automatically'}</strong><p>{mode === 'review' ? 'Duplicates and confident transfers are still handled automatically.' : 'New transactions are added directly after duplicate and transfer checks.'}</p></div>
+      <div className="segmented bank-import-mode" aria-label="Bank transaction import mode">
+        <button type="button" className={mode === 'review' ? 'active transfer' : ''} onClick={() => onModeChange('review')}>Review first</button>
+        <button type="button" className={mode === 'automatic' ? 'active income' : ''} onClick={() => onModeChange('automatic')}>Add automatically</button>
+      </div>
+    </div>
+    {candidates.length > 0 && <div className="bank-review-queue">
+      <div className="bank-review-summary"><strong>{candidates.length} awaiting review</strong><span>Net effect if approved: {formatMoney(pendingNet, account.currency)}</span></div>
+      {candidates.map((candidate) => <div className="bank-review-row" key={candidate.id}>
+        <div><strong>{candidate.payee}</strong><span>{shortDate.format(new Date(`${candidate.date}T12:00:00Z`))}{candidate.note ? ` · ${candidate.note}` : ''}{candidate.posted ? '' : ' · Pending'}</span></div>
+        <b className={candidate.type === 'income' ? 'positive' : ''}>{candidate.type === 'income' ? '+' : '−'}{formatMoney(candidate.amountMinor, candidate.currency)}</b>
+        <div className="bank-review-actions">
+          <button className="secondary-button" type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => onReview(candidate.id, 'reject')}><X size={14} />Reject</button>
+          <button className="primary-button" type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => onReview(candidate.id, 'approve')}>{reviewingCandidateId === candidate.id ? <LoaderCircle className="spin-icon" size={14} /> : <Check size={14} />}Approve</button>
+        </div>
+      </div>)}
+    </div>}
+  </section>
 }
 
 function formatRateLimits(account: Account) {
@@ -1118,9 +1173,11 @@ function formatSyncDiagnostic(diagnostic: NonNullable<Account['lastSyncDiagnosti
   const results = [
     diagnostic.bookedImported ? `${diagnostic.bookedImported} booked added` : null,
     diagnostic.pendingImported ? `${diagnostic.pendingImported} pending added` : null,
+    diagnostic.staged ? `${diagnostic.staged} awaiting review` : null,
     diagnostic.imported === 0 ? '0 added' : null,
     diagnostic.pendingPromoted ? `${diagnostic.pendingPromoted} pending → booked` : null,
     diagnostic.duplicates ? `${diagnostic.duplicates} duplicate${diagnostic.duplicates === 1 ? '' : 's'}` : null,
+    diagnostic.transfersMatched ? `${diagnostic.transfersMatched} transfer${diagnostic.transfersMatched === 1 ? '' : 's'} matched` : null,
     diagnostic.cutoffIgnored ? `${diagnostic.cutoffIgnored} before migration cutoff` : null,
     diagnostic.futureIgnored ? `${diagnostic.futureIgnored} future-dated` : null,
     diagnostic.malformedIgnored ? `${diagnostic.malformedIgnored} malformed` : null,

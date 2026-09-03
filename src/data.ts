@@ -51,5 +51,6 @@ export const seedData: AppData = {
     { id: 't7', date: dateInMonth(8), payee: 'Green Market', payeeId: 'green-market', amountMinor: 12634, type: 'expense', accountId: 'checking', categoryId: 'groceries', currency: 'EUR' },
     { id: 't8', date: dateInMonth(1), payee: 'Acme Studio', payeeId: 'acme-studio', note: 'Monthly salary', amountMinor: 475000, type: 'income', accountId: 'checking', categoryId: 'salary', currency: 'EUR' },
   ],
+  bankImportCandidates: [],
   settings: { estimatedCompanyTaxRateBps: 2000 },
 }

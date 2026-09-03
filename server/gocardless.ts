@@ -32,6 +32,16 @@ function cleanError(payload: unknown, fallback: string) {
   return String(body.detail ?? body.summary ?? fallback)
 }
 
+function providerText(value: unknown) {
+  if (typeof value === 'string') return value.trim()
+  if (!Array.isArray(value)) return ''
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .join(' · ')
+}
+
 function normalizeTransactions(transactions: Record<string, unknown>[], status: TransactionStatus) {
   return transactions.flatMap((transaction) => {
     const amountObject = transaction.transactionAmount && typeof transaction.transactionAmount === 'object'
@@ -42,15 +52,17 @@ function normalizeTransactions(transactions: Record<string, unknown>[], status: 
     const date = String(transaction.bookingDate ?? transaction.valueDate ?? transaction.transactionDate ?? '')
     if (!/^-?\d+(\.\d+)?$/.test(amount) || !/^[A-Z]{3}$/.test(currency) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return []
     const outgoing = Number(amount) < 0
-    const payee = String(
-      (outgoing ? transaction.creditorName : transaction.debtorName)
-      ?? transaction.creditorName
-      ?? transaction.debtorName
-      ?? transaction.remittanceInformationUnstructured
-      ?? transaction.additionalInformation
-      ?? 'Bank transaction',
-    )
-    const note = String(transaction.remittanceInformationUnstructured ?? transaction.additionalInformation ?? '')
+    const remittance = providerText(transaction.remittanceInformationUnstructured)
+      || providerText(transaction.remittanceInformationUnstructuredArray)
+      || providerText(transaction.remittanceInformationStructured)
+      || providerText(transaction.remittanceInformationStructuredArray)
+      || providerText(transaction.additionalInformation)
+    const payee = providerText(outgoing ? transaction.creditorName : transaction.debtorName)
+      || providerText(transaction.creditorName)
+      || providerText(transaction.debtorName)
+      || remittance
+      || 'Bank transaction'
+    const note = remittance
     // The iOS app persisted internalTransactionId. Keep that field as the
     // canonical ID so migrated history remains deduplicatable.
     const bankTransactionId = transaction.transactionId ? String(transaction.transactionId) : null
@@ -59,7 +71,7 @@ function normalizeTransactions(transactions: Record<string, unknown>[], status: 
     const providerTransactionId = nativeId
       ? String(nativeId)
       : `fallback:${createHash('sha256').update(fallbackKey).digest('hex')}`
-    return [{ providerTransactionId, bankTransactionId, date, amount, currency, payee, note, type: outgoing ? 'expense' as const : 'income' as const, status }]
+    return [{ providerTransactionId, bankTransactionId, date, amount, currency, payee, note, type: outgoing ? 'expense' as const : 'income' as const, status, rawPayload: transaction }]
   })
 }
 
@@ -217,6 +229,10 @@ export function goCardlessDevApi(secretId: string | undefined, secretKey: string
 
             json(response, 200, {
               transactions: normalizedTransactions,
+              rawProviderResponse: {
+                transactions: transactionResponse?.payload ?? null,
+                balances: balanceResponse?.payload ?? null,
+              },
               providerDiagnostics: {
                 bookedReturned: booked.length,
                 pendingReturned: pending.length,

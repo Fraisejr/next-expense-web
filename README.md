@@ -56,6 +56,18 @@ the account to the bank-reported balance. The most recent successful sync and
 rate-limit information are stored on the bank connection. Merely opening an
 account does not request bank data.
 
+Bank counterparties can be mapped to owned accounts for transfer detection.
+Matching is conservative: direction, currency, amount, a unique date-near
+candidate, and the counterparty alias must agree. Provider references are kept
+per account-side so a single logical transfer can retain the different IDs
+reported by both banks. Unlinked bank legs are reconsidered after later syncs.
+
+Each connected account can either add new bank transactions automatically or
+hold them for review. Review mode is the default. Approvals create ledger rows
+atomically; rejections remain as provider-ID tombstones so later syncs do not
+offer them again. Exact duplicates and confident transfers bypass the inbox and
+continue to reconcile automatically in either mode.
+
 Transactions retain both GoCardless's `internalTransactionId` as the canonical
 provider identifier and the financial institution's `transactionId` as a
 secondary audit and deduplication identifier.
