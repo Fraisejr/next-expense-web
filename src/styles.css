@@ -21,8 +21,8 @@ button, input, select { font: inherit; }
 button { color: inherit; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #518277; outline-offset: 2px; }
 
-.app-shell { display: grid; grid-template-columns: 256px minmax(0, 1fr); min-height: 100vh; }
-.sidebar { position: fixed; inset: 0 auto 0 0; width: 256px; z-index: 20; display: flex; flex-direction: column; background: #edefe9; border-right: 1px solid #d8dbd3; padding: 26px 18px 18px; }
+.app-shell { display: grid; grid-template-columns: 284px minmax(0, 1fr); min-height: 100vh; }
+.sidebar { position: fixed; inset: 0 auto 0 0; width: 284px; z-index: 20; display: flex; flex-direction: column; background: #edefe9; border-right: 1px solid #d8dbd3; padding: 26px 18px 18px; overflow-x: hidden; }
 .brand { display: flex; align-items: center; gap: 11px; padding: 0 8px 30px; font-family: 'Newsreader', serif; font-size: 21px; font-weight: 600; letter-spacing: -.02em; }
 .brand-mark { display: grid; place-items: center; width: 31px; height: 31px; color: #fff; background: var(--green); border-radius: 50% 50% 50% 13px; transform: rotate(-3deg); }
 .brand-mark svg { transform: rotate(3deg); }
@@ -32,25 +32,25 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .nav-item { width: 100%; border: 0; background: transparent; display: flex; align-items: center; gap: 12px; padding: 10px 12px; color: #676c65; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; text-align: left; transition: .18s ease; }
 .nav-item:hover { background: rgba(255,255,255,.65); color: var(--ink); }
 .nav-item.active { color: #f9faf7; background: var(--green); box-shadow: 0 5px 16px rgba(36, 77, 69, .15); }
-.sidebar-accounts { min-height: 0; margin-top: 22px; padding-top: 17px; border-top: 1px solid #d6d9d1; overflow-y: auto; scrollbar-width: thin; }
+.sidebar-accounts { min-height: 0; margin-top: 22px; padding-top: 17px; border-top: 1px solid #d6d9d1; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; }
 .account-section-title, .sidebar-account-group-title, .sidebar-account, .sidebar-add-account { width: 100%; border: 0; background: transparent; cursor: pointer; }
-.account-section-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px; border-radius: 7px; font-size: 12px; }
+.account-section-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px; border-radius: 7px; font-size: 13px; }
 .account-section-title > span { display: flex; align-items: center; gap: 8px; font-weight: 700; }
-.account-section-title > b { font-family: 'DM Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: -.03em; }
+.account-section-title > b { font-family: 'DM Mono', monospace; font-size: 11.5px; font-weight: 500; letter-spacing: -.03em; }
 .account-section-title:hover, .account-section-title.active { background: rgba(255,255,255,.65); }
 .sidebar-account-group { margin-top: 7px; }
-.sidebar-account-group-title { display: flex; align-items: center; justify-content: space-between; padding: 7px 9px 5px; color: #6c726a; font-size: 9px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.sidebar-account-group-title { display: flex; align-items: center; justify-content: space-between; padding: 8px 9px 6px; color: #6c726a; font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
 .sidebar-account-group-title > span { display: flex; align-items: center; gap: 3px; }
 .sidebar-account-group-title svg { transition: transform .16s ease; }
 .sidebar-account-group-title svg.collapsed { transform: rotate(-90deg); }
-.sidebar-account-group-title > b { font-family: 'DM Mono', monospace; font-size: 9.5px; font-weight: 500; letter-spacing: -.03em; }
+.sidebar-account-group-title > b { font-family: 'DM Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: -.03em; }
 .sidebar-account-list { display: grid; gap: 2px; }
-.sidebar-account { min-height: 33px; display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 8px 9px 8px 14px; border-radius: 7px; color: #525952; font-size: 10px; text-align: left; }
+.sidebar-account { min-height: 36px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 9px 9px 14px; border-radius: 7px; color: #4b524b; font-size: 11px; text-align: left; }
 .sidebar-account:hover, .sidebar-account.active { color: var(--ink); background: rgba(255,255,255,.72); }
 .sidebar-account.active { box-shadow: inset 2px 0 var(--green); }
 .sidebar-account > span { min-width: 0; display: flex; align-items: center; gap: 7px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .sidebar-account > span i { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; }
-.sidebar-account > b { flex: 0 0 auto; font-family: 'DM Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: -.04em; }
+.sidebar-account > b { flex: 0 0 auto; font-family: 'DM Mono', monospace; font-size: 11.5px; font-weight: 500; letter-spacing: -.04em; }
 .sidebar-add-account { display: flex; align-items: center; gap: 6px; margin-top: 8px; padding: 8px 14px; color: #527068; font-size: 9.5px; font-weight: 700; text-align: left; }
 .sidebar-add-account:hover { color: var(--green); }
 .sidebar-bottom { margin-top: auto; display: grid; gap: 3px; }
