@@ -1,6 +1,6 @@
 import { neon } from './neon'
 import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
-import type { Account, AccountScope, AppData, BankRateLimit, Budget, Category, Payee, ReportGroup, Transaction } from './types'
+import type { Account, AccountScope, AppData, BankRateLimit, BankSyncDiagnostic, Budget, Category, Payee, ReportGroup, Transaction } from './types'
 
 type Row = Record<string, unknown>
 
@@ -16,6 +16,25 @@ function number(value: unknown) {
 
 function normalizedPayeeName(value: string) {
   return value.normalize('NFKC').trim().toLocaleLowerCase('en')
+}
+
+const syncHistoryWindowMs = 24 * 60 * 60 * 1000
+
+function recentSyncRuns(metadata: Row | undefined, lastSyncedAt?: unknown, now = Date.now()) {
+  const cutoff = now - syncHistoryWindowMs
+  const storedRuns = Array.isArray(metadata?.sync_history) ? metadata.sync_history : []
+  const runs = storedRuns
+    .filter((value): value is string => typeof value === 'string')
+    .filter((value) => {
+      const timestamp = Date.parse(value)
+      return Number.isFinite(timestamp) && timestamp >= cutoff && timestamp <= now
+    })
+
+  if (!runs.length && typeof lastSyncedAt === 'string') {
+    const timestamp = Date.parse(lastSyncedAt)
+    if (Number.isFinite(timestamp) && timestamp >= cutoff && timestamp <= now) runs.push(lastSyncedAt)
+  }
+  return [...new Set(runs)].sort()
 }
 
 async function allRows(table: string, columns = '*', orderColumn = 'id'): Promise<Row[]> {
@@ -96,28 +115,42 @@ export async function loadWorkspace(): Promise<LoadedWorkspace> {
     payeeRaw: (row.payee_name as string | null) ?? undefined,
     source: row.source as Transaction['source'],
     providerTransactionId: (row.provider_transaction_id as string | null) ?? undefined,
+    posted: Boolean(row.posted),
   }))
   const balanceChanges = accountBalanceChanges(transactions)
   const connections = new Map(connectionRows
     .filter((row) => row.account_id && row.status === 'active')
     .map((row) => [row.account_id as string, row]))
-  const accounts: Account[] = accountRows.map((row) => ({
-    id: row.id as string,
-    name: row.name as string,
-    type: row.display_type as Account['type'],
-    balanceMinor: number(row.opening_balance_minor) + (balanceChanges.get(row.id as string) ?? 0),
-    color: row.color as string,
-    currency: row.currency as string,
-    scope: row.scope as AccountScope,
-    closed: Boolean(row.closed),
-    autoSync: Boolean(row.auto_sync),
-    providerAccountId: (row.provider_account_id as string | null) ?? undefined,
-    institutionId: (row.institution_id as string | null) ?? undefined,
-    country: (row.country as string | null) ?? undefined,
-    lastSyncedAt: (connections.get(row.id as string)?.last_synced_at as string | null) ?? undefined,
-    connectionStatus: (connections.get(row.id as string)?.status as Account['connectionStatus'] | undefined),
-    rateLimits: ((connections.get(row.id as string)?.metadata as Row | undefined)?.rate_limits as Account['rateLimits'] | undefined),
-  }))
+  const accounts: Account[] = accountRows.map((row) => {
+    const connection = connections.get(row.id as string)
+    const metadata = connection?.metadata && typeof connection.metadata === 'object' ? connection.metadata as Row : undefined
+    const bankBalance = metadata?.bank_balance && typeof metadata.bank_balance === 'object' ? metadata.bank_balance as Row : undefined
+    const lastSyncDiagnostic = metadata?.last_sync_diagnostic && typeof metadata.last_sync_diagnostic === 'object' ? metadata.last_sync_diagnostic as BankSyncDiagnostic : undefined
+    const calculatedBalanceMinor = number(row.opening_balance_minor) + (balanceChanges.get(row.id as string) ?? 0)
+    const hasLegacyBankSnapshot = !bankBalance && Boolean(connection?.last_synced_at)
+    return {
+      id: row.id as string,
+      name: row.name as string,
+      type: row.display_type as Account['type'],
+      balanceMinor: calculatedBalanceMinor,
+      color: row.color as string,
+      currency: row.currency as string,
+      scope: row.scope as AccountScope,
+      closed: Boolean(row.closed),
+      autoSync: Boolean(row.auto_sync),
+      providerAccountId: (row.provider_account_id as string | null) ?? undefined,
+      institutionId: (row.institution_id as string | null) ?? undefined,
+      country: (row.country as string | null) ?? undefined,
+      lastSyncedAt: (connection?.last_synced_at as string | null) ?? undefined,
+      syncRunsLast24Hours: recentSyncRuns(metadata, connection?.last_synced_at).length,
+      bankBalanceMinor: typeof bankBalance?.amount_minor === 'number' ? bankBalance.amount_minor : hasLegacyBankSnapshot ? calculatedBalanceMinor : undefined,
+      bankBalanceCurrency: typeof bankBalance?.currency === 'string' ? bankBalance.currency : hasLegacyBankSnapshot ? row.currency as string : undefined,
+      bankBalanceUpdatedAt: typeof bankBalance?.fetched_at === 'string' ? bankBalance.fetched_at : hasLegacyBankSnapshot ? connection?.last_synced_at as string : undefined,
+      lastSyncDiagnostic,
+      connectionStatus: (connection?.status as Account['connectionStatus'] | undefined),
+      rateLimits: (metadata?.rate_limits as Account['rateLimits'] | undefined),
+    }
+  })
   const categories: Category[] = categoryRows.map((row) => ({
     id: row.id as string,
     name: row.name as string,
@@ -433,7 +466,13 @@ export type BankSyncPayload = {
     payee: string
     note: string
     type: 'expense' | 'income'
+    status: 'booked' | 'pending'
   }>
+  providerDiagnostics?: {
+    bookedReturned: number
+    pendingReturned: number
+    malformedIgnored: number
+  }
   balance: { amount: string; currency: string; type: string } | null
   rateLimits: { transactions?: BankRateLimit; balances?: BankRateLimit }
   errors?: { transactions?: string | null; balances?: string | null }
@@ -446,6 +485,8 @@ export type BankSyncSummary = {
   balanceUpdated: boolean
   rateLimits: BankSyncPayload['rateLimits']
   syncedAt: string
+  syncRunsLast24Hours: number
+  diagnostic: BankSyncDiagnostic
   warnings: string[]
 }
 
@@ -468,27 +509,11 @@ function todayInParis() {
   return `${parts.year}-${parts.month}-${parts.day}`
 }
 
-async function accountTransactionRows(workspaceId: string, accountId: string) {
-  const pageSize = 1000
-  const rows: Row[] = []
-  for (let start = 0; ; start += pageSize) {
-    const { data, error } = await neon.from('transactions')
-      .select('account_id,destination_account_id,amount_minor,destination_amount_minor,transaction_type')
-      .eq('workspace_id', workspaceId)
-      .or(`account_id.eq.${accountId},destination_account_id.eq.${accountId}`)
-      .range(start, start + pageSize - 1)
-    if (error) throw error
-    const page = (data ?? []) as unknown as Row[]
-    rows.push(...page)
-    if (page.length < pageSize) return rows
-  }
-}
-
 export async function saveBankSync(workspaceId: string, account: Account, sync: BankSyncPayload): Promise<BankSyncSummary> {
   if (!account.providerAccountId) throw new Error('This account is not connected to a bank.')
 
   const connectionResult = await neon.from('bank_connections')
-    .select('id,metadata')
+    .select('id,metadata,last_synced_at')
     .eq('workspace_id', workspaceId)
     .eq('account_id', account.id)
     .eq('provider', 'gocardless_bank_account_data')
@@ -497,17 +522,26 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
   if (connectionResult.error) throw connectionResult.error
   const connection = connectionResult.data?.[0] as Row | undefined
   const connectionMetadata = connection?.metadata && typeof connection.metadata === 'object' ? connection.metadata as Row : {}
+  const syncHistory = recentSyncRuns(connectionMetadata, connection?.last_synced_at, Date.parse(sync.fetchedAt))
+  syncHistory.push(sync.fetchedAt)
 
-  const unique = new Map(sync.transactions.map((transaction) => [transaction.providerTransactionId, transaction]))
+  const unique = new Map<string, BankSyncPayload['transactions'][number]>()
+  for (const transaction of sync.transactions) {
+    const current = unique.get(transaction.providerTransactionId)
+    if (!current || transaction.status === 'booked') unique.set(transaction.providerTransactionId, transaction)
+  }
   const existingIds = new Set<string>()
   const existingBankIds = new Set<string>()
+  const existingByProviderId = new Map<string, Row>()
+  const existingByBankId = new Map<string, Row>()
   const existingBankFingerprints = new Map<string, Row[]>()
+  const existingPendingFingerprints = new Map<string, Row[]>()
   let hasGoCardlessHistory = false
   let latestLedgerDate = ''
   const pageSize = 1000
   for (let start = 0; ; start += pageSize) {
     const { data, error } = await neon.from('transactions')
-      .select('id,provider_transaction_id,bank_transaction_id,transaction_date,source,amount_minor,currency,transaction_type,payee_name')
+      .select('id,provider_transaction_id,bank_transaction_id,transaction_date,source,amount_minor,currency,transaction_type,payee_name,posted')
       .eq('workspace_id', workspaceId)
       .eq('account_id', account.id)
       .order('id', { ascending: true })
@@ -517,44 +551,105 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
     for (const row of page) {
       if (row.provider_transaction_id) {
         existingIds.add(String(row.provider_transaction_id))
+        existingByProviderId.set(String(row.provider_transaction_id), row)
       }
-      if (row.bank_transaction_id) existingBankIds.add(String(row.bank_transaction_id))
+      if (row.bank_transaction_id) {
+        existingBankIds.add(String(row.bank_transaction_id))
+        existingByBankId.set(String(row.bank_transaction_id), row)
+      }
       if (row.source === 'gocardless') {
         hasGoCardlessHistory = true
         const key = `${row.transaction_date}|${row.currency}|${row.transaction_type}|${row.amount_minor}|${String(row.payee_name ?? '').trim().toLocaleLowerCase('en')}`
         existingBankFingerprints.set(key, [...(existingBankFingerprints.get(key) ?? []), row])
+        if (row.posted === false) {
+          const pendingKey = `${row.currency}|${row.transaction_type}|${row.amount_minor}|${String(row.payee_name ?? '').trim().toLocaleLowerCase('en')}`
+          existingPendingFingerprints.set(pendingKey, [...(existingPendingFingerprints.get(pendingKey) ?? []), row])
+        }
       }
       if (String(row.transaction_date ?? '') > latestLedgerDate) latestLedgerDate = String(row.transaction_date)
     }
     if (page.length < pageSize) break
   }
 
+  let pendingPromoted = 0
+  const promotePending = async (row: Row, transaction: BankSyncPayload['transactions'][number]) => {
+    const periodId = await ensurePeriod(workspaceId, transaction.date.slice(0, 7))
+    const promotionResult = await neon.from('transactions').update({
+      period_id: periodId,
+      transaction_date: transaction.date,
+      source_timestamp: `${transaction.date}T12:00:00Z`,
+      source_created_at: sync.fetchedAt,
+      amount_minor: amountToMinor(transaction.amount, transaction.currency),
+      currency: transaction.currency,
+      transaction_type: transaction.type,
+      payee_name: transaction.payee,
+      memo: transaction.note || null,
+      provider_transaction_id: transaction.providerTransactionId,
+      bank_transaction_id: transaction.bankTransactionId ?? null,
+      posted: true,
+      reconciled: true,
+    }).eq('workspace_id', workspaceId).eq('id', row.id)
+    if (promotionResult.error) throw promotionResult.error
+    row.posted = true
+    existingIds.add(transaction.providerTransactionId)
+    existingByProviderId.set(transaction.providerTransactionId, row)
+    if (transaction.bankTransactionId) {
+      existingBankIds.add(transaction.bankTransactionId)
+      existingByBankId.set(transaction.bankTransactionId, row)
+    }
+    pendingPromoted += 1
+  }
+
+  for (const transaction of unique.values()) {
+    if (transaction.status !== 'booked') continue
+    const existing = existingByProviderId.get(transaction.providerTransactionId)
+      ?? (transaction.bankTransactionId ? existingByBankId.get(transaction.bankTransactionId) : undefined)
+    if (existing?.posted === false) await promotePending(existing, transaction)
+  }
+
   for (const transaction of unique.values()) {
     if (existingIds.has(transaction.providerTransactionId)) continue
     if (transaction.bankTransactionId && existingBankIds.has(transaction.bankTransactionId)) continue
-    const fingerprint = `${transaction.date}|${transaction.currency}|${transaction.type}|${amountToMinor(transaction.amount, transaction.currency)}|${transaction.payee.trim().toLocaleLowerCase('en')}`
-    const matches = existingBankFingerprints.get(fingerprint) ?? []
+    const amountMinor = amountToMinor(transaction.amount, transaction.currency)
+    const normalizedPayee = transaction.payee.trim().toLocaleLowerCase('en')
+    const fingerprint = `${transaction.date}|${transaction.currency}|${transaction.type}|${amountMinor}|${normalizedPayee}`
+    let matches = existingBankFingerprints.get(fingerprint) ?? []
+    if (matches.length !== 1 && transaction.status === 'booked') {
+      const pendingFingerprint = `${transaction.currency}|${transaction.type}|${amountMinor}|${normalizedPayee}`
+      const pendingMatches = existingPendingFingerprints.get(pendingFingerprint) ?? []
+      if (pendingMatches.length === 1) matches = pendingMatches
+    }
     if (matches.length !== 1) continue
-    const repairResult = await neon.from('transactions')
-      .update({
-        provider_transaction_id: transaction.providerTransactionId,
-        bank_transaction_id: transaction.bankTransactionId ?? null,
-      })
-      .eq('workspace_id', workspaceId)
-      .eq('id', matches[0].id)
-    if (repairResult.error) throw repairResult.error
+    if (transaction.status === 'booked' && matches[0].posted === false) {
+      await promotePending(matches[0], transaction)
+    } else {
+      const repairResult = await neon.from('transactions')
+        .update({
+          provider_transaction_id: transaction.providerTransactionId,
+          bank_transaction_id: transaction.bankTransactionId ?? null,
+        })
+        .eq('workspace_id', workspaceId)
+        .eq('id', matches[0].id)
+      if (repairResult.error) throw repairResult.error
+    }
     existingIds.add(transaction.providerTransactionId)
     if (transaction.bankTransactionId) existingBankIds.add(transaction.bankTransactionId)
   }
 
   const legacyCutoff = String(connectionMetadata.legacy_cutoff ?? (!hasGoCardlessHistory ? latestLedgerDate : ''))
-  const newTransactions = [...unique.values()]
+  const receivedTransactions = [...unique.values()]
+  const unseenTransactions = receivedTransactions
     .filter((transaction) => !existingIds.has(transaction.providerTransactionId))
     .filter((transaction) => !transaction.bankTransactionId || !existingBankIds.has(transaction.bankTransactionId))
+  const cutoffIgnored = unseenTransactions.filter((transaction) => Boolean(legacyCutoff) && transaction.date <= legacyCutoff).length
+  const afterCutoff = unseenTransactions.filter((transaction) => !legacyCutoff || transaction.date > legacyCutoff)
+  const today = todayInParis()
+  const futureIgnored = afterCutoff.filter((transaction) => transaction.date > today).length
+  const newTransactions = afterCutoff
     // A migrated account may contain the same bank history under provider IDs
     // from an older consent. Establish a clean delta boundary on its first sync.
-    .filter((transaction) => !legacyCutoff || transaction.date > legacyCutoff)
-    .filter((transaction) => transaction.date <= todayInParis())
+    .filter((transaction) => transaction.date <= today)
+  const duplicates = Math.max(0, receivedTransactions.length - unseenTransactions.length - pendingPromoted)
 
   const sourcePayeeNames = [...new Set(newTransactions.map((transaction) => transaction.payee.normalize('NFKC').trim()).filter(Boolean))]
   const resolvedPayees = await findPayees(workspaceId, sourcePayeeNames)
@@ -590,8 +685,8 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
       memo: transaction.note || null,
       provider_transaction_id: transaction.providerTransactionId,
       bank_transaction_id: transaction.bankTransactionId ?? null,
-      posted: true,
-      reconciled: true,
+      posted: transaction.status === 'booked',
+      reconciled: transaction.status === 'booked',
       source: 'gocardless',
     })
   }
@@ -602,39 +697,54 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
 
   let balanceUpdated = false
   const accountUpdate: Row = { last_refresh_at: sync.fetchedAt }
-  if (sync.balance?.currency === account.currency) {
-    const ledgerRows = await accountTransactionRows(workspaceId, account.id)
-    const ledgerBalance = ledgerRows.reduce((sum, row) => {
-      const amount = number(row.amount_minor)
-      if (row.transaction_type === 'income' && row.account_id === account.id) return sum + amount
-      if (row.transaction_type === 'expense' && row.account_id === account.id) return sum - amount
-      if (row.transaction_type === 'transfer' && row.account_id === account.id) return sum - amount
-      if (row.transaction_type === 'transfer' && row.destination_account_id === account.id) {
-        const destinationAmount = number(row.destination_amount_minor)
-        return sum + (destinationAmount || amount)
-      }
-      return sum
-    }, 0)
-    accountUpdate.opening_balance_minor = amountToMinor(sync.balance.amount, sync.balance.currency) * (Number(sync.balance.amount) < 0 ? -1 : 1) - ledgerBalance
-    balanceUpdated = true
-  }
+  const bankBalance = sync.balance ? {
+    amount_minor: amountToMinor(sync.balance.amount, sync.balance.currency) * (Number(sync.balance.amount) < 0 ? -1 : 1),
+    currency: sync.balance.currency,
+    type: sync.balance.type,
+    fetched_at: sync.fetchedAt,
+  } : undefined
+  balanceUpdated = Boolean(bankBalance)
   const accountResult = await neon.from('accounts').update(accountUpdate).eq('workspace_id', workspaceId).eq('id', account.id)
   if (accountResult.error) throw accountResult.error
+
+  const bookedImported = newTransactions.filter((transaction) => transaction.status === 'booked').length
+  const pendingImported = newTransactions.filter((transaction) => transaction.status === 'pending').length
+  const diagnostic: BankSyncDiagnostic = {
+    fetchedAt: sync.fetchedAt,
+    bookedReturned: sync.providerDiagnostics?.bookedReturned ?? sync.transactions.filter((transaction) => transaction.status === 'booked').length,
+    pendingReturned: sync.providerDiagnostics?.pendingReturned ?? sync.transactions.filter((transaction) => transaction.status === 'pending').length,
+    malformedIgnored: sync.providerDiagnostics?.malformedIgnored ?? 0,
+    imported: rows.length,
+    bookedImported,
+    pendingImported,
+    duplicates,
+    pendingPromoted,
+    cutoffIgnored,
+    futureIgnored,
+    balanceType: sync.balance?.type || undefined,
+    transactionError: sync.errors?.transactions || undefined,
+    balanceError: sync.errors?.balances || undefined,
+  }
+  const previousDiagnostics = Array.isArray(connectionMetadata.sync_diagnostics)
+    ? connectionMetadata.sync_diagnostics.filter((item) => item && typeof item === 'object').slice(-24)
+    : []
 
   if (connection) {
     const updateResult = await neon.from('bank_connections').update({
       last_synced_at: sync.fetchedAt,
-      metadata: { ...connectionMetadata, legacy_cutoff: legacyCutoff || null, rate_limits: sync.rateLimits, last_imported: rows.length },
+      metadata: { ...connectionMetadata, legacy_cutoff: legacyCutoff || null, rate_limits: sync.rateLimits, sync_history: [...new Set(syncHistory)].sort(), bank_balance: bankBalance ?? connectionMetadata.bank_balance, last_imported: rows.length, last_sync_diagnostic: diagnostic, sync_diagnostics: [...previousDiagnostics, diagnostic] },
     }).eq('id', connection.id)
     if (updateResult.error) throw updateResult.error
   }
 
   return {
     imported: rows.length,
-    duplicates: [...unique.values()].filter((transaction) => existingIds.has(transaction.providerTransactionId) || Boolean(transaction.bankTransactionId && existingBankIds.has(transaction.bankTransactionId))).length,
+    duplicates,
     balanceUpdated,
     rateLimits: sync.rateLimits,
     syncedAt: sync.fetchedAt,
+    syncRunsLast24Hours: [...new Set(syncHistory)].length,
+    diagnostic,
     warnings: [sync.errors?.transactions, sync.errors?.balances].filter((warning): warning is string => Boolean(warning)),
   }
 }

@@ -453,9 +453,10 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         result.rateLimits.transactions?.remaining === undefined ? null : `${result.rateLimits.transactions.remaining} transaction requests left`,
         result.rateLimits.balances?.remaining === undefined ? null : `${result.rateLimits.balances.remaining} balance requests left`,
       ].filter(Boolean).join(' · ')
+      const recentSyncs = `${result.syncRunsLast24Hours} sync${result.syncRunsLast24Hours === 1 ? '' : 's'} in the past 24 hours`
       setSyncNotice({
         accountId: account.id,
-        message: `${result.imported} new transaction${result.imported === 1 ? '' : 's'} imported${result.balanceUpdated ? ' · Balance updated' : ''}${remaining ? ` · ${remaining}` : ''}${result.warnings.length ? ` · ${result.warnings.join(' · ')}` : ''}`,
+        message: `${formatSyncDiagnostic(result.diagnostic)}${result.balanceUpdated ? ' · Bank balance updated' : ''} · ${remaining || recentSyncs}${result.warnings.length ? ` · ${result.warnings.join(' · ')}` : ''}`,
       })
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not sync this bank account.'))
@@ -735,7 +736,7 @@ function TransactionRow({ transaction, categories, accounts, compact = false, fo
     <div className={compact ? 'transaction-row compact' : 'transaction-row'}>
       <span className="transaction-icon" style={{ color: isTransfer ? '#587486' : category?.color, background: isTransfer ? '#e5ecef' : `${category?.color ?? '#777'}18` }}><Icon size={18} /></span>
       <div>
-        <strong>{isTransfer ? `Transfer to ${destinationAccount?.name ?? 'account'}` : transaction.payee}</strong>
+        <strong>{isTransfer ? `Transfer to ${destinationAccount?.name ?? 'account'}` : transaction.payee}{transaction.posted === false && <em className="pending-badge">Pending</em>}</strong>
         <span>{isTransfer ? `${sourceAccount?.name ?? 'Account'} → ${destinationAccount?.name ?? 'Account'}` : category?.name ?? 'Uncategorised'} · {shortDate.format(new Date(`${transaction.date}T12:00:00`))}</span>
       </div>
       <b className={transaction.type === 'income' || transferIsIncoming ? 'positive' : isTransfer && !focusAccountId ? 'transfer-amount' : ''}>{prefix}{formatMoney(transaction.amountMinor, transaction.currency)}</b>
@@ -1096,7 +1097,7 @@ function AccountDetailPage({ account, transactions, categories, accounts, onBack
     </div>
     <section className="panel entity-detail-panel">
       <div className="entity-heading"><div className="entity-heading-icon" style={{ background: account.color }}><CreditCard size={20} /></div><div><span className="eyebrow">{account.scope} · {account.type}{account.providerAccountId ? ' · Bank connected' : ''}</span><h2>{account.name}</h2></div><div className="entity-heading-actions">{account.providerAccountId && <button className="primary-button" disabled={syncing} onClick={onSyncBank}>{syncing ? <LoaderCircle className="spin-icon" size={16} /> : <RefreshCw size={16} />}{syncing ? 'Syncing…' : 'Sync now'}</button>}<button className="secondary-button" onClick={onLinkBank}><Link2 size={16} />{account.providerAccountId ? 'Reconnect' : 'Connect bank'}</button></div></div>
-      {account.providerAccountId && <div className="bank-sync-status"><div><strong>{account.connectionStatus === 'active' ? 'Bank connection active' : 'Bank connected'}</strong><span>{account.lastSyncedAt ? `Last synced ${new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(account.lastSyncedAt))}` : 'Not synced yet'}</span></div><span>{syncNotice || formatRateLimits(account)}</span></div>}
+      {account.providerAccountId && <div className="bank-sync-status"><div><strong>{account.connectionStatus === 'active' ? 'Bank connection active' : 'Bank connected'}</strong><span>{account.lastSyncedAt ? `Last synced ${new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(account.lastSyncedAt))}` : 'Not synced yet'}</span>{account.lastSyncDiagnostic && !syncNotice && <span>{formatSyncDiagnostic(account.lastSyncDiagnostic)}</span>}</div><span>{syncNotice || formatRateLimits(account)}</span></div>}
       <AccountDetail account={account} transactions={transactions} categories={categories} accounts={accounts} />
     </section>
   </div>
@@ -1108,7 +1109,25 @@ function formatRateLimits(account: Account) {
     account.rateLimits?.balances?.remaining === undefined ? null : `${account.rateLimits.balances.remaining} balance requests left`,
   ].filter(Boolean)
   if (parts.length) return parts.join(' · ')
-  return account.lastSyncedAt ? 'This bank did not report a remaining-call count' : 'Daily allowance will appear after the first sync'
+  const count = account.syncRunsLast24Hours ?? 0
+  return `${count} sync${count === 1 ? '' : 's'} in the past 24 hours`
+}
+
+function formatSyncDiagnostic(diagnostic: NonNullable<Account['lastSyncDiagnostic']>) {
+  const returned = `${diagnostic.bookedReturned} booked + ${diagnostic.pendingReturned} pending returned`
+  const results = [
+    diagnostic.bookedImported ? `${diagnostic.bookedImported} booked added` : null,
+    diagnostic.pendingImported ? `${diagnostic.pendingImported} pending added` : null,
+    diagnostic.imported === 0 ? '0 added' : null,
+    diagnostic.pendingPromoted ? `${diagnostic.pendingPromoted} pending → booked` : null,
+    diagnostic.duplicates ? `${diagnostic.duplicates} duplicate${diagnostic.duplicates === 1 ? '' : 's'}` : null,
+    diagnostic.cutoffIgnored ? `${diagnostic.cutoffIgnored} before migration cutoff` : null,
+    diagnostic.futureIgnored ? `${diagnostic.futureIgnored} future-dated` : null,
+    diagnostic.malformedIgnored ? `${diagnostic.malformedIgnored} malformed` : null,
+    diagnostic.transactionError ? `Transactions error: ${diagnostic.transactionError}` : null,
+    diagnostic.balanceError ? `Balance error: ${diagnostic.balanceError}` : null,
+  ].filter(Boolean)
+  return `${returned} · ${results.join(' · ')}`
 }
 
 function CategoryDetailPage({ category, spent, budget, transactions, categories, accounts, onUpdateBudget, onSetHidden, onBack, onSelectCategory }: { category: Category; spent: number; budget: number; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onUpdateBudget: (categoryId: string, amountMinor: number, scope: AccountScope) => void; onSetHidden: (categoryId: string, hidden: boolean) => void; onBack: () => void; onSelectCategory: (id: string) => void }) {
@@ -1156,9 +1175,14 @@ function CategoryDetail({ category, spent, budget, transactions, categories, acc
 function AccountDetail({ account, transactions, categories, accounts }: { account: Account; transactions: Transaction[]; categories: Category[]; accounts: Account[] }) {
   const incoming = transactions.reduce((sum, transaction) => sum + (transaction.type === 'income' || transaction.toAccountId === account.id ? transaction.amountMinor : 0), 0)
   const outgoing = transactions.reduce((sum, transaction) => sum + (transaction.type === 'expense' || (transaction.type === 'transfer' && transaction.accountId === account.id) ? transaction.amountMinor : 0), 0)
+  const hasBankBalance = account.bankBalanceMinor !== undefined && Boolean(account.bankBalanceCurrency)
+  const comparableBankBalance = hasBankBalance && account.bankBalanceCurrency === account.currency
+  const balanceDifference = comparableBankBalance ? account.bankBalanceMinor! - account.balanceMinor : undefined
   return <div className="category-detail account-detail">
-    <div className="category-detail-summary">
-      <div><span>Current balance</span><strong>{formatMoney(account.balanceMinor, account.currency)}</strong></div>
+    <div className={hasBankBalance ? 'category-detail-summary account-balance-summary' : 'category-detail-summary'}>
+      <div><span>Calculated balance</span><strong>{formatMoney(account.balanceMinor, account.currency)}</strong></div>
+      {hasBankBalance && <div><span title={account.bankBalanceUpdatedAt ? `Reported ${new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(account.bankBalanceUpdatedAt))}` : undefined}>Bank balance</span><strong>{formatMoney(account.bankBalanceMinor!, account.bankBalanceCurrency)}</strong></div>}
+      {hasBankBalance && <div><span>Difference</span><strong className={balanceDifference === undefined || balanceDifference === 0 ? '' : balanceDifference > 0 ? 'positive' : 'negative'}>{balanceDifference === undefined ? 'Different currency' : formatMoney(balanceDifference, account.currency)}</strong></div>}
       <div><span>Money in</span><strong className="positive">{formatMoney(incoming, account.currency)}</strong></div>
       <div><span>Money out</span><strong>{formatMoney(outgoing, account.currency)}</strong></div>
     </div>

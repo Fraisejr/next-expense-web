@@ -6,6 +6,7 @@ const API_ROOT = 'https://bankaccountdata.gocardless.com/api/v2'
 
 type Token = { access: string; expiresAt: number }
 type RateLimit = { limit?: number; remaining?: number; resetSeconds?: number }
+type TransactionStatus = 'booked' | 'pending'
 
 class GoCardlessRequestError extends Error {
   constructor(message: string, readonly status: number) {
@@ -29,6 +30,37 @@ function cleanError(payload: unknown, fallback: string) {
   if (!payload || typeof payload !== 'object') return fallback
   const body = payload as Record<string, unknown>
   return String(body.detail ?? body.summary ?? fallback)
+}
+
+function normalizeTransactions(transactions: Record<string, unknown>[], status: TransactionStatus) {
+  return transactions.flatMap((transaction) => {
+    const amountObject = transaction.transactionAmount && typeof transaction.transactionAmount === 'object'
+      ? transaction.transactionAmount as Record<string, unknown>
+      : {}
+    const amount = String(amountObject.amount ?? '')
+    const currency = String(amountObject.currency ?? '').toUpperCase()
+    const date = String(transaction.bookingDate ?? transaction.valueDate ?? transaction.transactionDate ?? '')
+    if (!/^-?\d+(\.\d+)?$/.test(amount) || !/^[A-Z]{3}$/.test(currency) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return []
+    const outgoing = Number(amount) < 0
+    const payee = String(
+      (outgoing ? transaction.creditorName : transaction.debtorName)
+      ?? transaction.creditorName
+      ?? transaction.debtorName
+      ?? transaction.remittanceInformationUnstructured
+      ?? transaction.additionalInformation
+      ?? 'Bank transaction',
+    )
+    const note = String(transaction.remittanceInformationUnstructured ?? transaction.additionalInformation ?? '')
+    // The iOS app persisted internalTransactionId. Keep that field as the
+    // canonical ID so migrated history remains deduplicatable.
+    const bankTransactionId = transaction.transactionId ? String(transaction.transactionId) : null
+    const nativeId = transaction.internalTransactionId ?? bankTransactionId ?? transaction.entryReference ?? transaction.endToEndId
+    const fallbackKey = JSON.stringify({ date, amount, currency, payee, note, code: transaction.bankTransactionCode ?? '' })
+    const providerTransactionId = nativeId
+      ? String(nativeId)
+      : `fallback:${createHash('sha256').update(fallbackKey).digest('hex')}`
+    return [{ providerTransactionId, bankTransactionId, date, amount, currency, payee, note, type: outgoing ? 'expense' as const : 'income' as const, status }]
+  })
 }
 
 export function goCardlessDevApi(secretId: string | undefined, secretKey: string | undefined): Plugin {
@@ -162,35 +194,10 @@ export function goCardlessDevApi(secretId: string | undefined, secretKey: string
               ? transactionPayload.transactions as Record<string, unknown>
               : {}
             const booked = Array.isArray(transactionGroups.booked) ? transactionGroups.booked as Record<string, unknown>[] : []
-            const normalizedTransactions = booked.flatMap((transaction) => {
-              const amountObject = transaction.transactionAmount && typeof transaction.transactionAmount === 'object'
-                ? transaction.transactionAmount as Record<string, unknown>
-                : {}
-              const amount = String(amountObject.amount ?? '')
-              const currency = String(amountObject.currency ?? '').toUpperCase()
-              const date = String(transaction.bookingDate ?? transaction.valueDate ?? '')
-              if (!/^-?\d+(\.\d+)?$/.test(amount) || !/^[A-Z]{3}$/.test(currency) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return []
-              const signedAmount = Number(amount)
-              const outgoing = signedAmount < 0
-              const payee = String(
-                (outgoing ? transaction.creditorName : transaction.debtorName)
-                ?? transaction.creditorName
-                ?? transaction.debtorName
-                ?? transaction.remittanceInformationUnstructured
-                ?? transaction.additionalInformation
-                ?? 'Bank transaction',
-              )
-              const note = String(transaction.remittanceInformationUnstructured ?? transaction.additionalInformation ?? '')
-              // The iOS app persisted internalTransactionId. Keep that field as
-              // the canonical ID so migrated history remains deduplicatable.
-              const bankTransactionId = transaction.transactionId ? String(transaction.transactionId) : null
-              const nativeId = transaction.internalTransactionId ?? bankTransactionId ?? transaction.entryReference ?? transaction.endToEndId
-              const fallbackKey = JSON.stringify({ date, amount, currency, payee, note, code: transaction.bankTransactionCode ?? '' })
-              const providerTransactionId = nativeId
-                ? String(nativeId)
-                : `fallback:${createHash('sha256').update(fallbackKey).digest('hex')}`
-              return [{ providerTransactionId, bankTransactionId, date, amount, currency, payee, note, type: outgoing ? 'expense' : 'income' }]
-            })
+            const pending = Array.isArray(transactionGroups.pending) ? transactionGroups.pending as Record<string, unknown>[] : []
+            const normalizedBooked = normalizeTransactions(booked, 'booked')
+            const normalizedPending = normalizeTransactions(pending, 'pending')
+            const normalizedTransactions = [...normalizedPending, ...normalizedBooked]
 
             const balancePayload = (balanceResponse?.payload ?? {}) as Record<string, unknown>
             const balances = Array.isArray(balancePayload.balances) ? balancePayload.balances as Record<string, unknown>[] : []
@@ -210,6 +217,11 @@ export function goCardlessDevApi(secretId: string | undefined, secretKey: string
 
             json(response, 200, {
               transactions: normalizedTransactions,
+              providerDiagnostics: {
+                bookedReturned: booked.length,
+                pendingReturned: pending.length,
+                malformedIgnored: booked.length + pending.length - normalizedTransactions.length,
+              },
               balance: balanceAmount ? {
                 amount: String(balanceAmount.amount),
                 currency: String(balanceAmount.currency).toUpperCase(),

@@ -144,6 +144,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .account-dot { width: 35px; height: 35px; display: grid; place-items: center; color: #fff; border-radius: 9px; }
 .account-row strong, .account-row span, .transaction-row strong, .transaction-row span { display: block; }
 .account-row strong, .transaction-row strong { font-size: 11.5px; }
+.pending-badge { display: inline-flex; margin-left: 7px; padding: 2px 5px; border-radius: 4px; color: #93612d; background: #f3e7d2; font-size: 7px; font-style: normal; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; vertical-align: 1px; }
 .account-row div span, .transaction-row div span { color: var(--muted); font-size: 9.5px; margin-top: 4px; }
 .account-row > b, .transaction-row > b { font-family: 'DM Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: -.03em; }
 .transaction-icon { border-radius: 50%; }
@@ -277,6 +278,8 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .category-detail-summary span, .category-detail-summary strong { display: block; }
 .category-detail-summary span { color: var(--muted); font-size: 9.5px; margin-bottom: 6px; }
 .category-detail-summary strong { font-family: 'DM Mono', monospace; font-size: 14px; letter-spacing: -.03em; }
+.account-balance-summary { grid-template-columns: repeat(5, 1fr); }
+.account-balance-summary strong { white-space: nowrap; }
 .category-detail-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 22px 5px 8px; color: #777e76; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .category-detail-heading b { color: #59615a; font-size: 9px; }
 .category-detail-list { max-height: min(470px, 52vh); overflow-y: auto; padding-right: 3px; }
@@ -410,6 +413,8 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .entity-heading-actions button { flex: 1; }
   .bank-sync-status { align-items: flex-start; flex-direction: column; }
   .bank-sync-status > span { text-align: left; }
+  .account-balance-summary { grid-template-columns: 1fr 1fr; }
+  .account-balance-summary > div:first-child { grid-column: 1 / -1; }
   .entity-page-toolbar label { justify-content: space-between; }
   .entity-page-toolbar select { min-width: 0; width: min(70vw, 300px); }
 }
