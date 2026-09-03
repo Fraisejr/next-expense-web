@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import {
   ArrowDownLeft, ArrowLeftRight, ArrowRight, ArrowUpRight, BadgeEuro, Banknote, BriefcaseBusiness,
   BarChart3, BriefcaseMedical, CalendarDays, CarFront, ChevronDown, ChevronLeft, ChevronRight, CircleHelp,
-  ArrowDown, ArrowUp, Check, CreditCard, Dumbbell, GripVertical, HeartHandshake, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Plane, Plus, ReceiptText, Search, Settings,
+  ArrowDown, ArrowUp, Check, CreditCard, Dumbbell, Eye, EyeOff, GripVertical, HeartHandshake, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Plane, Plus, ReceiptText, Search, Settings,
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { assignPayeeMapping, createAccount, createCategory, createTransaction, ensurePayees, linkBankAccount, loadWorkspace, saveAccountOrder, saveBankSync, saveBudget, updateTaxRate, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
+import { assignPayeeMapping, createAccount, createCategory, createTransaction, ensurePayees, linkBankAccount, loadWorkspace, saveAccountOrder, saveBankSync, saveBudget, updateCategoryHidden, updateTaxRate, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
 import { neon } from './neon'
 import type { Account, AccountScope, AppData, Category, Payee, ReportGroup, Transaction } from './types'
 
@@ -247,7 +247,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         return sum + (group === 'income' || group === 'capital_gain' ? direction : -direction) * t.amountMinor
       }, 0)
   }
-  const expenseCategories = data.categories.filter((c) => c.reportGroup === 'expense')
+  const expenseCategories = data.categories.filter((c) => c.reportGroup === 'expense' && !c.hidden)
   const budgetForCategory = (categoryId: string) => data.budgets
     .filter((budget) => budget.month === selectedMonthKey && budget.categoryId === categoryId)
     .reduce((sum, budget) => sum + budget.amountMinor, 0)
@@ -342,6 +342,19 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       }))
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not update the budget.')
+    }
+  }
+
+  async function setCategoryHidden(categoryId: string, hidden: boolean) {
+    try {
+      setSyncError('')
+      await updateCategoryHidden(workspace.workspaceId, categoryId, hidden)
+      setData((current) => ({
+        ...current,
+        categories: current.categories.map((category) => category.id === categoryId ? { ...category, hidden } : category),
+      }))
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : `Could not ${hidden ? 'hide' : 'unhide'} the category.`)
     }
   }
 
@@ -533,7 +546,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
         )}
         {selectedCategory && (
-          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} accounts={data.accounts} onUpdateBudget={updateBudget} onBack={() => goTo('/budgets')} onSelectCategory={(id) => goTo(`/categories/${id}`)} />
+          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} accounts={data.accounts} onUpdateBudget={updateBudget} onSetHidden={setCategoryHidden} onBack={() => goTo('/budgets')} onSelectCategory={(id) => goTo(`/categories/${id}`)} />
         )}
         {selectedPayee && (
           <PayeeDetailPage payee={selectedPayee} transactions={data.transactions.filter((transaction) => transaction.payeeId === selectedPayee.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/payees')} />
@@ -542,7 +555,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
 
       {modal && (
         <ModalShell title={modal === 'transaction' ? 'Add transaction' : modal === 'account' ? 'Create account' : modal === 'category' ? 'Create category' : `Connect ${bankTarget?.name ?? 'account'}`} onClose={() => setModal(null)}>
-          {modal === 'transaction' && <TransactionForm accounts={activeAccounts} categories={data.categories} payees={data.payees} onSubmit={addTransaction} />}
+          {modal === 'transaction' && <TransactionForm accounts={activeAccounts} categories={data.categories.filter((category) => !category.hidden)} payees={data.payees} onSubmit={addTransaction} />}
           {modal === 'account' && <AccountForm onSubmit={addAccount} />}
           {modal === 'category' && <CategoryForm onSubmit={addCategory} />}
           {modal === 'bank' && bankTarget && <BankLinkForm account={bankTarget} workspaceId={workspace.workspaceId} onComplete={() => window.location.reload()} />}
@@ -697,13 +710,13 @@ function CategoryRow({ category, spent, budget, onSelect }: { category: Category
   const Icon = categoryIcons[category.icon as keyof typeof categoryIcons] ?? Sparkles
   const percent = budget ? Math.round((spent / budget) * 100) : 0
   return (
-    <button type="button" className="category-row" onClick={onSelect} aria-label={`View ${category.name} transactions`}>
+    <button type="button" className={category.hidden ? 'category-row hidden' : 'category-row'} onClick={onSelect} aria-label={`View ${category.name} transactions`}>
       <span className="category-icon" style={{ color: category.color, background: `${category.color}18` }}><Icon size={18} /></span>
       <div className="category-progress">
         <div><strong>{category.name}</strong><span>{formatMoney(spent)} <i>of {formatMoney(budget)}</i></span></div>
         <div className="progress-track"><span style={{ width: `${Math.min(percent, 100)}%`, background: percent > 100 ? '#ae4c38' : category.color }} /></div>
       </div>
-      <b className={percent > 100 ? 'negative' : ''}>{percent}%</b>
+      <b className={percent > 100 ? 'negative' : ''}>{category.hidden ? 'Hidden' : `${percent}%`}</b>
     </button>
   )
 }
@@ -857,11 +870,14 @@ function PayeeDetailPage({ payee, transactions, categories, accounts, onBack }: 
 }
 
 function BudgetsPage({ categories, categorySpending, budgetForCategory, onAdd, onSelectCategory }: { categories: Category[]; categorySpending: (id: string) => number; budgetForCategory: (id: string) => number; onAdd: () => void; onSelectCategory: (id: string) => void }) {
-  const incomeCategories = categories.filter((category) => category.reportGroup === 'income')
-  const expenseCategories = categories.filter((category) => category.reportGroup === 'expense')
-  const taxCategories = categories.filter((category) => category.reportGroup === 'tax')
+  const [showHidden, setShowHidden] = useState(false)
+  const visibleCategories = categories.filter((category) => !category.hidden)
+  const hiddenCategories = categories.filter((category) => category.hidden)
+  const incomeCategories = visibleCategories.filter((category) => category.reportGroup === 'income')
+  const expenseCategories = visibleCategories.filter((category) => category.reportGroup === 'expense')
+  const taxCategories = visibleCategories.filter((category) => category.reportGroup === 'tax')
   const section = (title: string, subtitle: string, rows: Category[]) => <section className="budget-section"><div className="budget-section-heading"><div><h3>{title}</h3><span>{subtitle}</span></div></div><div className="category-list roomy">{rows.map((category) => <CategoryRow key={category.id} category={category} spent={categorySpending(category.id)} budget={budgetForCategory(category.id)} onSelect={() => onSelectCategory(category.id)} />)}</div></section>
-  return <div className="page-content narrow-page"><div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>Income, expense & tax plan</h2></div><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button></div>{section('Planned income', 'Actual income compared with this month’s plan', incomeCategories)}{section('Expense budgets', 'Net spending compared with this month’s budget', expenseCategories)}{taxCategories.length > 0 && section('Tax plan', 'Recorded tax costs compared with this month’s plan', taxCategories)}</div></div>
+  return <div className="page-content narrow-page"><div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>Income, expense & tax plan</h2></div><div className="budget-page-actions">{hiddenCategories.length > 0 && <button className="text-button" onClick={() => setShowHidden((current) => !current)}>{showHidden ? <EyeOff size={16} /> : <Eye size={16} />}{showHidden ? 'Hide archived' : `Show hidden (${hiddenCategories.length})`}</button>}<button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button></div></div>{section('Planned income', 'Actual income compared with this month’s plan', incomeCategories)}{section('Expense budgets', 'Net spending compared with this month’s budget', expenseCategories)}{taxCategories.length > 0 && section('Tax plan', 'Recorded tax costs compared with this month’s plan', taxCategories)}{showHidden && hiddenCategories.length > 0 && section('Hidden categories', 'Kept for transaction history, but excluded from active planning and new transactions', hiddenCategories)}</div></div>
 }
 
 type ReportScope = 'Combined' | AccountScope
@@ -1052,15 +1068,15 @@ function formatRateLimits(account: Account) {
   return account.lastSyncedAt ? 'This bank did not report a remaining-call count' : 'Daily allowance will appear after the first sync'
 }
 
-function CategoryDetailPage({ category, spent, budget, transactions, categories, accounts, onUpdateBudget, onBack, onSelectCategory }: { category: Category; spent: number; budget: number; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onUpdateBudget: (categoryId: string, amountMinor: number, scope: AccountScope) => void; onBack: () => void; onSelectCategory: (id: string) => void }) {
+function CategoryDetailPage({ category, spent, budget, transactions, categories, accounts, onUpdateBudget, onSetHidden, onBack, onSelectCategory }: { category: Category; spent: number; budget: number; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onUpdateBudget: (categoryId: string, amountMinor: number, scope: AccountScope) => void; onSetHidden: (categoryId: string, hidden: boolean) => void; onBack: () => void; onSelectCategory: (id: string) => void }) {
   const Icon = categoryIcons[category.icon as keyof typeof categoryIcons] ?? Sparkles
   return <div className="page-content narrow-page entity-page">
     <div className="entity-page-toolbar">
       <button className="entity-back" onClick={onBack}><ChevronLeft size={16} />All categories</button>
-      <label><span>Category</span><select value={category.id} onChange={(event) => onSelectCategory(event.target.value)}>{categories.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label>
+      <label><span>Category</span><select value={category.id} onChange={(event) => onSelectCategory(event.target.value)}>{categories.map((option) => <option key={option.id} value={option.id}>{option.name}{option.hidden ? ' (hidden)' : ''}</option>)}</select></label>
     </div>
     <section className="panel entity-detail-panel">
-      <div className="entity-heading"><div className="entity-heading-icon" style={{ color: category.color, background: `${category.color}18` }}><Icon size={20} /></div><div><span className="eyebrow">{category.reportGroup.replace('_', ' ')}</span><h2>{category.name}</h2></div></div>
+      <div className="entity-heading"><div className="entity-heading-icon" style={{ color: category.color, background: `${category.color}18` }}><Icon size={20} /></div><div><span className="eyebrow">{category.reportGroup.replace('_', ' ')}{category.hidden ? ' · Hidden' : ''}</span><h2>{category.name}</h2></div><button className="secondary-button entity-heading-action" type="button" onClick={() => onSetHidden(category.id, !category.hidden)}>{category.hidden ? <Eye size={16} /> : <EyeOff size={16} />}{category.hidden ? 'Unhide category' : 'Hide category'}</button></div>
       <CategoryDetail key={`${category.id}-${budget}`} category={category} spent={spent} budget={budget} transactions={transactions} categories={categories} accounts={accounts} onUpdateBudget={onUpdateBudget} />
     </section>
   </div>
@@ -1285,7 +1301,7 @@ function AccountForm({ onSubmit }: { onSubmit: (a: Omit<Account, 'id'>) => void 
 
 function CategoryForm({ onSubmit }: { onSubmit: (c: Omit<Category, 'id'>, budgetMinor: number, scope: AccountScope) => void }) {
   const [name, setName] = useState(''); const [budget, setBudget] = useState(''); const [reportGroup, setReportGroup] = useState<ReportGroup>('expense'); const [scope, setScope] = useState<AccountScope>('Personal')
-  function submit(e: FormEvent) { e.preventDefault(); const budgetMinor = parseMoneyToMinor(budget || '0'); if (!name || budgetMinor === null) return; onSubmit({ name, reportGroup, color: '#5d7d91', icon: reportGroup === 'income' ? 'briefcase' : 'sparkles' }, budgetMinor, scope) }
+  function submit(e: FormEvent) { e.preventDefault(); const budgetMinor = parseMoneyToMinor(budget || '0'); if (!name || budgetMinor === null) return; onSubmit({ name, reportGroup, color: '#5d7d91', icon: reportGroup === 'income' ? 'briefcase' : 'sparkles', hidden: false }, budgetMinor, scope) }
   return <form className="form" onSubmit={submit}><label><span>Category name</span><input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Personal care" /></label><div className="form-grid"><label><span>Report group</span><select value={reportGroup} onChange={e => setReportGroup(e.target.value as ReportGroup)}><option value="income">Income</option><option value="expense">Expense</option><option value="tax">Tax</option><option value="capital_gain">Capital gain/loss</option></select></label><label><span>Account tag</span><select value={scope} onChange={e => setScope(e.target.value as AccountScope)}><option>Personal</option><option>Company</option></select></label></div><label><span>Monthly plan</span><input type="number" min="0" step="0.01" value={budget} onChange={e => setBudget(e.target.value)} placeholder="0.00" /></label><button className="primary-button form-submit">Create category<ArrowRight size={18} /></button></form>
 }
 

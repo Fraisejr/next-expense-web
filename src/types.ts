@@ -34,6 +34,7 @@ export type Category = {
   color: string
   icon: string
   reportGroup: ReportGroup
+  hidden: boolean
 }
 
 export type Payee = {

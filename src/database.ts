@@ -124,6 +124,7 @@ export async function loadWorkspace(): Promise<LoadedWorkspace> {
     color: normalizeCategoryColor(row.color),
     icon: normalizeCategoryIcon(row.icon, row.name as string),
     reportGroup: row.report_group as ReportGroup,
+    hidden: Boolean(row.hidden),
   }))
   const payees: Payee[] = payeeRows.map((row) => ({
     id: row.id as string,
@@ -194,7 +195,16 @@ export async function createCategory(workspaceId: string, category: Category) {
     report_group: category.reportGroup,
     color: category.color,
     icon: category.icon,
+    hidden: category.hidden,
   })
+  if (error) throw error
+}
+
+export async function updateCategoryHidden(workspaceId: string, categoryId: string, hidden: boolean) {
+  const { error } = await neon.from('categories')
+    .update({ hidden })
+    .eq('workspace_id', workspaceId)
+    .eq('id', categoryId)
   if (error) throw error
 }
 
