@@ -159,7 +159,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .transaction-table-row .account-name { color: var(--muted); font-size: 10px; }
 .payee-heading { align-items: flex-end; }
 .payee-controls { display: flex; align-items: center; gap: 10px; }
-.unmatched-payees { margin: 0 0 22px; overflow: hidden; border: 1px solid #dfcdbf; border-radius: 9px; background: #faf5ef; }
+.unmatched-payees { margin: 0 0 22px; border: 1px solid #dfcdbf; border-radius: 9px; background: #faf5ef; }
 .unmatched-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; padding: 14px 16px; border-bottom: 1px solid #e8d9cd; }
 .unmatched-heading h3 { margin-top: 4px; font-family: 'Newsreader', serif; font-size: 18px; }
 .unmatched-heading p { max-width: 360px; color: var(--muted); font-size: 9.5px; line-height: 1.5; text-align: right; }
@@ -170,10 +170,19 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .unmatched-source strong { overflow: hidden; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .unmatched-source span { margin-top: 4px; color: var(--muted); font-size: 9px; }
 .unmatched-action { display: flex; gap: 7px; }
-.unmatched-action select, .unmatched-action input { min-width: 0; width: 100%; height: 36px; padding: 0 9px; border: 1px solid #dcd4cb; border-radius: 7px; background: var(--paper); font-size: 10px; }
+.unmatched-action input { min-width: 0; width: 100%; height: 36px; padding: 0 9px; border: 1px solid #dcd4cb; border-radius: 7px; background: var(--paper); font-size: 10px; }
+.payee-picker { position: relative; flex: 1; min-width: 0; }
+.payee-picker > svg { position: absolute; z-index: 1; left: 9px; top: 10px; color: #858b83; pointer-events: none; }
+.payee-picker > input { padding-left: 30px; }
+.payee-suggestions { position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; right: 0; max-height: 220px; overflow-y: auto; padding: 4px; border: 1px solid #d6d8d1; border-radius: 7px; background: var(--paper); box-shadow: 0 10px 25px rgba(35, 42, 38, .14); }
+.payee-suggestions button, .payee-suggestions > span { width: 100%; display: block; padding: 8px 9px; border: 0; border-radius: 5px; background: transparent; font-size: 10px; text-align: left; }
+.payee-suggestions button { cursor: pointer; }
+.payee-suggestions button:hover, .payee-suggestions button:focus-visible { background: var(--pale-green); }
+.payee-suggestions > span { color: var(--muted); }
 .unmatched-action .secondary-button { flex: 0 0 auto; padding: 8px 11px; font-size: 10px; }
 .unmatched-action .secondary-button:disabled { cursor: not-allowed; opacity: .5; }
 .unmatched-or { color: #9b8e83; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.unmatched-error { grid-column: 2 / -1; color: #a64f3b; font-size: 9.5px; }
 .sort-box { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 9.5px; font-weight: 700; white-space: nowrap; }
 .sort-box select { height: 36px; padding: 0 28px 0 10px; border: 1px solid #dcded7; border-radius: 7px; background: #f6f5f0; color: var(--ink); font-size: 10.5px; }
 .payee-table-header { display: grid; grid-template-columns: 1fr 160px 100px; padding: 10px 38px 10px 59px; background: #f0f0eb; color: #7e847c; font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
@@ -342,7 +351,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .account-card-grid { grid-template-columns: repeat(2, 1fr); }
   .unmatched-row { grid-template-columns: minmax(160px, .8fr) minmax(220px, 1fr); }
   .unmatched-or { display: none; }
-  .unmatched-action:last-child { grid-column: 2; }
+  .unmatched-or + .unmatched-action { grid-column: 2; }
 }
 
 @media (max-width: 760px) {
@@ -388,7 +397,8 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .unmatched-heading { align-items: flex-start; flex-direction: column; gap: 6px; }
   .unmatched-heading p { text-align: left; }
   .unmatched-row { grid-template-columns: 1fr; }
-  .unmatched-action:last-child { grid-column: auto; }
+  .unmatched-or + .unmatched-action { grid-column: auto; }
+  .unmatched-error { grid-column: auto; }
   .account-card-grid { grid-template-columns: 1fr; }
   .accounts-title { align-items: stretch; flex-direction: column; gap: 14px; }
   .accounts-title-actions { flex-wrap: wrap; }

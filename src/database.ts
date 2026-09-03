@@ -249,23 +249,6 @@ async function resolvePayees(workspaceId: string, sourceNames: string[], createM
     }
   }
 
-  const mappings = names.flatMap((sourceName) => {
-    const normalizedName = normalizedPayeeName(sourceName)
-    const payee = payeeByName.get(normalizedName)
-    return payee ? [{
-      id: crypto.randomUUID(),
-      workspace_id: workspaceId,
-      normalized_name: normalizedName,
-      source_name: sourceName,
-      payee_id: payee.id,
-    }] : []
-  })
-  if (mappings.length) {
-    const { error: mappingError } = await neon.from('payee_mappings')
-      .upsert(mappings, { onConflict: 'workspace_id,source_name,payee_id', ignoreDuplicates: true })
-    if (mappingError) throw mappingError
-  }
-
   return names.map((name) => payeeByName.get(normalizedPayeeName(name)))
 }
 
@@ -278,42 +261,13 @@ async function findPayees(workspaceId: string, sourceNames: string[]) {
 }
 
 export async function assignPayeeMapping(workspaceId: string, sourceName: string, payeeId: string): Promise<string[]> {
-  const normalizedName = normalizedPayeeName(sourceName)
-  const { error: mappingError } = await neon.from('payee_mappings').upsert({
-    id: crypto.randomUUID(),
-    workspace_id: workspaceId,
-    normalized_name: normalizedName,
-    source_name: sourceName.normalize('NFKC').trim(),
-    payee_id: payeeId,
-  }, { onConflict: 'workspace_id,source_name,payee_id', ignoreDuplicates: true })
-  if (mappingError) throw mappingError
-
-  const matchedIds: string[] = []
-  const pageSize = 1000
-  for (let start = 0; ; start += pageSize) {
-    const { data, error } = await neon.from('transactions')
-      .select('id,payee_name')
-      .eq('workspace_id', workspaceId)
-      .is('payee_id', null)
-      .neq('transaction_type', 'transfer')
-      .order('id', { ascending: true })
-      .range(start, start + pageSize - 1)
-    if (error) throw error
-    const rows = (data ?? []) as unknown as Row[]
-    matchedIds.push(...rows
-      .filter((row) => normalizedPayeeName(String(row.payee_name ?? '')) === normalizedName)
-      .map((row) => String(row.id)))
-    if (rows.length < pageSize) break
-  }
-
-  for (let start = 0; start < matchedIds.length; start += 200) {
-    const { error } = await neon.from('transactions')
-      .update({ payee_id: payeeId })
-      .eq('workspace_id', workspaceId)
-      .in('id', matchedIds.slice(start, start + 200))
-    if (error) throw error
-  }
-  return matchedIds
+  const { data, error } = await neon.rpc('assign_payee_mapping', {
+    p_workspace_id: workspaceId,
+    p_source_name: sourceName.normalize('NFKC').trim(),
+    p_payee_id: payeeId,
+  })
+  if (error) throw error
+  return Array.isArray(data) ? data.map(String) : []
 }
 
 async function ensurePeriod(workspaceId: string, monthKey: string) {

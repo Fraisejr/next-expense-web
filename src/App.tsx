@@ -398,6 +398,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       }))
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not map the bank description.')
+      throw error
     }
   }
 
@@ -415,6 +416,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       }))
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not create and map the payee.')
+      throw error
     }
   }
 
@@ -774,7 +776,9 @@ function PayeesPage({ payees, transactions, onSelectPayee, onMapPayee, onCreateP
   const [sort, setSort] = useState<PayeeSort>('transactions')
   const [search, setSearch] = useState('')
   const [mappingTargets, setMappingTargets] = useState<Record<string, string>>({})
+  const [payeeQueries, setPayeeQueries] = useState<Record<string, string>>({})
   const [newPayeeNames, setNewPayeeNames] = useState<Record<string, string>>({})
+  const [mappingErrors, setMappingErrors] = useState<Record<string, string>>({})
   const [pending, setPending] = useState('')
   const unmatchedByName = new Map<string, { sourceName: string; count: number; lastTransaction: string }>()
   for (const transaction of transactions) {
@@ -816,13 +820,52 @@ function PayeesPage({ payees, transactions, onSelectPayee, onMapPayee, onCreateP
         <div className="unmatched-heading"><div><span className="eyebrow">Needs review</span><h3>{unmatched.length} unmatched bank description{unmatched.length === 1 ? '' : 's'}</h3></div><p>Map each description to a payee. The choice is remembered for future imports.</p></div>
         <div className="unmatched-list">{unmatched.map(([key, item]) => {
           const targetId = mappingTargets[key] ?? ''
+          const payeeQuery = payeeQueries[key] ?? ''
+          const matchingPayees = payeeQuery.trim() ? alphabeticalPayees.filter((payee) => payee.name.toLocaleLowerCase('en').includes(payeeQuery.trim().toLocaleLowerCase('en'))).slice(0, 8) : []
+          const selectedPayee = alphabeticalPayees.find((payee) => payee.id === targetId)
+          const hasSelectedQuery = selectedPayee?.name.localeCompare(payeeQuery, undefined, { sensitivity: 'accent' }) === 0
           const newName = newPayeeNames[key] ?? item.sourceName
           const isPending = pending === key
+          const mappingError = mappingErrors[key] ?? ''
           return <div className="unmatched-row" key={key}>
             <div className="unmatched-source"><strong>{item.sourceName}</strong><span>{item.count} transaction{item.count === 1 ? '' : 's'} · latest {shortDate.format(new Date(`${item.lastTransaction}T12:00:00`))}</span></div>
-            <div className="unmatched-action"><select aria-label={`Map ${item.sourceName} to an existing payee`} value={targetId} onChange={(event) => setMappingTargets((current) => ({ ...current, [key]: event.target.value }))}><option value="">Choose existing payee</option>{alphabeticalPayees.map((payee) => <option key={payee.id} value={payee.id}>{payee.name}</option>)}</select><button className="secondary-button" disabled={!targetId || isPending} onClick={async () => { setPending(key); await onMapPayee(item.sourceName, targetId); setPending('') }}>Map</button></div>
+            <div className="unmatched-action"><div className="payee-picker"><Search size={15} /><input aria-label={`Search existing payees for ${item.sourceName}`} placeholder="Search existing payees" value={payeeQuery} autoComplete="off" onChange={(event) => {
+              const query = event.target.value
+              const exactMatch = alphabeticalPayees.find((payee) => payee.name.localeCompare(query, undefined, { sensitivity: 'accent' }) === 0)
+              setPayeeQueries((current) => ({ ...current, [key]: query }))
+              setMappingTargets((current) => ({ ...current, [key]: exactMatch?.id ?? '' }))
+            }} />
+              {payeeQuery.trim() && !hasSelectedQuery && <div className="payee-suggestions" role="listbox">
+                {matchingPayees.map((payee) => <button type="button" role="option" aria-selected="false" key={payee.id} onClick={() => {
+                  setPayeeQueries((current) => ({ ...current, [key]: payee.name }))
+                  setMappingTargets((current) => ({ ...current, [key]: payee.id }))
+                }}>{payee.name}</button>)}
+                {!matchingPayees.length && <span>No matching payees</span>}
+              </div>}
+            </div><button className="secondary-button" disabled={!targetId || isPending} onClick={async () => {
+              setPending(key)
+              setMappingErrors((current) => ({ ...current, [key]: '' }))
+              try {
+                await onMapPayee(item.sourceName, targetId)
+              } catch {
+                setMappingErrors((current) => ({ ...current, [key]: 'Mapping failed. Please try again.' }))
+              } finally {
+                setPending('')
+              }
+            }}>Map</button></div>
             <span className="unmatched-or">or</span>
-            <div className="unmatched-action"><input aria-label={`New payee name for ${item.sourceName}`} value={newName} onChange={(event) => setNewPayeeNames((current) => ({ ...current, [key]: event.target.value }))} /><button className="secondary-button" disabled={!newName.trim() || isPending} onClick={async () => { setPending(key); await onCreatePayee(item.sourceName, newName.trim()); setPending('') }}>{isPending ? 'Saving…' : 'Create new'}</button></div>
+            <div className="unmatched-action"><input aria-label={`New payee name for ${item.sourceName}`} value={newName} onChange={(event) => setNewPayeeNames((current) => ({ ...current, [key]: event.target.value }))} /><button className="secondary-button" disabled={!newName.trim() || isPending} onClick={async () => {
+              setPending(key)
+              setMappingErrors((current) => ({ ...current, [key]: '' }))
+              try {
+                await onCreatePayee(item.sourceName, newName.trim())
+              } catch {
+                setMappingErrors((current) => ({ ...current, [key]: 'Could not create and map this payee.' }))
+              } finally {
+                setPending('')
+              }
+            }}>{isPending ? 'Saving…' : 'Create new'}</button></div>
+            {mappingError && <p className="unmatched-error" role="alert">{mappingError}</p>}
           </div>
         })}</div>
       </section>}
