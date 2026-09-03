@@ -397,7 +397,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           : transaction),
       }))
     } catch (error) {
-      setSyncError(error instanceof Error ? error.message : 'Could not map the bank description.')
+      setSyncError(getErrorMessage(error, 'Could not map the transaction description.'))
       throw error
     }
   }
@@ -415,7 +415,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           : transaction),
       }))
     } catch (error) {
-      setSyncError(error instanceof Error ? error.message : 'Could not create and map the payee.')
+      setSyncError(getErrorMessage(error, 'Could not create and map the payee.'))
       throw error
     }
   }
@@ -817,7 +817,7 @@ function PayeesPage({ payees, transactions, onSelectPayee, onMapPayee, onCreateP
         </div>
       </div>
       {unmatched.length > 0 && <section className="unmatched-payees">
-        <div className="unmatched-heading"><div><span className="eyebrow">Needs review</span><h3>{unmatched.length} unmatched bank description{unmatched.length === 1 ? '' : 's'}</h3></div><p>Map each description to a payee. The choice is remembered for future imports.</p></div>
+        <div className="unmatched-heading"><div><span className="eyebrow">Needs review</span><h3>{unmatched.length} unmatched description{unmatched.length === 1 ? '' : 's'}</h3></div><p>Map each description to a payee. The choice is remembered for future imports.</p></div>
         <div className="unmatched-list">{unmatched.map(([key, item]) => {
           const targetId = mappingTargets[key] ?? ''
           const payeeQuery = payeeQueries[key] ?? ''
@@ -847,8 +847,8 @@ function PayeesPage({ payees, transactions, onSelectPayee, onMapPayee, onCreateP
               setMappingErrors((current) => ({ ...current, [key]: '' }))
               try {
                 await onMapPayee(item.sourceName, targetId)
-              } catch {
-                setMappingErrors((current) => ({ ...current, [key]: 'Mapping failed. Please try again.' }))
+              } catch (error) {
+                setMappingErrors((current) => ({ ...current, [key]: getErrorMessage(error, 'Mapping failed. Please try again.') }))
               } finally {
                 setPending('')
               }
@@ -859,8 +859,8 @@ function PayeesPage({ payees, transactions, onSelectPayee, onMapPayee, onCreateP
               setMappingErrors((current) => ({ ...current, [key]: '' }))
               try {
                 await onCreatePayee(item.sourceName, newName.trim())
-              } catch {
-                setMappingErrors((current) => ({ ...current, [key]: 'Could not create and map this payee.' }))
+              } catch (error) {
+                setMappingErrors((current) => ({ ...current, [key]: getErrorMessage(error, 'Could not create and map this payee.') }))
               } finally {
                 setPending('')
               }

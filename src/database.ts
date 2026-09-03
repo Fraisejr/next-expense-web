@@ -261,13 +261,67 @@ async function findPayees(workspaceId: string, sourceNames: string[]) {
 }
 
 export async function assignPayeeMapping(workspaceId: string, sourceName: string, payeeId: string): Promise<string[]> {
+  const normalizedName = normalizedPayeeName(sourceName)
   const { data, error } = await neon.rpc('assign_payee_mapping', {
     p_workspace_id: workspaceId,
     p_source_name: sourceName.normalize('NFKC').trim(),
     p_payee_id: payeeId,
   })
-  if (error) throw error
+  if (error) {
+    const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : ''
+    if (code !== 'PGRST202') throw error
+    return assignPayeeMappingWithoutRpc(workspaceId, sourceName, normalizedName, payeeId)
+  }
   return Array.isArray(data) ? data.map(String) : []
+}
+
+async function assignPayeeMappingWithoutRpc(workspaceId: string, sourceName: string, normalizedName: string, payeeId: string): Promise<string[]> {
+  const existingMapping = await neon.from('payee_mappings')
+    .select('id')
+    .eq('workspace_id', workspaceId)
+    .eq('normalized_name', normalizedName)
+    .eq('payee_id', payeeId)
+    .limit(1)
+  if (existingMapping.error) throw existingMapping.error
+  if (!existingMapping.data?.length) {
+    const { error } = await neon.from('payee_mappings').insert({
+      id: crypto.randomUUID(),
+      workspace_id: workspaceId,
+      normalized_name: normalizedName,
+      source_name: sourceName.normalize('NFKC').trim(),
+      payee_id: payeeId,
+    })
+    if (error) throw error
+  }
+
+  const matchedIds: string[] = []
+  const pageSize = 1000
+  for (let start = 0; ; start += pageSize) {
+    const { data: transactionRows, error } = await neon.from('transactions')
+      .select('id,payee_name,memo')
+      .eq('workspace_id', workspaceId)
+      .is('payee_id', null)
+      .neq('transaction_type', 'transfer')
+      .order('id', { ascending: true })
+      .range(start, start + pageSize - 1)
+    if (error) throw error
+    const rows = (transactionRows ?? []) as unknown as Row[]
+    matchedIds.push(...rows.flatMap((row) => {
+      const description = String(row.payee_name ?? '').trim() || String(row.memo ?? '').trim() || 'Unknown payee'
+      return normalizedPayeeName(description) === normalizedName ? [String(row.id)] : []
+    }))
+    if (rows.length < pageSize) break
+  }
+  if (!matchedIds.length) throw new Error('No unmatched transactions matched this description.')
+
+  for (let start = 0; start < matchedIds.length; start += 50) {
+    const { error } = await neon.from('transactions')
+      .update({ payee_id: payeeId })
+      .eq('workspace_id', workspaceId)
+      .in('id', matchedIds.slice(start, start + 50))
+    if (error) throw error
+  }
+  return matchedIds
 }
 
 async function ensurePeriod(workspaceId: string, monthKey: string) {

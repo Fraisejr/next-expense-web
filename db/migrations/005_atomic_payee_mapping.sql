@@ -51,13 +51,20 @@ begin
     where transaction.workspace_id = p_workspace_id
       and transaction.payee_id is null
       and transaction.transaction_type <> 'transfer'
-      and transaction.payee_name is not null
-      and lower(btrim(transaction.payee_name)) = lower(btrim(p_source_name))
+      and lower(btrim(coalesce(
+        nullif(btrim(transaction.payee_name), ''),
+        nullif(btrim(transaction.memo), ''),
+        'Unknown payee'
+      ))) = lower(btrim(p_source_name))
     returning transaction.id
   )
   select coalesce(array_agg(linked.id), array[]::uuid[])
   into linked_transaction_ids
   from linked;
+
+  if cardinality(linked_transaction_ids) = 0 then
+    raise exception 'No unmatched transactions matched this description' using errcode = 'P0002';
+  end if;
 
   return linked_transaction_ids;
 end;
