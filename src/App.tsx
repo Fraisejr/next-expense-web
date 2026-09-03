@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
   ArrowDownLeft, ArrowLeftRight, ArrowRight, ArrowUpRight, BadgeEuro, Banknote, BriefcaseBusiness,
-  BarChart3, CalendarDays, CarFront, ChevronDown, ChevronLeft, ChevronRight, CircleHelp,
-  ArrowDown, ArrowUp, Check, CreditCard, GripVertical, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Plus, ReceiptText, Search, Settings,
-  RefreshCw, ShoppingBasket, Sparkles, Target, UsersRound, Utensils, WalletCards, X,
+  BarChart3, BriefcaseMedical, CalendarDays, CarFront, ChevronDown, ChevronLeft, ChevronRight, CircleHelp,
+  ArrowDown, ArrowUp, Check, CreditCard, Dumbbell, GripVertical, HeartHandshake, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Plane, Plus, ReceiptText, Search, Settings,
+  RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
 import { assignPayeeMapping, createAccount, createCategory, createTransaction, ensurePayees, linkBankAccount, loadWorkspace, saveAccountOrder, saveBankSync, saveBudget, updateTaxRate, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
@@ -44,6 +44,18 @@ const categoryIcons = {
   sparkles: Sparkles,
   receipt: ReceiptText,
   briefcase: BriefcaseBusiness,
+  banknote: Banknote,
+  wine: Wine,
+  tv: Tv,
+  shield: ShieldAlert,
+  'shopping-bag': ShoppingBag,
+  zap: Zap,
+  target: Target,
+  medical: BriefcaseMedical,
+  'credit-card': CreditCard,
+  plane: Plane,
+  dumbbell: Dumbbell,
+  heart: HeartHandshake,
 }
 
 const navItems: { id: Page; label: string; icon: typeof House; path: string }[] = [

@@ -1,4 +1,5 @@
 import { neon } from './neon'
+import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
 import type { Account, AccountScope, AppData, BankRateLimit, Budget, Category, Payee, ReportGroup, Transaction } from './types'
 
 type Row = Record<string, unknown>
@@ -120,8 +121,8 @@ export async function loadWorkspace(): Promise<LoadedWorkspace> {
   const categories: Category[] = categoryRows.map((row) => ({
     id: row.id as string,
     name: row.name as string,
-    color: (row.color as string | null) ?? '#5d7d91',
-    icon: (row.icon as string | null) ?? 'sparkles',
+    color: normalizeCategoryColor(row.color),
+    icon: normalizeCategoryIcon(row.icon, row.name as string),
     reportGroup: row.report_group as ReportGroup,
   }))
   const payees: Payee[] = payeeRows.map((row) => ({
