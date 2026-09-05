@@ -451,6 +451,14 @@ export async function updateCategoryName(workspaceId: string, categoryId: string
   if (!data?.length) throw new Error('The category could not be renamed.')
 }
 
+export async function deleteUnusedCategory(workspaceId: string, categoryId: string) {
+  const { error } = await neon.rpc('delete_unused_category', {
+    p_workspace_id: workspaceId,
+    p_category_id: categoryId,
+  })
+  if (error) throw error
+}
+
 async function resolvePayees(workspaceId: string, sourceNames: string[], createMissing: boolean): Promise<Array<Payee | undefined>> {
   const names = [...new Set(sourceNames.map((name) => name.normalize('NFKC').trim()).filter(Boolean))]
   if (!names.length) return []
