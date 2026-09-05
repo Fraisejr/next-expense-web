@@ -197,6 +197,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
   const categories: Category[] = categoryRows.map((row) => ({
     id: row.id as string,
     name: row.name as string,
+    sortOrder: number(row.sort_order),
     color: normalizeCategoryColor(row.color),
     icon: normalizeCategoryIcon(row.icon, row.name as string),
     reportGroup: row.report_group as ReportGroup,
@@ -376,6 +377,7 @@ export async function createCategory(workspaceId: string, category: Category) {
     category_type: categoryType,
     report_group: category.reportGroup,
     category_group_id: category.categoryGroupId ?? null,
+    sort_order: category.sortOrder ?? 0,
     color: category.color,
     icon: category.icon,
     hidden: category.hidden,
@@ -383,14 +385,23 @@ export async function createCategory(workspaceId: string, category: Category) {
   if (error) throw error
 }
 
-export async function updateCategoryGroupAssignment(workspaceId: string, categoryId: string, categoryGroupId: string | null) {
+export async function updateCategoryGroupAssignment(workspaceId: string, categoryId: string, categoryGroupId: string | null, sortOrder: number) {
   const { data, error } = await neon.from('categories')
-    .update({ category_group_id: categoryGroupId })
+    .update({ category_group_id: categoryGroupId, sort_order: sortOrder })
     .eq('workspace_id', workspaceId)
     .eq('id', categoryId)
     .select('id')
   if (error) throw error
   if (!data?.length) throw new Error('The category group could not be updated.')
+}
+
+export async function saveCategoryOrder(workspaceId: string, categoryIds: string[]) {
+  const results = await Promise.all(categoryIds.map((categoryId, index) => neon.from('categories')
+    .update({ sort_order: index * 10 })
+    .eq('workspace_id', workspaceId)
+    .eq('id', categoryId)))
+  const failed = results.find((result) => result.error)
+  if (failed?.error) throw failed.error
 }
 
 export async function createCategoryGroup(workspaceId: string, group: CategoryGroup) {
@@ -625,15 +636,41 @@ async function ensurePeriod(workspaceId: string, monthKey: string) {
 
 export async function saveBudget(workspaceId: string, budget: Budget) {
   const periodId = await ensurePeriod(workspaceId, budget.month)
-  const row = {
+  const { data: existingRows, error: lookupError } = await neon.from('budgets')
+    .select('id')
+    .eq('workspace_id', workspaceId)
+    .eq('period_id', periodId)
+    .eq('category_id', budget.categoryId)
+  if (lookupError) throw lookupError
+
+  const existingIds = (existingRows ?? []).map((row) => String(row.id))
+  if (existingIds.length) {
+    const retainedId = existingIds.includes(budget.id) ? budget.id : existingIds[0]
+    const { error: updateError } = await neon.from('budgets')
+      .update({ amount_minor: budget.amountMinor, scope: 'Personal' })
+      .eq('workspace_id', workspaceId)
+      .eq('id', retainedId)
+    if (updateError) throw updateError
+
+    const duplicateIds = existingIds.filter((id) => id !== retainedId)
+    if (duplicateIds.length) {
+      const { error: deleteError } = await neon.from('budgets')
+        .delete()
+        .eq('workspace_id', workspaceId)
+        .in('id', duplicateIds)
+      if (deleteError) throw deleteError
+    }
+    return
+  }
+
+  const { error } = await neon.from('budgets').insert({
     id: budget.id,
     workspace_id: workspaceId,
     period_id: periodId,
     category_id: budget.categoryId,
-    scope: budget.scope,
+    scope: 'Personal',
     amount_minor: budget.amountMinor,
-  }
-  const { error } = await neon.from('budgets').upsert(row, { onConflict: 'id' })
+  })
   if (error) throw error
 }
 

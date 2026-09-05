@@ -72,6 +72,7 @@ export type BankImportCandidate = {
 export type Category = {
   id: string
   name: string
+  sortOrder?: number
   color: string
   icon: string
   reportGroup: ReportGroup
