@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
-  ArrowDownLeft, ArrowLeftRight, ArrowRight, ArrowUpRight, BadgeEuro, Banknote, BriefcaseBusiness,
+  ArrowLeftRight, ArrowRight, Banknote, BriefcaseBusiness,
   BarChart3, BriefcaseMedical, CalendarDays, CarFront, ChevronDown, ChevronLeft, ChevronRight, CircleHelp,
-  ArrowDown, ArrowUp, Check, CreditCard, Dumbbell, Eye, EyeOff, GripVertical, HeartHandshake, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Pencil, Plane, Plus, ReceiptText, Search, Settings, Trash2,
+  ArrowDown, ArrowUp, Check, CreditCard, Dumbbell, Eye, EyeOff, GripVertical, HeartHandshake, House, Link2, LoaderCircle, LogOut, Menu, Pencil, Plane, Plus, ReceiptText, Search, Settings, Trash2,
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
@@ -10,7 +10,7 @@ import { approveBankImportCandidate, assignPayeeMapping, createAccount, createCa
 import { neon } from './neon'
 import type { Account, AccountScope, AppData, BalanceSheetGroup, BankImportCandidate, Category, CategoryGroup, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
 
-type Page = 'overview' | 'transactions' | 'payees' | 'budgets' | 'reports' | 'accounts'
+type Page = 'transactions' | 'payees' | 'budgets' | 'reports' | 'accounts'
 type Modal = 'transaction' | 'account' | 'edit-account' | 'category' | 'edit-category' | 'category-groups' | 'bank' | null
 const BANK_LINK_STORAGE_KEY = 'next-expense-gocardless-link'
 const moneyFormatters = new Map<string, Intl.NumberFormat>()
@@ -59,11 +59,11 @@ const categoryIcons = {
 }
 
 const navItems: { id: Page; label: string; icon: typeof House; path: string }[] = [
-  { id: 'overview', label: 'Overview', icon: LayoutDashboard, path: '/' },
+  { id: 'budgets', label: 'Budget', icon: Target, path: '/' },
   { id: 'transactions', label: 'Transactions', icon: ReceiptText, path: '/transactions' },
+  { id: 'accounts', label: 'Accounts', icon: WalletCards, path: '/accounts' },
+  { id: 'reports', label: 'Reports', icon: BarChart3, path: '/reports' },
   { id: 'payees', label: 'Payees', icon: UsersRound, path: '/payees' },
-  { id: 'budgets', label: 'Budgets', icon: Target, path: '/budgets' },
-  { id: 'reports', label: 'Performance', icon: BarChart3, path: '/performance' },
 ]
 const balanceSheetGroups: BalanceSheetGroup[] = ['Personal', 'Company', 'Real estate', 'Pension']
 
@@ -186,9 +186,9 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       : location.pathname === '/transactions' ? 'transactions'
         : location.pathname === '/payees' ? 'payees'
         : location.pathname === '/budgets' ? 'budgets'
-          : location.pathname === '/performance' ? 'reports'
+          : location.pathname === '/reports' || location.pathname === '/performance' ? 'reports'
             : location.pathname === '/accounts' ? 'accounts'
-              : 'overview'
+              : 'budgets'
   const requestedMonth = fromMonthKey(new URLSearchParams(location.search).get('month'))
   const viewedMonth = requestedMonth ?? new Date()
 
@@ -241,7 +241,6 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     .filter((t) => t.currency === workspace.defaultCurrency)
     .filter((t) => categoryGroup(t.categoryId) === 'capital_gain')
     .reduce((sum, t) => sum + (t.type === 'income' ? t.amountMinor : t.type === 'expense' ? -t.amountMinor : 0), 0)
-  const net = income - expenses - taxesPaid + capitalGains
   const activeAccounts = data.accounts.filter((account) => !account.closed)
   const closedAccounts = data.accounts.filter((account) => account.closed)
   const totalBalance = activeAccounts.filter((account) => account.currency === workspace.defaultCurrency).reduce((sum, account) => sum + account.balanceMinor, 0)
@@ -254,15 +253,28 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         return sum + (group === 'income' || group === 'capital_gain' ? direction : -direction) * t.amountMinor
       }, 0)
   }
-  const expenseCategories = data.categories.filter((c) => c.reportGroup === 'expense' && !c.hidden)
   const budgetForCategory = (categoryId: string) => data.budgets
     .filter((budget) => budget.month === selectedMonthKey && budget.categoryId === categoryId)
     .reduce((sum, budget) => sum + budget.amountMinor, 0)
-  const totalBudget = expenseCategories.reduce((sum, category) => sum + budgetForCategory(category.id), 0)
+  const companyCategoryGroupIds = new Set(data.categoryGroups.filter((group) => group.name.toLocaleLowerCase('en') === 'company').map((group) => group.id))
+  const companyCategories = data.categories.filter((category) => category.categoryGroupId && companyCategoryGroupIds.has(category.categoryGroupId))
+  const companyIncome = companyCategories.filter((category) => category.reportGroup === 'income').reduce((sum, category) => sum + categorySpending(category.id), 0)
+  const companyExpenses = companyCategories.filter((category) => category.reportGroup === 'expense').reduce((sum, category) => sum + categorySpending(category.id), 0)
+  const estimatedCompanyTax = Math.max(0, Math.round((companyIncome - companyExpenses) * data.settings.estimatedCompanyTaxRateBps / 10_000))
+  const plannedForGroup = (group: ReportGroup) => data.categories.filter((category) => !category.hidden && category.reportGroup === group).reduce((sum, category) => sum + budgetForCategory(category.id), 0)
+  const plannedIncome = plannedForGroup('income')
+  const plannedExpenses = plannedForGroup('expense')
+  const plannedTaxes = plannedForGroup('tax')
+  const plannedCapitalGains = plannedForGroup('capital_gain')
+  const plannedCompanyIncome = companyCategories.filter((category) => !category.hidden && category.reportGroup === 'income').reduce((sum, category) => sum + budgetForCategory(category.id), 0)
+  const plannedCompanyExpenses = companyCategories.filter((category) => !category.hidden && category.reportGroup === 'expense').reduce((sum, category) => sum + budgetForCategory(category.id), 0)
+  const plannedCompanyTax = Math.max(0, Math.round((plannedCompanyIncome - plannedCompanyExpenses) * data.settings.estimatedCompanyTaxRateBps / 10_000))
+  const actualResult = income - expenses - taxesPaid - estimatedCompanyTax + capitalGains
+  const plannedResult = plannedIncome - plannedExpenses - plannedTaxes - plannedCompanyTax + plannedCapitalGains
   const selectedCategory = data.categories.find((category) => category.id === categoryMatch?.params.categoryId)
   const selectedAccount = data.accounts.find((account) => account.id === accountMatch?.params.accountId)
   const selectedPayee = data.payees.find((payee) => payee.id === payeeMatch?.params.payeeId)
-  const pageTitle = selectedAccount?.name ?? selectedCategory?.name ?? selectedPayee?.name ?? navItems.find((item) => item.id === page)?.label ?? (page === 'accounts' ? 'Accounts' : 'Overview')
+  const pageTitle = selectedAccount?.name ?? selectedCategory?.name ?? selectedPayee?.name ?? navItems.find((item) => item.id === page)?.label ?? 'Budget'
   const accountsByBalanceSheetGroup = balanceSheetGroups.map((group) => ({ group, accounts: activeAccounts.filter((account) => accountBalanceSheetGroup(account) === group) }))
 
   function pathWithMonth(path: string, month = viewedMonth) {
@@ -388,7 +400,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         payees: current.payees.map((payee) => payee.defaultCategoryId === categoryId ? { ...payee, defaultCategoryId: undefined } : payee),
         bankImportCandidates: current.bankImportCandidates.map((candidate) => candidate.categoryId === categoryId ? { ...candidate, categoryId: undefined } : candidate),
       }))
-      goTo('/budgets')
+      goTo('/')
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not delete the category.'))
       throw error
@@ -822,15 +834,6 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
 
         {syncError && <div className="sync-error" role="alert">{syncError}</div>}
 
-        {page === 'overview' && (
-          <Overview
-            accounts={activeAccounts} categories={expenseCategories} transactionCategories={data.categories} transactions={transactions}
-            income={income} expenses={expenses} net={net} totalBalance={totalBalance}
-            totalBudget={totalBudget} categorySpending={categorySpending} budgetForCategory={budgetForCategory}
-            onAllTransactions={() => goTo('/transactions')} onAddAccount={() => setModal('account')}
-            onAddCategory={() => setModal('category')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onSelectAccount={(id) => goTo(`/accounts/${id}`)}
-          />
-        )}
         {page === 'transactions' && (
           <TransactionsPage transactions={transactions} allTransactions={data.transactions} accounts={data.accounts} categories={data.categories} search={search} setSearch={setSearch} onEditCategory={setCategoryTarget} />
         )}
@@ -838,7 +841,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <PayeesPage payees={data.payees} mappings={data.payeeMappings} transactions={data.transactions} categories={data.categories} accounts={data.accounts} onSelectPayee={(id) => goTo(`/payees/${id}`)} onMapPayee={mapUnmatchedPayee} onCreatePayee={createPayeeFromUnmatched} />
         )}
         {page === 'budgets' && !selectedCategory && (
-          <BudgetsPage categories={data.categories} categoryGroups={data.categoryGroups} categorySpending={categorySpending} budgetForCategory={budgetForCategory} onAdd={() => setModal('category')} onManageGroups={() => setModal('category-groups')} onSelectCategory={(id) => goTo(`/categories/${id}`)} />
+          <BudgetsPage categories={data.categories} categoryGroups={data.categoryGroups} categorySpending={categorySpending} budgetForCategory={budgetForCategory} totalBalance={totalBalance} income={income} expenses={expenses} estimatedCompanyTax={estimatedCompanyTax} actualResult={actualResult} plannedIncome={plannedIncome} plannedExpenses={plannedExpenses} plannedCompanyTax={plannedCompanyTax} plannedResult={plannedResult} defaultCurrency={workspace.defaultCurrency} taxRateBps={data.settings.estimatedCompanyTaxRateBps} onUpdateTaxRate={changeTaxRate} onAdd={() => setModal('category')} onManageGroups={() => setModal('category-groups')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onUnhideCategory={(id) => setCategoryHidden(id, false)} />
         )}
         {page === 'reports' && (
           <ReportsPage data={data} viewedMonth={viewedMonth} defaultCurrency={workspace.defaultCurrency} onUpdateTaxRate={changeTaxRate} />
@@ -850,7 +853,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
         )}
         {selectedCategory && (
-          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTimeTransactionCount={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id).length} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} onUpdateBudget={updateBudget} onUpdateGroup={changeCategoryGroup} onRename={() => setModal('edit-category')} onDelete={removeUnusedCategory} onSetHidden={setCategoryHidden} onBack={() => goTo('/budgets')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
+          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTimeTransactionCount={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id).length} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} onUpdateBudget={updateBudget} onUpdateGroup={changeCategoryGroup} onRename={() => setModal('edit-category')} onDelete={removeUnusedCategory} onSetHidden={setCategoryHidden} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
         )}
         {selectedPayee && (
           <PayeeDetailPage key={selectedPayee.id} payee={selectedPayee} payees={data.payees} mappings={data.payeeMappings.filter((mapping) => mapping.payeeId === selectedPayee.id)} transactions={data.transactions.filter((transaction) => transaction.payeeId === selectedPayee.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/payees')} onEditTransaction={setCategoryTarget} onUpdateDefaults={changePayeeDefaults} onAddMapping={addPayeeMapping} onUpdateMapping={changePayeeMapping} onRemoveMapping={removePayeeMapping} />
@@ -969,73 +972,6 @@ function HiddenCategoryActivityAlert({ categories, categorySpending, onSelectCat
       </div>
     </div>
   </div>
-}
-
-function Overview({ accounts, categories, transactionCategories, transactions, income, expenses, net, totalBalance, totalBudget, categorySpending, budgetForCategory, onAllTransactions, onAddAccount, onAddCategory, onSelectCategory, onSelectAccount }: {
-  accounts: Account[]; categories: Category[]; transactionCategories: Category[]; transactions: Transaction[]; income: number; expenses: number; net: number; totalBalance: number; totalBudget: number
-  categorySpending: (id: string) => number; budgetForCategory: (id: string) => number; onAllTransactions: () => void; onAddAccount: () => void; onAddCategory: () => void; onSelectCategory: (id: string) => void; onSelectAccount: (id: string) => void
-}) {
-  const budgetUsed = totalBudget ? Math.round((expenses / totalBudget) * 100) : 0
-  return (
-    <div className="page-content">
-      <section className="hero-grid">
-        <div className="balance-card">
-          <div className="card-heading"><span>Provisional balance</span><BadgeEuro size={20} /></div>
-          <strong>{formatMoney(totalBalance)}</strong>
-          <div className="balance-meta"><span>Across {accounts.filter((account) => account.currency === 'EUR').length} EUR accounts</span><span>Other currencies shown separately</span></div>
-          <div className="balance-orbit orbit-one" /><div className="balance-orbit orbit-two" />
-        </div>
-        <MetricCard label="Income" value={income} icon={<ArrowDownLeft size={19} />} tone="green" detail="This month" />
-        <MetricCard label="Expenses" value={expenses} icon={<ArrowUpRight size={19} />} tone="rust" detail={`${budgetUsed}% of budget`} />
-        <MetricCard label="Net cash flow" value={net} icon={<ArrowRight size={19} />} tone="blue" detail={net >= 0 ? 'You kept more than you spent' : 'Spending exceeds income'} />
-      </section>
-
-      <HiddenCategoryActivityAlert categories={transactionCategories} categorySpending={categorySpending} onSelectCategory={onSelectCategory} />
-
-      <section className="content-grid">
-        <div className="panel spending-panel">
-          <div className="panel-heading">
-            <div><span className="eyebrow">Monthly plan</span><h2>Spending by category</h2></div>
-            <button className="text-button" onClick={onAddCategory}><Plus size={16} />New category</button>
-          </div>
-          <div className="budget-summary">
-            <div><span>Spent</span><strong>{formatMoney(expenses)}</strong></div>
-            <div className="summary-rule" />
-            <div><span>Budgeted</span><strong>{formatMoney(totalBudget)}</strong></div>
-            <div className="summary-rule" />
-            <div><span>Available</span><strong className={totalBudget - expenses < 0 ? 'negative' : ''}>{formatMoney(totalBudget - expenses)}</strong></div>
-          </div>
-          <div className="category-list">
-            {categories.map((category) => <CategoryRow key={category.id} category={category} spent={categorySpending(category.id)} budget={budgetForCategory(category.id)} onSelect={() => onSelectCategory(category.id)} />)}
-          </div>
-        </div>
-
-        <div className="side-stack">
-          <div className="panel accounts-panel">
-            <div className="panel-heading compact"><h2>Accounts</h2><button className="icon-button" aria-label="Add account" onClick={onAddAccount}><Plus size={18} /></button></div>
-            {accounts.map((account) => (
-              <button type="button" className="account-row" key={account.id} onClick={() => onSelectAccount(account.id)} aria-label={`View ${account.name} transactions`}>
-                <span className="account-dot" style={{ background: account.color }}><CreditCard size={17} /></span>
-                <div><strong>{account.name}</strong><span>{account.scope} · {account.type}</span></div>
-                <b>{formatMoney(account.balanceMinor, account.currency)}</b>
-              </button>
-            ))}
-          </div>
-
-          <div className="panel recent-panel">
-            <div className="panel-heading compact"><h2>Recent activity</h2><button className="text-button" onClick={onAllTransactions}>View all</button></div>
-            {transactions.slice(0, 5).map((transaction) => (
-              <TransactionRow key={transaction.id} transaction={transaction} categories={transactionCategories} accounts={accounts} compact />
-            ))}
-          </div>
-        </div>
-      </section>
-    </div>
-  )
-}
-
-function MetricCard({ label, value, icon, tone, detail }: { label: string; value: number; icon: React.ReactNode; tone: string; detail: string }) {
-  return <div className="metric-card"><div className={`metric-icon ${tone}`}>{icon}</div><span>{label}</span><strong>{formatMoney(value)}</strong><small>{detail}</small></div>
 }
 
 function CategoryRow({ category, spent, budget, onSelect }: { category: Category; spent: number; budget: number; onSelect: () => void }) {
@@ -1297,8 +1233,27 @@ function PayeeMappingRow({ mapping, payees, categories, onUpdate, onRemove }: { 
   </div>
 }
 
-function BudgetsPage({ categories, categoryGroups, categorySpending, budgetForCategory, onAdd, onManageGroups, onSelectCategory }: { categories: Category[]; categoryGroups: CategoryGroup[]; categorySpending: (id: string) => number; budgetForCategory: (id: string) => number; onAdd: () => void; onManageGroups: () => void; onSelectCategory: (id: string) => void }) {
-  const [showHidden, setShowHidden] = useState(false)
+function HiddenCategoryBudgetRow({ category, spent, budget, onSelect, onUnhide }: { category: Category; spent: number; budget: number; onSelect: () => void; onUnhide: () => Promise<void> }) {
+  const [unhiding, setUnhiding] = useState(false)
+  return <div className="hidden-category-budget-row">
+    <CategoryRow category={category} spent={spent} budget={budget} onSelect={onSelect} />
+    <button type="button" className="secondary-button hidden-category-unhide" disabled={unhiding} onClick={async () => {
+      setUnhiding(true)
+      try { await onUnhide() } finally { setUnhiding(false) }
+    }}>{unhiding ? 'Unhiding…' : 'Unhide'}</button>
+  </div>
+}
+
+function BudgetSummaryItem({ label, actual, planned, currency, tone }: { label: string; actual: number; planned?: number; currency: string; tone?: string }) {
+  return <div className={`budget-summary-item ${tone ?? ''}`}><span>{label}</span><strong>{formatMoney(actual, currency)}</strong>{planned !== undefined && <small>Plan {formatMoney(planned, currency)}</small>}</div>
+}
+
+function BudgetsPage({ categories, categoryGroups, categorySpending, budgetForCategory, totalBalance, income, expenses, estimatedCompanyTax, actualResult, plannedIncome, plannedExpenses, plannedCompanyTax, plannedResult, defaultCurrency, taxRateBps, onUpdateTaxRate, onAdd, onManageGroups, onSelectCategory, onUnhideCategory }: {
+  categories: Category[]; categoryGroups: CategoryGroup[]; categorySpending: (id: string) => number; budgetForCategory: (id: string) => number
+  totalBalance: number; income: number; expenses: number; estimatedCompanyTax: number; actualResult: number; plannedIncome: number; plannedExpenses: number; plannedCompanyTax: number; plannedResult: number; defaultCurrency: string; taxRateBps: number
+  onUpdateTaxRate: (rateBps: number) => void; onAdd: () => void; onManageGroups: () => void; onSelectCategory: (id: string) => void; onUnhideCategory: (id: string) => Promise<void>
+}) {
+  const [showHiddenOnly, setShowHiddenOnly] = useState(false)
   const visibleCategories = categories.filter((category) => !category.hidden)
   const hiddenCategories = categories.filter((category) => category.hidden)
   const incomeCategories = visibleCategories.filter((category) => category.reportGroup === 'income')
@@ -1310,7 +1265,21 @@ function BudgetsPage({ categories, categoryGroups, categorySpending, budgetForCa
     return [...knownGroups, ...(ungrouped.length ? [{ group: { id: 'ungrouped', name: 'Other', sortOrder: 999, showCategories: true }, rows: ungrouped }] : [])]
   }
   const section = (title: string, subtitle: string, rows: Category[]) => <section className="budget-section"><div className="budget-section-heading"><div><h3>{title}</h3><span>{subtitle}</span></div></div>{groupedRows(rows).map(({ group, rows: groupCategories }) => <div className="category-group-block" key={group.id}><div className="category-group-label">{group.name}</div><div className="category-list roomy">{groupCategories.map((category) => <CategoryRow key={category.id} category={category} spent={categorySpending(category.id)} budget={budgetForCategory(category.id)} onSelect={() => onSelectCategory(category.id)} />)}</div></div>)}</section>
-  return <div className="page-content narrow-page"><HiddenCategoryActivityAlert categories={categories} categorySpending={categorySpending} onSelectCategory={onSelectCategory} /><div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>Income, expense & tax plan</h2></div><div className="budget-page-actions">{hiddenCategories.length > 0 && <button className="text-button" onClick={() => setShowHidden((current) => !current)}>{showHidden ? <EyeOff size={16} /> : <Eye size={16} />}{showHidden ? 'Hide archived' : `Show hidden (${hiddenCategories.length})`}</button>}<button className="secondary-button" onClick={onManageGroups}><Settings size={16} />Manage groups</button><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button></div></div>{section('Planned income', 'Actual income compared with this month’s plan', incomeCategories)}{section('Expense budgets', 'Net spending compared with this month’s budget', expenseCategories)}{taxCategories.length > 0 && section('Tax plan', 'Recorded tax costs compared with this month’s plan', taxCategories)}{showHidden && hiddenCategories.length > 0 && section('Hidden categories', 'Kept for transaction history, but excluded from active planning and new transactions', hiddenCategories)}</div></div>
+  const hiddenSection = <section className="budget-section"><div className="budget-section-heading"><div><h3>Hidden categories</h3><span>Unhide categories you want to return to active planning and new transactions</span></div></div>{groupedRows(hiddenCategories).map(({ group, rows }) => <div className="category-group-block" key={group.id}><div className="category-group-label">{group.name}</div><div className="category-list roomy">{rows.map((category) => <HiddenCategoryBudgetRow key={category.id} category={category} spent={categorySpending(category.id)} budget={budgetForCategory(category.id)} onSelect={() => onSelectCategory(category.id)} onUnhide={() => onUnhideCategory(category.id)} />)}</div></div>)}</section>
+  return <div className="page-content narrow-page">
+    {!showHiddenOnly && <section className="panel budget-dashboard-summary">
+      <div className="budget-dashboard-heading"><div><span className="eyebrow">Personal + company</span><h2>Monthly position</h2><p>Internal transfers are excluded.</p></div><label className="budget-tax-rate"><span>Company tax estimate</span><div><input aria-label="Company tax planning rate" type="number" min="0" max="100" step="0.1" value={taxRateBps / 100} onChange={(event) => onUpdateTaxRate(Math.max(0, Math.round(Number(event.target.value) * 100)))} /><b>%</b></div></label></div>
+      <div className="budget-summary-grid">
+        <BudgetSummaryItem label="Provisional balance" actual={totalBalance} currency={defaultCurrency} />
+        <BudgetSummaryItem label="Income" actual={income} planned={plannedIncome} currency={defaultCurrency} tone="positive-summary" />
+        <BudgetSummaryItem label="Expenses" actual={expenses} planned={plannedExpenses} currency={defaultCurrency} />
+        <BudgetSummaryItem label="Estimated company tax" actual={estimatedCompanyTax} planned={plannedCompanyTax} currency={defaultCurrency} />
+        <BudgetSummaryItem label="Result" actual={actualResult} planned={plannedResult} currency={defaultCurrency} tone={actualResult < 0 ? 'negative-summary' : 'result-summary'} />
+      </div>
+    </section>}
+    <HiddenCategoryActivityAlert categories={categories} categorySpending={categorySpending} onSelectCategory={onSelectCategory} />
+    <div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>{showHiddenOnly ? 'Hidden categories' : 'Budget by category'}</h2></div><div className="budget-page-actions">{hiddenCategories.length > 0 && <button className="text-button" onClick={() => setShowHiddenOnly((current) => !current)}>{showHiddenOnly ? <EyeOff size={16} /> : <Eye size={16} />}{showHiddenOnly ? 'Show active categories' : `Show hidden only (${hiddenCategories.length})`}</button>}<button className="secondary-button" onClick={onManageGroups}><Settings size={16} />Manage groups</button><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button></div></div>{showHiddenOnly ? hiddenSection : <>{section('Planned income', 'Actual income compared with this month’s plan', incomeCategories)}{section('Expense budgets', 'Net spending compared with this month’s budget', expenseCategories)}{taxCategories.length > 0 && section('Tax plan', 'Recorded tax costs compared with this month’s plan', taxCategories)}</>}</div>
+  </div>
 }
 
 type ReportPeriod = 'month' | 'year'
