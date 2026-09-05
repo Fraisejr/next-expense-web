@@ -120,6 +120,64 @@ export type LoadedWorkspace = {
   data: AppData
 }
 
+export const workspaceBackupTableNames = [
+  'accounts',
+  'category_groups',
+  'categories',
+  'payees',
+  'payee_mappings',
+  'periods',
+  'budgets',
+  'fx_rates',
+  'transactions',
+  'bank_connections',
+  'import_runs',
+  'bank_account_aliases',
+  'bank_transaction_refs',
+  'bank_import_candidates',
+] as const
+
+export type WorkspaceBackup = {
+  format: 'next-expense-workspace-backup'
+  version: 1
+  createdAt: string
+  workspace: {
+    id: string
+    name: string
+    default_currency: string
+    import_timezone: string
+    estimated_company_tax_rate_bps: number
+    created_at?: string
+    updated_at?: string
+  }
+  tables: Record<(typeof workspaceBackupTableNames)[number], Row[]>
+}
+
+export function isWorkspaceBackup(value: unknown): value is WorkspaceBackup {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<WorkspaceBackup>
+  if (candidate.format !== 'next-expense-workspace-backup' || candidate.version !== 1) return false
+  if (!candidate.workspace || typeof candidate.workspace !== 'object' || typeof candidate.workspace.name !== 'string') return false
+  if (!candidate.tables || typeof candidate.tables !== 'object') return false
+  return workspaceBackupTableNames.every((tableName) => Array.isArray(candidate.tables?.[tableName]))
+}
+
+export async function exportWorkspaceBackup(workspaceId: string): Promise<WorkspaceBackup> {
+  const { data, error } = await neon.rpc('export_workspace_backup', { p_workspace_id: workspaceId })
+  if (error) throw error
+  if (!isWorkspaceBackup(data)) throw new Error('The server returned an invalid backup package.')
+  return data
+}
+
+export async function restoreWorkspaceBackup(workspaceId: string, backup: WorkspaceBackup) {
+  const { data, error } = await neon.rpc('restore_workspace_backup', {
+    p_workspace_id: workspaceId,
+    p_backup: backup,
+  })
+  if (error) throw error
+  return data as { restoredAt?: string; counts?: Record<string, number> } | null
+}
+
 export async function loadWorkspace(): Promise<LoadedWorkspace> {
   return loadWorkspaceWithRetries(3)
 }
@@ -153,7 +211,11 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
   const transactions: Transaction[] = transactionRows.map((row) => ({
     id: row.id as string,
     date: row.transaction_date as string,
-    payee: (row.transaction_type === 'opening_balance' ? 'Opening balance' : payeeNames.get(row.payee_id as string) || row.payee_name || row.memo || 'Unknown payee') as string,
+    payee: (row.transaction_type === 'opening_balance'
+      ? 'Opening balance'
+      : row.transaction_type === 'balance_adjustment'
+        ? 'Balance adjustment'
+        : payeeNames.get(row.payee_id as string) || row.payee_name || row.memo || 'Unknown payee') as string,
     payeeId: (row.payee_id as string | null) ?? undefined,
     note: (row.memo as string | null) ?? undefined,
     amountMinor: number(row.amount_minor),
@@ -817,14 +879,24 @@ export async function updateBalanceAdjustment(workspaceId: string, transactionId
 }
 
 export async function updateTransactionDetails(workspaceId: string, transactionId: string, payeeId: string, categoryId: string, memo: string) {
+  const { data: existingRows, error: lookupError } = await neon.from('transactions')
+    .select('transaction_type')
+    .eq('workspace_id', workspaceId)
+    .eq('id', transactionId)
+    .limit(1)
+  if (lookupError) throw lookupError
+  const transactionType = existingRows?.[0]?.transaction_type
+  if (transactionType !== 'expense' && transactionType !== 'income') {
+    throw new Error('The transaction could not be updated. Transfers and opening balances do not have categories.')
+  }
+
   const { data, error } = await neon.from('transactions')
     .update({ payee_id: payeeId, category_id: categoryId, memo: memo.normalize('NFKC').trim() || null })
     .eq('workspace_id', workspaceId)
     .eq('id', transactionId)
-    .in('transaction_type', ['expense', 'income'])
     .select('id')
   if (error) throw error
-  if (!data?.length) throw new Error('The transaction could not be updated. Transfers and opening balances do not have categories.')
+  if (!data?.length) throw new Error('The transaction could not be updated because it no longer exists or you no longer have access to it.')
 }
 
 export async function updateTransactionCategories(workspaceId: string, transactionIds: string[], categoryId: string) {

@@ -2,15 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import {
   ArrowLeftRight, ArrowRight, Banknote, BriefcaseBusiness,
   BarChart3, BriefcaseMedical, CalendarDays, CarFront, ChevronDown, ChevronLeft, ChevronRight, CircleHelp,
-  ArrowDown, ArrowUp, Check, CreditCard, Dumbbell, Eye, EyeOff, GripVertical, HeartHandshake, House, Link2, LoaderCircle, LogOut, Menu, Pencil, Plane, Plus, ReceiptText, Search, Settings, Trash2,
+  ArrowDown, ArrowUp, Check, CreditCard, Download, Dumbbell, Eye, EyeOff, FileCheck2, GripVertical, HeartHandshake, House, Link2, LoaderCircle, LogOut, Menu, Pencil, Plane, Plus, ReceiptText, Search, Settings, Trash2, Upload,
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, assignPayeeMapping, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteCategoryGroup, deletePayeeMapping, deleteUnusedCategory, ensurePayees, linkBankAccount, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateCategoryName, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
+import { approveBankImportCandidate, assignPayeeMapping, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteCategoryGroup, deletePayeeMapping, deleteUnusedCategory, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateCategoryName, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Category, CategoryGroup, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
 
-type Page = 'transactions' | 'payees' | 'budgets' | 'reports' | 'accounts'
+type Page = 'transactions' | 'payees' | 'budgets' | 'reports' | 'accounts' | 'settings'
 type Modal = 'transaction' | 'account' | 'edit-account' | 'balance-adjustment' | 'category' | 'edit-category' | 'category-groups' | 'bank' | null
 const BANK_LINK_STORAGE_KEY = 'next-expense-gocardless-link'
 const moneyFormatters = new Map<string, Intl.NumberFormat>()
@@ -265,6 +265,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         : location.pathname === '/budgets' ? 'budgets'
           : location.pathname === '/reports' || location.pathname === '/performance' ? 'reports'
             : location.pathname === '/accounts' ? 'accounts'
+              : location.pathname === '/settings' ? 'settings'
               : 'budgets'
   const requestedMonth = fromMonthKey(new URLSearchParams(location.search).get('month'))
   const viewedMonth = requestedMonth ?? new Date()
@@ -351,7 +352,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   const selectedCategory = data.categories.find((category) => category.id === categoryMatch?.params.categoryId)
   const selectedAccount = data.accounts.find((account) => account.id === accountMatch?.params.accountId)
   const selectedPayee = data.payees.find((payee) => payee.id === payeeMatch?.params.payeeId)
-  const pageTitle = selectedAccount?.name ?? selectedCategory?.name ?? selectedPayee?.name ?? navItems.find((item) => item.id === page)?.label ?? 'Budget'
+  const pageTitle = selectedAccount?.name ?? selectedCategory?.name ?? selectedPayee?.name ?? (page === 'settings' ? 'Settings' : navItems.find((item) => item.id === page)?.label) ?? 'Budget'
   const accountsByBalanceSheetGroup = balanceSheetGroups.map((group) => ({ group, accounts: activeAccounts.filter((account) => accountBalanceSheetGroup(account) === group) }))
 
   function pathWithMonth(path: string, month = viewedMonth) {
@@ -998,7 +999,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
 
         <div className="sidebar-bottom">
           <button className="nav-item"><CircleHelp size={19} /><span>Help & feedback</span></button>
-          <button className="nav-item"><Settings size={19} /><span>Settings</span></button>
+          <a href={pathWithMonth('/settings')} className={page === 'settings' ? 'nav-item active' : 'nav-item'} onClick={(event) => useClientNavigation(event, () => goTo('/settings'))}><Settings size={19} /><span>Settings</span></a>
           <div className="profile">
             <div className="avatar">{userName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}</div>
             <div><strong>{userName}</strong><span>{workspace.workspaceName}</span></div>
@@ -1011,15 +1012,15 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         <header className="topbar">
           <div className="topbar-title">
             <button className="icon-button mobile-menu" aria-label="Open menu" onClick={() => setMobileNav(!mobileNav)}><Menu size={21} /></button>
-            <div><span className="eyebrow">{selectedAccount ? 'Accounts' : selectedCategory ? 'Categories' : selectedPayee ? 'Payees' : page === 'payees' ? 'Directory' : 'Personal budget'}</span><h1>{pageTitle}</h1></div>
+            <div><span className="eyebrow">{selectedAccount ? 'Accounts' : selectedCategory ? 'Categories' : selectedPayee ? 'Payees' : page === 'payees' ? 'Directory' : page === 'settings' ? workspace.workspaceName : 'Personal budget'}</span><h1>{pageTitle}</h1></div>
           </div>
           <div className="top-actions">
-            {page !== 'payees' && <div className="month-switcher">
+            {page !== 'payees' && page !== 'settings' && <div className="month-switcher">
               <button aria-label="Previous month" onClick={() => moveMonth(-1)}><ChevronLeft size={17} /></button>
               <MonthPicker value={selectedMonthKey} onChange={selectMonth} />
               <button aria-label="Next month" onClick={() => moveMonth(1)}><ChevronRight size={17} /></button>
             </div>}
-            <button className="primary-button" onClick={() => setModal('transaction')}><Plus size={18} />Add transaction</button>
+            {page !== 'settings' && <button className="primary-button" onClick={() => setModal('transaction')}><Plus size={18} />Add transaction</button>}
           </div>
         </header>
 
@@ -1039,6 +1040,9 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         )}
         {page === 'accounts' && !selectedAccount && (
           <AccountsPage accounts={activeAccounts} totalBalance={totalBalance} defaultCurrency={workspace.defaultCurrency} onAdd={() => setModal('account')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onReorder={reorderAccounts} />
+        )}
+        {page === 'settings' && (
+          <SettingsPage workspaceId={workspace.workspaceId} workspaceName={workspace.workspaceName} />
         )}
         {selectedAccount && (
           <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
@@ -1170,6 +1174,145 @@ function HiddenCategoryActivityAlert({ categories, categorySpending, onSelectCat
   </div>
 }
 
+function backupFilename(backup: WorkspaceBackup, prefix = 'next-expense-backup') {
+  const createdAt = new Date(backup.createdAt)
+  const timestamp = Number.isNaN(createdAt.getTime())
+    ? new Date().toISOString()
+    : createdAt.toISOString()
+  return `${prefix}-${timestamp.slice(0, 16).replace('T', '-').replace(':', '')}.json`
+}
+
+function downloadWorkspaceBackup(backup: WorkspaceBackup, prefix?: string) {
+  const file = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(file)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = backupFilename(backup, prefix)
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+function SettingsPage({ workspaceId, workspaceName }: { workspaceId: string; workspaceName: string }) {
+  const [exporting, setExporting] = useState(false)
+  const [restoring, setRestoring] = useState(false)
+  const [backup, setBackup] = useState<WorkspaceBackup | null>(null)
+  const [backupFileName, setBackupFileName] = useState('')
+  const [backupFileSize, setBackupFileSize] = useState(0)
+  const [confirmed, setConfirmed] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
+
+  async function exportBackup() {
+    setExporting(true)
+    setError('')
+    setNotice('')
+    try {
+      const exported = await exportWorkspaceBackup(workspaceId)
+      downloadWorkspaceBackup(exported)
+      setNotice('Backup downloaded. Keep it somewhere you can find again.')
+    } catch (cause) {
+      setError(getErrorMessage(cause, 'Could not create the backup.'))
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  async function chooseBackup(file?: File) {
+    setBackup(null)
+    setBackupFileName('')
+    setBackupFileSize(0)
+    setConfirmed(false)
+    setNotice('')
+    setError('')
+    if (!file) return
+    if (file.size > 100 * 1024 * 1024) {
+      setError('This backup is larger than 100 MB and cannot be restored here.')
+      return
+    }
+    try {
+      const parsed: unknown = JSON.parse(await file.text())
+      if (!isWorkspaceBackup(parsed)) throw new Error('This is not a complete Next Expense backup.')
+      setBackup(parsed)
+      setBackupFileName(file.name)
+      setBackupFileSize(file.size)
+    } catch (cause) {
+      setError(getErrorMessage(cause, 'Could not read this backup file.'))
+    }
+  }
+
+  async function restoreBackup() {
+    if (!backup || !confirmed) return
+    setRestoring(true)
+    setError('')
+    setNotice('')
+    try {
+      const safetyBackup = await exportWorkspaceBackup(workspaceId)
+      downloadWorkspaceBackup(safetyBackup, 'next-expense-before-restore')
+      await restoreWorkspaceBackup(workspaceId, backup)
+      window.location.reload()
+    } catch (cause) {
+      setError(getErrorMessage(cause, 'Could not restore the backup. Your existing workspace was left unchanged.'))
+      setRestoring(false)
+    }
+  }
+
+  const keyCounts = backup ? [
+    ['Accounts', backup.tables.accounts.length],
+    ['Transactions', backup.tables.transactions.length],
+    ['Categories', backup.tables.categories.length],
+    ['Budgets', backup.tables.budgets.length],
+    ['Payees', backup.tables.payees.length],
+  ] as const : []
+  const createdAt = backup ? new Date(backup.createdAt) : null
+
+  return <div className="page-content narrow-page settings-page">
+    <section className="panel settings-intro">
+      <span className="eyebrow">Your data</span>
+      <h2>Backup and restore</h2>
+      <p>Save a complete copy of {workspaceName} to this computer. The file contains your financial data, so keep it somewhere private.</p>
+    </section>
+
+    <div className="settings-backup-grid">
+      <section className="panel settings-card">
+        <div className="settings-card-icon"><Download size={21} /></div>
+        <div>
+          <h2>Create a backup</h2>
+          <p>Downloads accounts, transactions, budgets, categories, payees, exchange rates, and bank import history. Login details and bank credentials are not included.</p>
+        </div>
+        <button type="button" className="primary-button settings-action" disabled={exporting || restoring} onClick={() => void exportBackup()}>{exporting ? <LoaderCircle className="spin-icon" size={17} /> : <Download size={17} />}{exporting ? 'Preparing backup…' : 'Download backup'}</button>
+      </section>
+
+      <section className="panel settings-card restore-card">
+        <div className="settings-card-icon rust"><Upload size={21} /></div>
+        <div>
+          <h2>Restore from a backup</h2>
+          <p>Choose a Next Expense backup file. You can review its date and contents before anything changes.</p>
+        </div>
+        <label className="secondary-button settings-file-button">
+          <Upload size={17} />Choose backup file
+          <input type="file" accept=".json,application/json" disabled={restoring} onChange={(event) => { void chooseBackup(event.target.files?.[0]); event.currentTarget.value = '' }} />
+        </label>
+
+        {backup && <div className="backup-preview">
+          <div className="backup-preview-heading">
+            <FileCheck2 size={20} />
+            <div><strong>{backup.workspace.name}</strong><span>{Number.isNaN(createdAt?.getTime() ?? NaN) ? 'Date unavailable' : createdAt?.toLocaleString()} · {(backupFileSize / 1024 / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 })} MB</span><small>{backupFileName}</small></div>
+          </div>
+          <div className="backup-counts">{keyCounts.map(([label, count]) => <div key={label}><strong>{count.toLocaleString()}</strong><span>{label}</span></div>)}</div>
+          <label className="restore-confirmation"><input type="checkbox" checked={confirmed} disabled={restoring} onChange={(event) => setConfirmed(event.target.checked)} /><span>I understand this will replace all data in the current workspace.</span></label>
+          <button type="button" className="danger-button settings-action" disabled={!confirmed || restoring} onClick={() => void restoreBackup()}>{restoring ? <LoaderCircle className="spin-icon" size={17} /> : <Upload size={17} />}{restoring ? 'Restoring…' : 'Restore this backup'}</button>
+          <p className="restore-safety-note">A fresh backup of the current workspace will download automatically before the restore starts.</p>
+        </div>}
+      </section>
+    </div>
+
+    {notice && <div className="settings-notice" role="status">{notice}</div>}
+    {error && <div className="settings-error" role="alert">{error}</div>}
+  </div>
+}
+
 function CategoryRow({ category, spent, budget, onSelect }: { category: Category; spent: number; budget: number; onSelect: () => void }) {
   const Icon = categoryIcons[category.icon as keyof typeof categoryIcons] ?? Sparkles
   const percent = budget ? Math.round((spent / budget) * 100) : 0
@@ -1276,7 +1419,7 @@ function PayeesPage({ payees, mappings, transactions, categories, accounts, onSe
   const unmatched = useMemo(() => {
     const unmatchedByName = new Map<string, { sourceName: string; count: number; lastTransaction: string; categoryIds: string[]; accountIds: string[] }>()
     for (const transaction of transactions) {
-      if (transaction.payeeId || transaction.type === 'transfer' || transaction.type === 'opening_balance') continue
+      if (transaction.payeeId || (transaction.type !== 'expense' && transaction.type !== 'income')) continue
       const sourceName = (transaction.payeeRaw ?? transaction.payee).normalize('NFKC').trim()
       if (!sourceName) continue
       const key = sourceName.toLocaleLowerCase('en')
