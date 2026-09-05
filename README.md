@@ -26,6 +26,7 @@ All monetary values are stored as integer minor units (cents). Decimal conversio
 - Historical exchange rates are supported and must be preserved during migration for cross-currency balances, transfers, and reporting.
 - Recurring transaction generation is intentionally unsupported. Legacy recurrence metadata may be retained for audit purposes, but future-dated generated transactions are excluded from imports and rejected by the database.
 - Every new income or expense transaction must have a category; new transfers must not have one. Historical transaction records remain untouched.
+- Legacy savings and investment categories remain visible for historical activity and monthly targets. Their plans do not roll into later months and are not savings balances; current saved value comes from the balances of the accounts holding the money.
 - The transaction ledger includes an all-time **Needs category** view for historical gaps. Any existing non-transfer transaction can be assigned or moved to an active category and linked to an existing or newly entered payee from its row. Payee choices show their saved default category, which can also be replaced while editing.
 
 ## Database

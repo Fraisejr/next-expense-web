@@ -6,7 +6,7 @@ import {
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, assignPayeeMapping, createAccount, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteCategoryGroup, deletePayeeMapping, deleteUnusedCategory, ensurePayees, linkBankAccount, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, updateAccountDetails, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateCategoryName, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updateTaxRate, updateTransactionCategories, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
+import { approveBankImportCandidate, assignPayeeMapping, createAccount, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteCategoryGroup, deletePayeeMapping, deleteUnusedCategory, ensurePayees, linkBankAccount, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, updateAccountDetails, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateCategoryName, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
 import { neon } from './neon'
 import type { Account, AccountScope, AppData, BalanceSheetGroup, BankImportCandidate, Category, CategoryGroup, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
 
@@ -635,14 +635,14 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
-  async function changeTransactionDetails(transactionId: string, payeeName: string, payeeId: string | undefined, categoryId: string, rememberDefault: boolean, rememberMapping: boolean, mappingSource: string, matchingTransactionIds: string[]) {
+  async function changeTransactionDetails(transactionId: string, payeeName: string, payeeId: string | undefined, categoryId: string, memo: string, rememberDefault: boolean, rememberMapping: boolean, mappingSource: string, matchingTransactionIds: string[]) {
     try {
       setSyncError('')
       const selectedPayee = payeeId ? data.payees.find((payee) => payee.id === payeeId) : undefined
       const [payee] = selectedPayee ? [selectedPayee] : await ensurePayees(workspace.workspaceId, [payeeName])
       const createdPayee = !data.payees.some((item) => item.id === payee.id)
       const transaction = data.transactions.find((item) => item.id === transactionId)
-      await updateTransactionDetails(workspace.workspaceId, transactionId, payee.id, categoryId)
+      await updateTransactionDetails(workspace.workspaceId, transactionId, payee.id, categoryId, memo)
       await updateTransactionCategories(workspace.workspaceId, matchingTransactionIds, categoryId)
       if (createdPayee && transaction) await updatePayeeDefaults(workspace.workspaceId, payee.id, categoryId, transaction.accountId)
       else if (rememberDefault) await updatePayeeDefaultCategory(workspace.workspaceId, payee.id, categoryId)
@@ -666,7 +666,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         payees: current.payees.some((item) => item.id === payee.id)
           ? current.payees.map((item) => item.id === payee.id ? payeeWithDefaults : item)
           : [...current.payees, payeeWithDefaults],
-        transactions: current.transactions.map((transaction) => transaction.id === transactionId ? { ...transaction, payeeId: payee.id, payee: payee.name, categoryId } : matchingTransactionIds.includes(transaction.id) ? { ...transaction, categoryId } : transaction),
+        transactions: current.transactions.map((transaction) => transaction.id === transactionId ? { ...transaction, payeeId: payee.id, payee: payee.name, categoryId, note: memo.normalize('NFKC').trim() || undefined } : matchingTransactionIds.includes(transaction.id) ? { ...transaction, categoryId } : transaction),
       }))
       setCategoryTarget(null)
     } catch (error) {
@@ -708,8 +708,9 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   async function createPayeeFromUnmatched(sourceName: string, payeeName: string, categoryId: string, accountId: string) {
     try {
       setSyncError('')
-      const payee: Payee = { id: uid(), name: payeeName.normalize('NFKC').trim(), defaultCategoryId: categoryId, defaultAccountId: accountId }
-      await createPayee(workspace.workspaceId, payee, data.payees.length)
+      const [payee] = await ensurePayees(workspace.workspaceId, [payeeName])
+      if (!payee) throw new Error('The payee could not be created.')
+      await updatePayeeDefaults(workspace.workspaceId, payee.id, categoryId || null, accountId || null)
       await assignPayeeMapping(workspace.workspaceId, sourceName, payee.id)
       const refreshed = await loadWorkspace()
       setData(refreshed.data)
@@ -745,6 +746,26 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       }))
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not update the payee defaults.'))
+      throw error
+    }
+  }
+
+  async function renamePayee(payeeId: string, name: string) {
+    const normalizedName = name.normalize('NFKC').trim()
+    if (!normalizedName) throw new Error('A payee name is required.')
+    if (data.payees.some((payee) => payee.id !== payeeId && payee.name.localeCompare(normalizedName, undefined, { sensitivity: 'accent' }) === 0)) {
+      throw new Error(`A payee named “${normalizedName}” already exists.`)
+    }
+    try {
+      setSyncError('')
+      await updatePayeeName(workspace.workspaceId, payeeId, normalizedName)
+      setData((current) => ({
+        ...current,
+        payees: current.payees.map((payee) => payee.id === payeeId ? { ...payee, name: normalizedName } : payee),
+        transactions: current.transactions.map((transaction) => transaction.payeeId === payeeId ? { ...transaction, payee: normalizedName } : transaction),
+      }))
+    } catch (error) {
+      setSyncError(getErrorMessage(error, 'Could not rename the payee.'))
       throw error
     }
   }
@@ -970,13 +991,13 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <AccountsPage accounts={activeAccounts} totalBalance={totalBalance} defaultCurrency={workspace.defaultCurrency} onAdd={() => setModal('account')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onReorder={reorderAccounts} />
         )}
         {selectedAccount && (
-          <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
+          <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
         )}
         {selectedCategory && (
           <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTimeTransactionCount={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id).length} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} onUpdateBudget={updateBudget} onUpdateGroup={changeCategoryGroup} onRename={() => setModal('edit-category')} onDelete={removeUnusedCategory} onSetHidden={setCategoryHidden} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
         )}
         {selectedPayee && (
-          <PayeeDetailPage key={selectedPayee.id} payee={selectedPayee} payees={data.payees} mappings={data.payeeMappings.filter((mapping) => mapping.payeeId === selectedPayee.id)} transactions={data.transactions.filter((transaction) => transaction.payeeId === selectedPayee.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/payees')} onEditTransaction={setCategoryTarget} onUpdateDefaults={changePayeeDefaults} onAddMapping={addPayeeMapping} onUpdateMapping={changePayeeMapping} onRemoveMapping={removePayeeMapping} />
+          <PayeeDetailPage key={selectedPayee.id} payee={selectedPayee} payees={data.payees} mappings={data.payeeMappings.filter((mapping) => mapping.payeeId === selectedPayee.id)} transactions={data.transactions.filter((transaction) => transaction.payeeId === selectedPayee.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/payees')} onEditTransaction={setCategoryTarget} onRename={renamePayee} onUpdateDefaults={changePayeeDefaults} onAddMapping={addPayeeMapping} onUpdateMapping={changePayeeMapping} onRemoveMapping={removePayeeMapping} />
         )}
       </main>
 
@@ -994,7 +1015,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       {categoryTarget && <ModalShell title={categoryTarget.type === 'opening_balance' ? 'Edit opening balance' : 'Edit transaction'} onClose={() => setCategoryTarget(null)}>
         {categoryTarget.type === 'opening_balance'
           ? <OpeningBalanceForm transaction={categoryTarget} onSubmit={(date, amountMinor) => changeOpeningBalance(categoryTarget.id, date, amountMinor)} />
-          : <TransactionDetailsForm transaction={categoryTarget} transactions={data.transactions} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} onSubmit={(payeeName, payeeId, categoryId, rememberDefault, rememberMapping, mappingSource, matchingTransactionIds) => changeTransactionDetails(categoryTarget.id, payeeName, payeeId, categoryId, rememberDefault, rememberMapping, mappingSource, matchingTransactionIds)} />}
+          : <TransactionDetailsForm transaction={categoryTarget} transactions={data.transactions} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} onSubmit={(payeeName, payeeId, categoryId, memo, rememberDefault, rememberMapping, mappingSource, matchingTransactionIds) => changeTransactionDetails(categoryTarget.id, payeeName, payeeId, categoryId, memo, rememberDefault, rememberMapping, mappingSource, matchingTransactionIds)} />}
       </ModalShell>}
     </div>
   )
@@ -1127,6 +1148,7 @@ function TransactionRow({ transaction, categories, accounts, compact = false, fo
       <div>
         <strong>{isTransfer ? `Transfer to ${destinationAccount?.name ?? 'account'}` : isOpeningBalance ? 'Opening balance' : transaction.payee}{transaction.posted === false && <em className="pending-badge">Pending</em>}</strong>
         <span>{isTransfer ? `${sourceAccount?.name ?? 'Account'} → ${destinationAccount?.name ?? 'Account'}` : isOpeningBalance ? sourceAccount?.name ?? 'Unknown account' : showAccount ? sourceAccount?.name ?? 'Unknown account' : category?.name ?? 'Uncategorised'} · {formatShortDate(transaction.date)}</span>
+        {transaction.note?.trim() && <span className="transaction-memo">{transaction.note.trim()}</span>}
       </div>
       {onEditCategory && <button type="button" className={!category && !isOpeningBalance ? 'transaction-category-edit missing' : 'transaction-category-edit'} onClick={onEditCategory} aria-label={`Edit ${isOpeningBalance ? 'opening balance' : transaction.payee}`}><Pencil size={12} />Edit</button>}
       <b className={transaction.type === 'income' || transferIsIncoming || (isOpeningBalance && transaction.amountMinor >= 0) ? 'positive' : isTransfer && !focusAccountId ? 'transfer-amount' : ''}>{prefix}{formatMoney(amountMinor, transaction.currency)}</b>
@@ -1318,24 +1340,42 @@ function PayeeDirectory({ payees, mappings, transactions, categories, accounts, 
   </div>
 }
 
-function PayeeDetailPage({ payee, payees, mappings, transactions, categories, accounts, onBack, onEditTransaction, onUpdateDefaults, onAddMapping, onUpdateMapping, onRemoveMapping }: { payee: Payee; payees: Payee[]; mappings: PayeeMapping[]; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onBack: () => void; onEditTransaction: (transaction: Transaction) => void; onUpdateDefaults: (payeeId: string, categoryId: string, accountId: string) => Promise<void>; onAddMapping: (payeeId: string, sourceName: string) => Promise<void>; onUpdateMapping: (mappingId: string, sourceName: string, payeeId: string, matchType: PayeeMapping['matchType']) => Promise<void>; onRemoveMapping: (mappingId: string) => Promise<void> }) {
+function PayeeDetailPage({ payee, payees, mappings, transactions, categories, accounts, onBack, onEditTransaction, onRename, onUpdateDefaults, onAddMapping, onUpdateMapping, onRemoveMapping }: { payee: Payee; payees: Payee[]; mappings: PayeeMapping[]; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onBack: () => void; onEditTransaction: (transaction: Transaction) => void; onRename: (payeeId: string, name: string) => Promise<void>; onUpdateDefaults: (payeeId: string, categoryId: string, accountId: string) => Promise<void>; onAddMapping: (payeeId: string, sourceName: string) => Promise<void>; onUpdateMapping: (mappingId: string, sourceName: string, payeeId: string, matchType: PayeeMapping['matchType']) => Promise<void>; onRemoveMapping: (mappingId: string) => Promise<void> }) {
   const sortedTransactions = [...transactions].sort((left, right) => right.date.localeCompare(left.date))
   const expenseCount = transactions.filter((transaction) => transaction.type === 'expense').length
   const incomeCount = transactions.filter((transaction) => transaction.type === 'income').length
   const [defaultCategoryId, setDefaultCategoryId] = useState(payee.defaultCategoryId ?? '')
   const [defaultAccountId, setDefaultAccountId] = useState(payee.defaultAccountId ?? '')
+  const [renaming, setRenaming] = useState(false)
+  const [payeeName, setPayeeName] = useState(payee.name)
+  const [savingName, setSavingName] = useState(false)
   const [newMapping, setNewMapping] = useState('')
   const [savingDefaults, setSavingDefaults] = useState(false)
   const [addingMapping, setAddingMapping] = useState(false)
   const [error, setError] = useState('')
   const defaultsChanged = defaultCategoryId !== (payee.defaultCategoryId ?? '') || defaultAccountId !== (payee.defaultAccountId ?? '')
+  const normalizedPayeeNameValue = payeeName.normalize('NFKC').trim()
+  const duplicateName = payees.some((item) => item.id !== payee.id && item.name.localeCompare(normalizedPayeeNameValue, undefined, { sensitivity: 'accent' }) === 0)
   return <div className="page-content narrow-page">
     <div className="entity-page-toolbar"><button className="entity-back" onClick={onBack}><ChevronLeft size={16} />All payees</button></div>
     <div className="panel entity-detail-panel">
       <div className="entity-heading payee-detail-heading">
         <span className="entity-heading-icon payee-detail-icon">{payee.name.slice(0, 1).toLocaleUpperCase('en')}</span>
         <div><span className="eyebrow">Payee</span><h2>{payee.name}</h2></div>
+        <div className="entity-heading-actions"><button className="secondary-button" type="button" onClick={() => { setPayeeName(payee.name); setRenaming((current) => !current); setError('') }}><Pencil size={16} />Rename</button></div>
       </div>
+      {renaming && <form className="payee-name-editor" onSubmit={async (event) => {
+        event.preventDefault()
+        if (!normalizedPayeeNameValue || duplicateName || normalizedPayeeNameValue === payee.name) return
+        setSavingName(true)
+        setError('')
+        try { await onRename(payee.id, normalizedPayeeNameValue); setRenaming(false) } catch (cause) { setError(getErrorMessage(cause, 'Could not rename the payee.')) } finally { setSavingName(false) }
+      }}>
+        <label><span>Payee name</span><input autoFocus required value={payeeName} onChange={(event) => setPayeeName(event.target.value)} /></label>
+        <button className="secondary-button" type="button" onClick={() => { setPayeeName(payee.name); setRenaming(false); setError('') }}>Cancel</button>
+        <button className="primary-button" disabled={!normalizedPayeeNameValue || duplicateName || normalizedPayeeNameValue === payee.name || savingName}>{savingName ? 'Saving…' : 'Save name'}</button>
+        {duplicateName && <p className="auth-error" role="alert">A payee named “{normalizedPayeeNameValue}” already exists.</p>}
+      </form>}
       <div className="payee-summary">
         <div><span>All transactions</span><strong>{transactions.length}</strong></div>
         <div><span>Expenses</span><strong>{expenseCount}</strong></div>
@@ -1412,6 +1452,7 @@ function BudgetsPage({ categories, categoryGroups, categorySpending, budgetForCa
   const incomeCategories = visibleCategories.filter((category) => category.reportGroup === 'income')
   const expenseCategories = visibleCategories.filter((category) => category.reportGroup === 'expense')
   const taxCategories = visibleCategories.filter((category) => category.reportGroup === 'tax')
+  const savingsCategories = visibleCategories.filter((category) => category.reportGroup === 'capital_gain')
   const groupedRows = (rows: Category[]) => {
     const byOrder = (left: Category, right: Category) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.name.localeCompare(right.name)
     const knownGroups = categoryGroups.map((group) => ({ group, rows: rows.filter((category) => category.categoryGroupId === group.id).sort(byOrder) })).filter((item) => item.rows.length > 0)
@@ -1432,7 +1473,7 @@ function BudgetsPage({ categories, categoryGroups, categorySpending, budgetForCa
       </div>
     </section>}
     <HiddenCategoryActivityAlert categories={categories} categorySpending={categorySpending} onSelectCategory={onSelectCategory} prominent={showHiddenActivityAlert} />
-    <div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>{showHiddenOnly ? 'Hidden categories' : 'Budget by category'}</h2></div><div className="budget-page-actions">{hiddenCategories.length > 0 && <button className="text-button" onClick={() => setShowHiddenOnly((current) => !current)}>{showHiddenOnly ? <EyeOff size={16} /> : <Eye size={16} />}{showHiddenOnly ? 'Show active categories' : `Show hidden only (${hiddenCategories.length})`}</button>}<button className="secondary-button" onClick={onManageGroups}><Settings size={16} />Manage groups</button><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button></div></div>{showHiddenOnly ? hiddenSection : <>{section('Planned income', 'Actual income compared with this month’s plan', incomeCategories)}{section('Expense budgets', 'Net spending compared with this month’s budget', expenseCategories)}{taxCategories.length > 0 && section('Tax plan', 'Recorded tax costs compared with this month’s plan', taxCategories)}</>}</div>
+    <div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>{showHiddenOnly ? 'Hidden categories' : 'Budget by category'}</h2></div><div className="budget-page-actions">{hiddenCategories.length > 0 && <button className="text-button" onClick={() => setShowHiddenOnly((current) => !current)}>{showHiddenOnly ? <EyeOff size={16} /> : <Eye size={16} />}{showHiddenOnly ? 'Show active categories' : `Show hidden only (${hiddenCategories.length})`}</button>}<button className="secondary-button" onClick={onManageGroups}><Settings size={16} />Manage groups</button><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button></div></div>{showHiddenOnly ? hiddenSection : <>{section('Planned income', 'Actual income compared with this month’s plan', incomeCategories)}{section('Expense budgets', 'Net spending compared with this month’s budget', expenseCategories)}{taxCategories.length > 0 && section('Tax plan', 'Recorded tax costs compared with this month’s plan', taxCategories)}{savingsCategories.length > 0 && section('Savings & investments', 'Historical monthly targets; they do not roll over or represent current account balances', savingsCategories)}</>}</div>
   </div>
 }
 
@@ -1608,7 +1649,7 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
   return <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}><div className="modal"><div className="modal-heading"><div><span className="eyebrow">Next Expense</span><h2>{title}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></div>{children}</div></div>
 }
 
-function AccountDetailPage({ account, transactions, candidates, categories, payees, mappings, accounts, onBack, onSelectAccount, onEditAccount, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, onCreatePayee, onPromoteMapping, onUnhideCategory, onEditTransaction, reviewingCandidateId, syncing, syncNotice }: { account: Account; transactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; accounts: Account[]; onBack: () => void; onSelectAccount: (id: string) => void; onEditAccount: () => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string) => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void>; onEditTransaction: (transaction: Transaction) => void; reviewingCandidateId: string; syncing: boolean; syncNotice: string }) {
+function AccountDetailPage({ account, transactions, allTransactions, candidates, categories, payees, mappings, accounts, onBack, onSelectAccount, onEditAccount, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, onCreatePayee, onPromoteMapping, onUnhideCategory, onEditTransaction, reviewingCandidateId, syncing, syncNotice }: { account: Account; transactions: Transaction[]; allTransactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; accounts: Account[]; onBack: () => void; onSelectAccount: (id: string) => void; onEditAccount: () => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string) => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void>; onEditTransaction: (transaction: Transaction) => void; reviewingCandidateId: string; syncing: boolean; syncNotice: string }) {
   return <div className="page-content narrow-page entity-page">
     <div className="entity-page-toolbar">
       <button className="entity-back" onClick={onBack}><ChevronLeft size={16} />All accounts</button>
@@ -1618,7 +1659,7 @@ function AccountDetailPage({ account, transactions, candidates, categories, paye
       <div className="entity-heading"><div className="entity-heading-icon" style={{ background: account.color }}><CreditCard size={20} /></div><div><span className="eyebrow">{accountBalanceSheetGroup(account)} · {account.type}{account.providerAccountId ? ' · Bank connected' : ''}</span><h2>{account.name}</h2></div><div className="entity-heading-actions"><button className="secondary-button" onClick={onEditAccount}><Pencil size={16} />Edit account</button>{account.providerAccountId && <button className="primary-button" disabled={syncing} onClick={onSyncBank}>{syncing ? <LoaderCircle className="spin-icon" size={16} /> : <RefreshCw size={16} />}{syncing ? 'Syncing…' : 'Sync now'}</button>}<button className="secondary-button" onClick={onLinkBank}><Link2 size={16} />{account.providerAccountId ? 'Reconnect' : 'Connect bank'}</button></div></div>
       {account.providerAccountId && <div className="bank-sync-status"><div><strong>{account.connectionStatus === 'active' ? 'Bank connection active' : 'Bank connected'}</strong><span>{account.lastSyncedAt ? `Last synced ${new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(account.lastSyncedAt))}` : 'Not synced yet'}</span>{account.lastSyncDiagnostic && !syncNotice && <span>{formatSyncDiagnostic(account.lastSyncDiagnostic)}</span>}</div><span>{syncNotice || formatRateLimits(account)}</span></div>}
       {account.providerAccountId && <BankImportReview account={account} candidates={candidates} categories={categories} payees={payees} mappings={mappings} reviewingCandidateId={reviewingCandidateId} onModeChange={onImportModeChange} onReview={onReviewCandidate} onCreatePayee={onCreatePayee} onPromoteMapping={onPromoteMapping} onUnhideCategory={onUnhideCategory} />}
-      <AccountDetail account={account} transactions={transactions} categories={categories} accounts={accounts} onEditTransaction={onEditTransaction} />
+      <AccountDetail account={account} transactions={transactions} allTransactions={allTransactions} categories={categories} accounts={accounts} onEditTransaction={onEditTransaction} />
     </section>
   </div>
 }
@@ -1881,9 +1922,21 @@ function CategoryDetail({ category, spent, budget, transactions, categories, acc
   </div>
 }
 
-function AccountDetail({ account, transactions, categories, accounts, onEditTransaction }: { account: Account; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onEditTransaction: (transaction: Transaction) => void }) {
-  const incoming = transactions.reduce((sum, transaction) => sum + (transaction.type === 'income' || transaction.toAccountId === account.id ? transaction.amountMinor : 0), 0)
-  const outgoing = transactions.reduce((sum, transaction) => sum + (transaction.type === 'expense' || (transaction.type === 'transfer' && transaction.accountId === account.id) ? transaction.amountMinor : 0), 0)
+const accountTransactionPageSize = 50
+
+function AccountDetail({ account, transactions, allTransactions, categories, accounts, onEditTransaction }: { account: Account; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; accounts: Account[]; onEditTransaction: (transaction: Transaction) => void }) {
+  const [transactionPeriod, setTransactionPeriod] = useState<'month' | 'all'>('month')
+  const [transactionPage, setTransactionPage] = useState(1)
+  const sortedAllTransactions = useMemo(() => [...allTransactions].sort((left, right) => right.date.localeCompare(left.date)), [allTransactions])
+  const periodTransactions = transactionPeriod === 'all' ? sortedAllTransactions : transactions
+  const pageCount = Math.max(1, Math.ceil(periodTransactions.length / accountTransactionPageSize))
+  const displayedTransactions = transactionPeriod === 'all'
+    ? periodTransactions.slice((transactionPage - 1) * accountTransactionPageSize, transactionPage * accountTransactionPageSize)
+    : periodTransactions
+  useEffect(() => setTransactionPage(1), [account.id, transactionPeriod])
+  useEffect(() => setTransactionPage((current) => Math.min(current, pageCount)), [pageCount])
+  const incoming = periodTransactions.reduce((sum, transaction) => sum + (transaction.type === 'income' || transaction.toAccountId === account.id ? transaction.amountMinor : 0), 0)
+  const outgoing = periodTransactions.reduce((sum, transaction) => sum + (transaction.type === 'expense' || (transaction.type === 'transfer' && transaction.accountId === account.id) ? transaction.amountMinor : 0), 0)
   const hasBankBalance = account.bankBalanceMinor !== undefined && Boolean(account.bankBalanceCurrency)
   const comparableBankBalance = hasBankBalance && account.bankBalanceCurrency === account.currency
   const balanceDifference = comparableBankBalance ? account.bankBalanceMinor! - account.balanceMinor : undefined
@@ -1895,11 +1948,12 @@ function AccountDetail({ account, transactions, categories, accounts, onEditTran
       <div><span>Money in</span><strong className="positive">{formatMoney(incoming, account.currency)}</strong></div>
       <div><span>Money out</span><strong>{formatMoney(outgoing, account.currency)}</strong></div>
     </div>
-    <div className="category-detail-heading"><span>{transactions.length} transaction{transactions.length === 1 ? '' : 's'} this month</span><b>{account.scope} · {account.type}</b></div>
+    <div className="category-detail-heading account-transaction-heading"><span>{periodTransactions.length} transaction{periodTransactions.length === 1 ? '' : 's'} {transactionPeriod === 'all' ? 'across all dates' : 'in the selected month'}</span><div><b>{account.scope} · {account.type}</b><div className="segmented account-transaction-period"><button type="button" className={transactionPeriod === 'month' ? 'active transfer' : ''} onClick={() => setTransactionPeriod('month')}>Selected month</button><button type="button" className={transactionPeriod === 'all' ? 'active transfer' : ''} onClick={() => setTransactionPeriod('all')}>All dates</button></div></div></div>
     <div className="category-detail-list">
-      {transactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} focusAccountId={account.id} onEditCategory={transaction.type === 'expense' || transaction.type === 'income' || transaction.type === 'opening_balance' ? () => onEditTransaction(transaction) : undefined} />)}
-      {!transactions.length && <div className="empty-state compact-empty"><ReceiptText size={24} /><h3>No transactions yet</h3></div>}
+      {displayedTransactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} focusAccountId={account.id} onEditCategory={transaction.type === 'expense' || transaction.type === 'income' || transaction.type === 'opening_balance' ? () => onEditTransaction(transaction) : undefined} />)}
+      {!periodTransactions.length && <div className="empty-state compact-empty"><ReceiptText size={24} /><h3>No transactions yet</h3></div>}
     </div>
+    {transactionPeriod === 'all' && pageCount > 1 && <nav className="account-transaction-pagination" aria-label="Account transaction pages"><button type="button" className="secondary-button" disabled={transactionPage === 1} onClick={() => setTransactionPage((current) => Math.max(1, current - 1))}><ChevronLeft size={15} />Previous</button><span>Page {transactionPage} of {pageCount} · {accountTransactionPageSize} per page</span><button type="button" className="secondary-button" disabled={transactionPage === pageCount} onClick={() => setTransactionPage((current) => Math.min(pageCount, current + 1))}>Next<ChevronRight size={15} /></button></nav>}
   </div>
 }
 
@@ -2020,9 +2074,10 @@ function BankLinkForm({ account, workspaceId, onComplete }: { account: Account; 
   </form>
 }
 
-function TransactionDetailsForm({ transaction, transactions, categories, payees, mappings, onSubmit }: { transaction: Transaction; transactions: Transaction[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; onSubmit: (payeeName: string, payeeId: string | undefined, categoryId: string, rememberDefault: boolean, rememberMapping: boolean, mappingSource: string, matchingTransactionIds: string[]) => Promise<void> }) {
+function TransactionDetailsForm({ transaction, transactions, categories, payees, mappings, onSubmit }: { transaction: Transaction; transactions: Transaction[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; onSubmit: (payeeName: string, payeeId: string | undefined, categoryId: string, memo: string, rememberDefault: boolean, rememberMapping: boolean, mappingSource: string, matchingTransactionIds: string[]) => Promise<void> }) {
   const [categoryId, setCategoryId] = useState(transaction.categoryId ?? '')
   const [payeeQuery, setPayeeQuery] = useState(transaction.payee)
+  const [memo, setMemo] = useState(transaction.note ?? '')
   const [selectedPayeeId, setSelectedPayeeId] = useState(transaction.payeeId ?? '')
   const [pickerOpen, setPickerOpen] = useState(false)
   const [rememberDefault, setRememberDefault] = useState(false)
@@ -2041,7 +2096,8 @@ function TransactionDetailsForm({ transaction, transactions, categories, payees,
   const payeeChanged = selectedPayeeId
     ? selectedPayeeId !== transaction.payeeId
     : !transaction.payeeId || payeeQuery.trim().localeCompare(transaction.payee, undefined, { sensitivity: 'accent' }) !== 0
-  const changed = payeeChanged || categoryId !== transaction.categoryId
+  const memoChanged = memo.normalize('NFKC').trim() !== (transaction.note ?? '').normalize('NFKC').trim()
+  const changed = payeeChanged || categoryId !== transaction.categoryId || memoChanged
   // `payeeRaw` is the counterparty/description supplied by the bank. Older
   // imports can have that text only in `memo`, so retain it as a fallback.
   // Prefer the raw payee because a remittance memo can be a payment reference
@@ -2062,7 +2118,7 @@ function TransactionDetailsForm({ transaction, transactions, categories, payees,
   const selectedRelatedCount = selectableRelated.filter((item) => selectedRelatedIds.includes(item.id)).length
   const showRelatedTransactions = Boolean(categoryId && categoryId !== transaction.categoryId && relatedTransactions.length)
 
-  return <form className="form" onSubmit={async (event) => { event.preventDefault(); if (!categoryId || !payeeQuery.trim()) return; setSaving(true); try { await onSubmit(payeeQuery.trim(), selectedPayee?.id, categoryId, rememberDefault, offerMapping && rememberMapping, bankMappingSource, selectedRelatedIds.filter((id) => selectableRelated.some((item) => item.id === id))) } finally { setSaving(false) } }}>
+  return <form className="form" onSubmit={async (event) => { event.preventDefault(); if (!categoryId || !payeeQuery.trim()) return; setSaving(true); try { await onSubmit(payeeQuery.trim(), selectedPayee?.id, categoryId, memo, rememberDefault, offerMapping && rememberMapping, bankMappingSource, selectedRelatedIds.filter((id) => selectableRelated.some((item) => item.id === id))) } finally { setSaving(false) } }}>
     <div className="category-edit-transaction">
       <span className="transaction-icon"><ReceiptText size={18} /></span>
       <div><strong>{transaction.payee}</strong><span>{formatShortDate(transaction.date)} · {formatMoney(transaction.amountMinor, transaction.currency)}</span></div>
@@ -2089,6 +2145,7 @@ function TransactionDetailsForm({ transaction, transactions, categories, payees,
     </div></label>
     <div className="selected-payee-default"><div><span>Selected payee default</span><strong>{selectedPayee ? (defaultCategory ? `${defaultCategory.name}${defaultCategory.hidden ? ' (hidden)' : ''}` : 'No default category') : payeeQuery.trim() ? 'New payee · transaction category will become its default' : 'Choose or enter a payee'}</strong></div></div>
     <label><span>Category</span><CategorySearchPicker ariaLabel="Category" value={categoryId} categories={availableCategories} onChange={(nextCategoryId) => { setCategoryId(nextCategoryId); setSelectedRelatedIds([]); setRememberDefault(Boolean(selectedPayee && nextCategoryId && selectedPayee.defaultCategoryId !== nextCategoryId)) }} /></label>
+    <label><span>Memo <i>Optional</i></span><input value={memo} onChange={(event) => setMemo(event.target.value)} placeholder="Add a note about this transaction" /></label>
     {selectedCategory?.hidden && <p className="category-edit-warning"><ShieldAlert size={15} />This category is hidden. Choose an active category to keep future reporting easier to understand.</p>}
     {selectedPayee && categoryId && selectedPayee.defaultCategoryId !== categoryId && <label className="remember-category transaction-default-choice"><input type="checkbox" checked={rememberDefault} onChange={(event) => setRememberDefault(event.target.checked)} />Make {selectedCategory?.name ?? 'this category'} the default for {selectedPayee.name}</label>}
     {offerMapping && <label className="remember-category transaction-default-choice transaction-mapping-choice"><input type="checkbox" checked={rememberMapping} onChange={(event) => setRememberMapping(event.target.checked)} /><span>Add the {bankMappingLabel} “{bankMappingSource}” as an alternative name for <strong>{targetPayeeName}</strong></span></label>}

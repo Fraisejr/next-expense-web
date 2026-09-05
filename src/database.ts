@@ -326,6 +326,18 @@ export async function createPayee(workspaceId: string, payee: Payee, sortOrder: 
   if (error) throw error
 }
 
+export async function updatePayeeName(workspaceId: string, payeeId: string, name: string) {
+  const normalizedName = name.normalize('NFKC').trim()
+  if (!normalizedName) throw new Error('A payee name is required.')
+  const { data, error } = await neon.from('payees')
+    .update({ name: normalizedName })
+    .eq('workspace_id', workspaceId)
+    .eq('id', payeeId)
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The payee could not be renamed.')
+}
+
 export async function saveAccountOrder(workspaceId: string, accountIds: string[]) {
   const results = await Promise.all(accountIds.map((accountId, sortOrder) => neon
     .from('accounts')
@@ -573,6 +585,38 @@ export async function createPayeeMapping(workspaceId: string, sourceName: string
 }
 
 async function assignPayeeMappingWithoutRpc(workspaceId: string, sourceName: string, normalizedName: string, payeeId: string): Promise<string[]> {
+  const matchedIds: string[] = []
+  const uncategorizedIds: string[] = []
+  const pageSize = 1000
+  for (let start = 0; ; start += pageSize) {
+    const { data: transactionRows, error } = await neon.from('transactions')
+      .select('id,payee_name,memo,category_id')
+      .eq('workspace_id', workspaceId)
+      .is('payee_id', null)
+      .in('transaction_type', ['expense', 'income'])
+      .order('id', { ascending: true })
+      .range(start, start + pageSize - 1)
+    if (error) throw error
+    const rows = (transactionRows ?? []) as unknown as Row[]
+    for (const row of rows) {
+      const description = String(row.payee_name ?? '').trim() || String(row.memo ?? '').trim() || 'Unknown payee'
+      if (normalizedPayeeName(description) !== normalizedName) continue
+      matchedIds.push(String(row.id))
+      if (!row.category_id) uncategorizedIds.push(String(row.id))
+    }
+    if (rows.length < pageSize) break
+  }
+  if (!matchedIds.length) throw new Error('No unmatched transactions matched this description.')
+
+  const { data: payeeRows, error: payeeError } = await neon.from('payees')
+    .select('default_category_id')
+    .eq('workspace_id', workspaceId)
+    .eq('id', payeeId)
+    .limit(1)
+  if (payeeError) throw payeeError
+  const defaultCategoryId = payeeRows?.[0]?.default_category_id ? String(payeeRows[0].default_category_id) : ''
+  if (uncategorizedIds.length && !defaultCategoryId) throw new Error('Choose a default category for this payee before mapping uncategorized transactions.')
+
   const existingMapping = await neon.from('payee_mappings')
     .select('id')
     .eq('workspace_id', workspaceId)
@@ -591,31 +635,21 @@ async function assignPayeeMappingWithoutRpc(workspaceId: string, sourceName: str
     if (error) throw error
   }
 
-  const matchedIds: string[] = []
-  const pageSize = 1000
-  for (let start = 0; ; start += pageSize) {
-    const { data: transactionRows, error } = await neon.from('transactions')
-      .select('id,payee_name,memo')
+  for (let start = 0; start < uncategorizedIds.length; start += 50) {
+    const { error } = await neon.from('transactions')
+      .update({ payee_id: payeeId, category_id: defaultCategoryId })
       .eq('workspace_id', workspaceId)
-      .is('payee_id', null)
-      .in('transaction_type', ['expense', 'income'])
-      .order('id', { ascending: true })
-      .range(start, start + pageSize - 1)
+      .in('id', uncategorizedIds.slice(start, start + 50))
     if (error) throw error
-    const rows = (transactionRows ?? []) as unknown as Row[]
-    matchedIds.push(...rows.flatMap((row) => {
-      const description = String(row.payee_name ?? '').trim() || String(row.memo ?? '').trim() || 'Unknown payee'
-      return normalizedPayeeName(description) === normalizedName ? [String(row.id)] : []
-    }))
-    if (rows.length < pageSize) break
   }
-  if (!matchedIds.length) throw new Error('No unmatched transactions matched this description.')
 
-  for (let start = 0; start < matchedIds.length; start += 50) {
+  const uncategorized = new Set(uncategorizedIds)
+  const categorizedIds = matchedIds.filter((id) => !uncategorized.has(id))
+  for (let start = 0; start < categorizedIds.length; start += 50) {
     const { error } = await neon.from('transactions')
       .update({ payee_id: payeeId })
       .eq('workspace_id', workspaceId)
-      .in('id', matchedIds.slice(start, start + 50))
+      .in('id', categorizedIds.slice(start, start + 50))
     if (error) throw error
   }
   return matchedIds
@@ -711,9 +745,9 @@ export async function createTransaction(workspaceId: string, transaction: Transa
   if (error) throw error
 }
 
-export async function updateTransactionDetails(workspaceId: string, transactionId: string, payeeId: string, categoryId: string) {
+export async function updateTransactionDetails(workspaceId: string, transactionId: string, payeeId: string, categoryId: string, memo: string) {
   const { data, error } = await neon.from('transactions')
-    .update({ payee_id: payeeId, category_id: categoryId })
+    .update({ payee_id: payeeId, category_id: categoryId, memo: memo.normalize('NFKC').trim() || null })
     .eq('workspace_id', workspaceId)
     .eq('id', transactionId)
     .in('transaction_type', ['expense', 'income'])

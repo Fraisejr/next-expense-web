@@ -182,6 +182,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .account-row strong, .transaction-row strong { font-size: 11.5px; }
 .pending-badge { display: inline-flex; margin-left: 7px; padding: 2px 5px; border-radius: 4px; color: #93612d; background: #f3e7d2; font-size: 7px; font-style: normal; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; vertical-align: 1px; }
 .account-row div span, .transaction-row div span { color: var(--muted); font-size: 9.5px; margin-top: 4px; }
+.transaction-row div .transaction-memo { color: #5f6861; font-size: 9px; font-style: italic; line-height: 1.35; overflow-wrap: anywhere; white-space: normal; }
 .account-row > b, .transaction-row > b { font-family: 'DM Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: -.03em; }
 .transaction-icon { border-radius: 50%; }
 .transaction-row .transaction-icon { display: grid; place-items: center; }
@@ -283,6 +284,11 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .payee-default-fields { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto; gap: 10px; align-items: end; }
 .payee-settings label > span { display: block; margin-bottom: 6px; color: #676d65; font-size: 8.5px; font-weight: 700; }
 .payee-settings select, .payee-settings input { width: 100%; height: 36px; padding: 0 10px; border: 1px solid #d9dbd4; border-radius: 7px; background: var(--paper); color: var(--ink); font-size: 10px; }
+.payee-settings .search-picker > input { padding-left: 34px; padding-right: 34px; }
+.payee-name-editor { display: grid; grid-template-columns: minmax(220px, 420px) auto auto; align-items: end; gap: 8px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.payee-name-editor label > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 9px; font-weight: 700; }
+.payee-name-editor input { width: 100%; height: 38px; padding: 0 11px; border: 1px solid #d9dbd4; border-radius: 7px; background: var(--paper); color: var(--ink); font-size: 11px; }
+.payee-name-editor .auth-error { grid-column: 1 / -1; }
 .payee-settings .secondary-button { height: 36px; padding: 0 12px; white-space: nowrap; }
 .payee-mapping-list { display: grid; gap: 8px; }
 .payee-mapping-row { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(180px, 1fr) 105px auto; gap: 9px; align-items: end; padding-bottom: 8px; border-bottom: 1px solid #e4e5df; }
@@ -431,7 +437,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .transaction-mapping-choice { align-items: flex-start; color: #49645b; background: #edf3ef; }
 .transaction-mapping-choice input { flex: 0 0 auto; margin-top: 1px; }
 .transaction-mapping-choice span { display: inline; margin: 0; color: inherit; font-size: inherit; font-weight: inherit; line-height: 1.45; }
-.transaction-mapping-choice strong { color: #315d53; }
+.transaction-mapping-choice strong { display: inline; margin-left: 4px; color: #315d53; }
 .category-edit-warning { display: flex; align-items: flex-start; gap: 7px; padding: 9px 10px; border: 1px solid #e5c9b2; border-radius: 7px; color: #8b4e38; background: #fff4e9; font-size: 9.5px; line-height: 1.45; }
 .category-edit-warning svg { flex: 0 0 auto; }
 .related-transactions-choice { overflow: hidden; border: 1px solid #dfe1da; border-radius: 8px; background: #fafaf7; }
@@ -499,6 +505,12 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .account-balance-summary strong { white-space: nowrap; }
 .category-detail-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 22px 5px 8px; color: #777e76; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .category-detail-heading b { color: #59615a; font-size: 9px; }
+.account-transaction-heading > div { display: flex; align-items: center; gap: 12px; }
+.account-transaction-period { min-width: 210px; letter-spacing: normal; text-transform: none; }
+.account-transaction-period button { padding: 7px 10px; }
+.account-transaction-pagination { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 18px 5px 3px; }
+.account-transaction-pagination button { min-width: 92px; justify-content: center; }
+.account-transaction-pagination span { min-width: 145px; color: var(--muted); font-size: 9px; text-align: center; }
 .category-detail-list { max-height: min(470px, 52vh); overflow-y: auto; padding-right: 3px; }
 .compact-empty { min-height: 180px; }
 .budget-editor { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; padding: 14px 0 2px; border-bottom: 1px solid var(--line); }
@@ -648,6 +660,8 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .payee-last { display: none; }
   .payee-count { min-width: 26px; padding: 4px 6px; border-radius: 6px; background: #f0f0ea; text-align: center; }
   .payee-default-fields, .payee-mapping-row { grid-template-columns: 1fr; }
+  .payee-name-editor { grid-template-columns: 1fr 1fr; }
+  .payee-name-editor label { grid-column: 1 / -1; }
   .payee-settings-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
   .payee-mapping-actions { justify-content: flex-end; }
   .unmatched-heading { align-items: flex-start; flex-direction: column; gap: 6px; }
@@ -665,6 +679,12 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .entity-heading-action { width: 100%; margin: 5px 0 0; }
   .entity-heading-actions { width: 100%; margin: 5px 0 0; }
   .entity-heading-actions button { flex: 1; }
+  .account-transaction-heading { align-items: stretch; flex-direction: column; }
+  .account-transaction-heading > div { align-items: stretch; flex-direction: column; gap: 8px; }
+  .account-transaction-period { width: 100%; min-width: 0; }
+  .account-transaction-pagination { gap: 7px; }
+  .account-transaction-pagination button { min-width: 0; padding-inline: 9px; }
+  .account-transaction-pagination span { min-width: 0; flex: 1; }
   .category-group-assignment { grid-template-columns: 1fr auto; }
   .category-group-manager-row { grid-template-columns: 1fr auto; }
   .category-group-manager-row > label, .category-group-manager-row .unmatched-error { grid-column: 1 / -1; }
