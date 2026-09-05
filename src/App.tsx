@@ -107,6 +107,12 @@ function getErrorMessage(error: unknown, fallback: string) {
   return parts.length > 0 ? parts.join(' · ') : fallback
 }
 
+function useClientNavigation(event: React.MouseEvent<HTMLAnchorElement>, navigate: () => void) {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+  event.preventDefault()
+  navigate()
+}
+
 function App() {
   if (window.location.hostname === '127.0.0.1') return <LocalhostRedirect />
   return <AuthenticatedApp />
@@ -791,18 +797,18 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         <nav className="nav-list">
           <p className="nav-label">Workspace</p>
           {navItems.map(({ id, label, icon: Icon, path }) => (
-            <button key={id} className={page === id ? 'nav-item active' : 'nav-item'} onClick={() => goTo(path)}>
+            <a key={id} href={pathWithMonth(path)} className={page === id ? 'nav-item active' : 'nav-item'} onClick={(event) => useClientNavigation(event, () => goTo(path))}>
               <Icon size={19} /><span>{label}</span>
-            </button>
+            </a>
           ))}
         </nav>
 
         <nav className="sidebar-accounts" aria-label="Accounts">
-          <button className={page === 'accounts' && !selectedAccount ? 'account-section-title active' : 'account-section-title'} onClick={() => goTo('/accounts')}>
+          <a href={pathWithMonth('/accounts')} className={page === 'accounts' && !selectedAccount ? 'account-section-title active' : 'account-section-title'} onClick={(event) => useClientNavigation(event, () => goTo('/accounts'))}>
             <span><WalletCards size={16} />Accounts</span><b>{formatMoney(totalBalance)}</b>
-          </button>
-          {accountsByBalanceSheetGroup.map(({ group, accounts }) => accounts.length > 0 && <SidebarAccountGroup key={group} label={group} accounts={accounts} open={openAccountGroups[group]} onToggle={() => setOpenAccountGroups((current) => ({ ...current, [group]: !current[group] }))} selectedAccountId={selectedAccount?.id} onSelect={(id) => goTo(`/accounts/${id}`)} />)}
-          {closedAccounts.length > 0 && <SidebarAccountGroup label="Closed accounts" accounts={closedAccounts} open={closedAccountsOpen} onToggle={() => setClosedAccountsOpen((current) => !current)} selectedAccountId={selectedAccount?.id} onSelect={(id) => goTo(`/accounts/${id}`)} />}
+          </a>
+          {accountsByBalanceSheetGroup.map(({ group, accounts }) => accounts.length > 0 && <SidebarAccountGroup key={group} label={group} accounts={accounts} open={openAccountGroups[group]} onToggle={() => setOpenAccountGroups((current) => ({ ...current, [group]: !current[group] }))} selectedAccountId={selectedAccount?.id} accountHref={(id) => pathWithMonth(`/accounts/${id}`)} onSelect={(id) => goTo(`/accounts/${id}`)} />)}
+          {closedAccounts.length > 0 && <SidebarAccountGroup label="Closed accounts" accounts={closedAccounts} open={closedAccountsOpen} onToggle={() => setClosedAccountsOpen((current) => !current)} selectedAccountId={selectedAccount?.id} accountHref={(id) => pathWithMonth(`/accounts/${id}`)} onSelect={(id) => goTo(`/accounts/${id}`)} />}
           <button className="sidebar-add-account" onClick={() => setModal('account')}><Plus size={13} />Add account</button>
         </nav>
 
@@ -944,14 +950,14 @@ function AuthScreen() {
   </main>
 }
 
-function SidebarAccountGroup({ label, accounts, open, onToggle, selectedAccountId, onSelect }: { label: string; accounts: Account[]; open: boolean; onToggle: () => void; selectedAccountId?: string; onSelect: (id: string) => void }) {
+function SidebarAccountGroup({ label, accounts, open, onToggle, selectedAccountId, accountHref, onSelect }: { label: string; accounts: Account[]; open: boolean; onToggle: () => void; selectedAccountId?: string; accountHref: (id: string) => string; onSelect: (id: string) => void }) {
   const subtotal = accounts.reduce((sum, account) => sum + account.balanceMinor, 0)
   const currencies = [...new Set(accounts.map((account) => account.currency))]
   return <div className="sidebar-account-group">
     <button className="sidebar-account-group-title" onClick={onToggle} aria-expanded={open}>
       <span><ChevronDown size={12} className={open ? '' : 'collapsed'} />{label}</span><b>{currencies.length === 1 ? formatMoney(subtotal, currencies[0]) : `${accounts.length} accounts`}</b>
     </button>
-    {open && <div className="sidebar-account-list">{accounts.map((account) => <button key={account.id} className={selectedAccountId === account.id ? 'sidebar-account active' : 'sidebar-account'} onClick={() => onSelect(account.id)}><span><i style={{ background: account.color }} />{account.name}</span><b className={account.balanceMinor < 0 ? 'negative' : ''}>{formatMoney(account.balanceMinor, account.currency)}</b></button>)}</div>}
+    {open && <div className="sidebar-account-list">{accounts.map((account) => <a key={account.id} href={accountHref(account.id)} className={selectedAccountId === account.id ? 'sidebar-account active' : 'sidebar-account'} onClick={(event) => useClientNavigation(event, () => onSelect(account.id))}><span><i style={{ background: account.color }} />{account.name}</span><b className={account.balanceMinor < 0 ? 'negative' : ''}>{formatMoney(account.balanceMinor, account.currency)}</b></a>)}</div>}
   </div>
 }
 
