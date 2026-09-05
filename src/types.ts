@@ -1,6 +1,7 @@
 export type AccountScope = 'Personal' | 'Company'
 export type BalanceSheetGroup = 'Personal' | 'Company' | 'Real estate' | 'Pension'
 export type ReportGroup = 'income' | 'expense' | 'tax' | 'capital_gain'
+export type BalanceAdjustmentReason = 'market_valuation' | 'asset_valuation' | 'liability_adjustment' | 'reconciliation' | 'other'
 
 export type Account = {
   id: string
@@ -11,6 +12,8 @@ export type Account = {
   currency: string
   scope: AccountScope
   balanceSheetGroup: BalanceSheetGroup
+  investment?: boolean
+  pension?: boolean
   closed: boolean
   autoSync?: boolean
   bankImportMode?: 'review' | 'automatic'
@@ -117,7 +120,7 @@ export type Transaction = {
   note?: string
   amountMinor: number
   destinationAmountMinor?: number
-  type: 'expense' | 'income' | 'transfer' | 'opening_balance'
+  type: 'expense' | 'income' | 'transfer' | 'opening_balance' | 'balance_adjustment'
   accountId: string
   categoryId?: string
   toAccountId?: string
@@ -127,6 +130,8 @@ export type Transaction = {
   sourceRowHash?: string
   providerTransactionId?: string
   posted?: boolean
+  balanceCheckpointMinor?: number
+  adjustmentReason?: BalanceAdjustmentReason
 }
 
 export type AppData = {

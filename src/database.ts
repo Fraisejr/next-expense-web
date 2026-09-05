@@ -1,6 +1,6 @@
 import { neon } from './neon'
 import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
-import type { Account, AccountScope, AppData, BankImportCandidate, BankRateLimit, BankSyncDiagnostic, Budget, Category, CategoryGroup, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
+import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankImportCandidate, BankRateLimit, BankSyncDiagnostic, Budget, Category, CategoryGroup, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
 
 type Row = Record<string, unknown>
 
@@ -75,22 +75,42 @@ async function allRows(table: string, columns = '*', orderColumn = 'id'): Promis
   }
 }
 
-function accountBalanceChanges(transactions: Transaction[]) {
-  const changes = new Map<string, number>()
-  const add = (accountId: string | undefined, amount: number) => {
-    if (accountId) changes.set(accountId, (changes.get(accountId) ?? 0) + amount)
+function calculateAccountBalances(transactions: Transaction[]) {
+  const events = new Map<string, { transaction: Transaction; amount: number }[]>()
+  const add = (accountId: string | undefined, transaction: Transaction, amount: number) => {
+    if (!accountId) return
+    events.set(accountId, [...(events.get(accountId) ?? []), { transaction, amount }])
   }
 
   for (const transaction of transactions) {
-    if (transaction.type === 'income') add(transaction.accountId, transaction.amountMinor)
-    if (transaction.type === 'expense') add(transaction.accountId, -transaction.amountMinor)
-    if (transaction.type === 'opening_balance') add(transaction.accountId, transaction.amountMinor)
+    if (transaction.type === 'income') add(transaction.accountId, transaction, transaction.amountMinor)
+    if (transaction.type === 'expense') add(transaction.accountId, transaction, -transaction.amountMinor)
+    if (transaction.type === 'opening_balance') add(transaction.accountId, transaction, transaction.amountMinor)
+    if (transaction.type === 'balance_adjustment') add(transaction.accountId, transaction, 0)
     if (transaction.type === 'transfer') {
-      add(transaction.accountId, -transaction.amountMinor)
-      add(transaction.toAccountId, transaction.destinationAmountMinor ?? transaction.amountMinor)
+      add(transaction.accountId, transaction, -transaction.amountMinor)
+      add(transaction.toAccountId, transaction, transaction.destinationAmountMinor ?? transaction.amountMinor)
     }
   }
-  return changes
+
+  const balances = new Map<string, number>()
+  for (const [accountId, accountEvents] of events) {
+    let balance = 0
+    accountEvents.sort((left, right) => left.transaction.date.localeCompare(right.transaction.date)
+      || Number(left.transaction.type === 'balance_adjustment') - Number(right.transaction.type === 'balance_adjustment')
+      || left.transaction.id.localeCompare(right.transaction.id))
+    for (const event of accountEvents) {
+      if (event.transaction.type === 'balance_adjustment') {
+        const checkpoint = event.transaction.balanceCheckpointMinor ?? balance
+        event.transaction.amountMinor = checkpoint - balance
+        balance = checkpoint
+      } else {
+        balance += event.amount
+      }
+    }
+    balances.set(accountId, balance)
+  }
+  return balances
 }
 
 export type LoadedWorkspace = {
@@ -147,8 +167,10 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
     source: row.source as Transaction['source'],
     providerTransactionId: (row.provider_transaction_id as string | null) ?? undefined,
     posted: Boolean(row.posted),
+    balanceCheckpointMinor: row.balance_checkpoint_minor === null || row.balance_checkpoint_minor === undefined ? undefined : number(row.balance_checkpoint_minor),
+    adjustmentReason: (row.adjustment_reason as BalanceAdjustmentReason | null) ?? undefined,
   }))
-  const balanceChanges = accountBalanceChanges(transactions)
+  const accountBalances = calculateAccountBalances(transactions)
   const connections = new Map(connectionRows
     .filter((row) => row.account_id && row.status === 'active')
     .map((row) => [row.account_id as string, row]))
@@ -157,7 +179,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
     const metadata = connection?.metadata && typeof connection.metadata === 'object' ? connection.metadata as Row : undefined
     const bankBalance = metadata?.bank_balance && typeof metadata.bank_balance === 'object' ? metadata.bank_balance as Row : undefined
     const lastSyncDiagnostic = metadata?.last_sync_diagnostic && typeof metadata.last_sync_diagnostic === 'object' ? metadata.last_sync_diagnostic as BankSyncDiagnostic : undefined
-    const calculatedBalanceMinor = balanceChanges.get(row.id as string) ?? 0
+    const calculatedBalanceMinor = accountBalances.get(row.id as string) ?? 0
     return {
       id: row.id as string,
       name: row.name as string,
@@ -170,6 +192,8 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
         ?? (Boolean(row.pension) ? 'Pension'
           : /apartment|mortgage|bolån/i.test(String(row.name)) ? 'Real estate'
             : row.scope === 'Company' ? 'Company' : 'Personal'),
+      investment: Boolean(row.investment),
+      pension: Boolean(row.pension),
       closed: Boolean(row.closed),
       autoSync: Boolean(row.auto_sync),
       bankImportMode: row.bank_import_mode === 'automatic' ? 'automatic' : 'review',
@@ -716,7 +740,7 @@ export async function saveBudget(workspaceId: string, budget: Budget) {
 }
 
 export async function createTransaction(workspaceId: string, transaction: Transaction) {
-  const hasNoCategory = transaction.type === 'transfer' || transaction.type === 'opening_balance'
+  const hasNoCategory = transaction.type === 'transfer' || transaction.type === 'opening_balance' || transaction.type === 'balance_adjustment'
   if (hasNoCategory ? transaction.categoryId : !transaction.categoryId) {
     throw new Error(hasNoCategory ? 'Transfers and opening balances cannot have a category.' : 'Choose a category before saving this transaction.')
   }
@@ -743,6 +767,53 @@ export async function createTransaction(workspaceId: string, transaction: Transa
     source: 'manual',
   })
   if (error) throw error
+}
+
+export async function createBalanceAdjustment(workspaceId: string, transaction: Transaction) {
+  if (transaction.type !== 'balance_adjustment' || transaction.balanceCheckpointMinor === undefined || !transaction.adjustmentReason) throw new Error('A closing balance and adjustment reason are required.')
+  const periodId = await ensurePeriod(workspaceId, transaction.date.slice(0, 7))
+  const { error } = await neon.from('transactions').insert({
+    id: transaction.id,
+    workspace_id: workspaceId,
+    account_id: transaction.accountId,
+    destination_account_id: null,
+    period_id: periodId,
+    category_id: null,
+    payee_id: null,
+    transaction_date: transaction.date,
+    source_timestamp: `${transaction.date}T23:59:59Z`,
+    source_created_at: new Date().toISOString(),
+    amount_minor: 0,
+    destination_amount_minor: 0,
+    currency: transaction.currency,
+    transaction_type: 'balance_adjustment',
+    payee_name: null,
+    memo: transaction.note?.normalize('NFKC').trim() || null,
+    balance_checkpoint_minor: transaction.balanceCheckpointMinor,
+    adjustment_reason: transaction.adjustmentReason,
+    posted: true,
+    reconciled: true,
+    source: 'manual',
+  })
+  if (error) {
+    if (typeof error === 'object' && error && 'code' in error && error.code === '23505') throw new Error('This account already has a balance adjustment on that date. Edit the existing adjustment instead.')
+    throw error
+  }
+}
+
+export async function updateBalanceAdjustment(workspaceId: string, transactionId: string, date: string, balanceCheckpointMinor: number, adjustmentReason: BalanceAdjustmentReason, memo: string) {
+  const periodId = await ensurePeriod(workspaceId, date.slice(0, 7))
+  const { data, error } = await neon.from('transactions')
+    .update({ transaction_date: date, source_timestamp: `${date}T23:59:59Z`, period_id: periodId, balance_checkpoint_minor: balanceCheckpointMinor, adjustment_reason: adjustmentReason, memo: memo.normalize('NFKC').trim() || null })
+    .eq('workspace_id', workspaceId)
+    .eq('id', transactionId)
+    .eq('transaction_type', 'balance_adjustment')
+    .select('id')
+  if (error) {
+    if (typeof error === 'object' && error && 'code' in error && error.code === '23505') throw new Error('This account already has a balance adjustment on that date.')
+    throw error
+  }
+  if (!data?.length) throw new Error('The balance adjustment could not be updated.')
 }
 
 export async function updateTransactionDetails(workspaceId: string, transactionId: string, payeeId: string, categoryId: string, memo: string) {
