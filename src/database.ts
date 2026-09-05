@@ -383,12 +383,72 @@ export async function createCategory(workspaceId: string, category: Category) {
   if (error) throw error
 }
 
+export async function updateCategoryGroupAssignment(workspaceId: string, categoryId: string, categoryGroupId: string | null) {
+  const { data, error } = await neon.from('categories')
+    .update({ category_group_id: categoryGroupId })
+    .eq('workspace_id', workspaceId)
+    .eq('id', categoryId)
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The category group could not be updated.')
+}
+
+export async function createCategoryGroup(workspaceId: string, group: CategoryGroup) {
+  const { error } = await neon.from('category_groups').insert({
+    id: group.id,
+    workspace_id: workspaceId,
+    name: group.name.normalize('NFKC').trim(),
+    sort_order: group.sortOrder,
+    show_categories: group.showCategories,
+  })
+  if (error) throw error
+}
+
+export async function updateCategoryGroupName(workspaceId: string, categoryGroupId: string, name: string) {
+  const { data, error } = await neon.from('category_groups')
+    .update({ name: name.normalize('NFKC').trim() })
+    .eq('workspace_id', workspaceId)
+    .eq('id', categoryGroupId)
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The category group could not be renamed.')
+}
+
+export async function saveCategoryGroupOrder(workspaceId: string, categoryGroupIds: string[]) {
+  const results = await Promise.all(categoryGroupIds.map((categoryGroupId, index) => neon.from('category_groups')
+    .update({ sort_order: index * 10 })
+    .eq('workspace_id', workspaceId)
+    .eq('id', categoryGroupId)))
+  const failed = results.find((result) => result.error)
+  if (failed?.error) throw failed.error
+}
+
+export async function deleteCategoryGroup(workspaceId: string, categoryGroupId: string) {
+  const { data, error } = await neon.from('category_groups')
+    .delete()
+    .eq('workspace_id', workspaceId)
+    .eq('id', categoryGroupId)
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The category group could not be removed.')
+}
+
 export async function updateCategoryHidden(workspaceId: string, categoryId: string, hidden: boolean) {
   const { error } = await neon.from('categories')
     .update({ hidden })
     .eq('workspace_id', workspaceId)
     .eq('id', categoryId)
   if (error) throw error
+}
+
+export async function updateCategoryName(workspaceId: string, categoryId: string, name: string) {
+  const { data, error } = await neon.from('categories')
+    .update({ name: name.normalize('NFKC').trim() })
+    .eq('workspace_id', workspaceId)
+    .eq('id', categoryId)
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The category could not be renamed.')
 }
 
 async function resolvePayees(workspaceId: string, sourceNames: string[], createMissing: boolean): Promise<Array<Payee | undefined>> {
