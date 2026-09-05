@@ -177,7 +177,6 @@ const accounts = archive.accounts.map((account) => ({
   last_refresh_at: account.lastRefreshDate ?? null,
   display_type: account.investment || account.pension || account.type === 'External' ? 'Savings' : 'Checking',
   color: account.investment || account.pension ? '#d68853' : account.type === 'External' ? '#777a6d' : '#234e46',
-  opening_balance_minor: 0,
 }))
 
 const categoryGroups = archive.categoryGroups.map((group) => ({
@@ -381,7 +380,6 @@ const webManagedAccountFields = new Set([
   'institution_id',
   'country',
   'last_refresh_at',
-  'opening_balance_minor',
 ])
 const sql = [
   'begin;',

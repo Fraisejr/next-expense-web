@@ -84,6 +84,7 @@ function accountBalanceChanges(transactions: Transaction[]) {
   for (const transaction of transactions) {
     if (transaction.type === 'income') add(transaction.accountId, transaction.amountMinor)
     if (transaction.type === 'expense') add(transaction.accountId, -transaction.amountMinor)
+    if (transaction.type === 'opening_balance') add(transaction.accountId, transaction.amountMinor)
     if (transaction.type === 'transfer') {
       add(transaction.accountId, -transaction.amountMinor)
       add(transaction.toAccountId, transaction.destinationAmountMinor ?? transaction.amountMinor)
@@ -132,7 +133,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
   const transactions: Transaction[] = transactionRows.map((row) => ({
     id: row.id as string,
     date: row.transaction_date as string,
-    payee: (payeeNames.get(row.payee_id as string) || row.payee_name || row.memo || 'Unknown payee') as string,
+    payee: (row.transaction_type === 'opening_balance' ? 'Opening balance' : payeeNames.get(row.payee_id as string) || row.payee_name || row.memo || 'Unknown payee') as string,
     payeeId: (row.payee_id as string | null) ?? undefined,
     note: (row.memo as string | null) ?? undefined,
     amountMinor: number(row.amount_minor),
@@ -156,7 +157,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
     const metadata = connection?.metadata && typeof connection.metadata === 'object' ? connection.metadata as Row : undefined
     const bankBalance = metadata?.bank_balance && typeof metadata.bank_balance === 'object' ? metadata.bank_balance as Row : undefined
     const lastSyncDiagnostic = metadata?.last_sync_diagnostic && typeof metadata.last_sync_diagnostic === 'object' ? metadata.last_sync_diagnostic as BankSyncDiagnostic : undefined
-    const calculatedBalanceMinor = number(row.opening_balance_minor) + (balanceChanges.get(row.id as string) ?? 0)
+    const calculatedBalanceMinor = balanceChanges.get(row.id as string) ?? 0
     return {
       id: row.id as string,
       name: row.name as string,
@@ -273,7 +274,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
   }
 }
 
-export async function createAccount(workspaceId: string, account: Account, sortOrder: number) {
+export async function createAccount(workspaceId: string, account: Account, sortOrder: number, openingBalance?: Transaction) {
   const { error } = await neon.from('accounts').insert({
     id: account.id,
     workspace_id: workspaceId,
@@ -284,11 +285,17 @@ export async function createAccount(workspaceId: string, account: Account, sortO
     balance_sheet_group: account.balanceSheetGroup,
     currency: account.currency,
     color: account.color,
-    opening_balance_minor: account.balanceMinor,
     sort_order: sortOrder,
     closed: account.closed,
   })
   if (error) throw error
+  if (!openingBalance) return
+  try {
+    await createTransaction(workspaceId, openingBalance)
+  } catch (cause) {
+    await neon.from('accounts').delete().eq('workspace_id', workspaceId).eq('id', account.id)
+    throw cause
+  }
 }
 
 export async function updateAccountDetails(workspaceId: string, account: Account) {
@@ -591,7 +598,7 @@ async function assignPayeeMappingWithoutRpc(workspaceId: string, sourceName: str
       .select('id,payee_name,memo')
       .eq('workspace_id', workspaceId)
       .is('payee_id', null)
-      .neq('transaction_type', 'transfer')
+      .in('transaction_type', ['expense', 'income'])
       .order('id', { ascending: true })
       .range(start, start + pageSize - 1)
     if (error) throw error
@@ -675,8 +682,9 @@ export async function saveBudget(workspaceId: string, budget: Budget) {
 }
 
 export async function createTransaction(workspaceId: string, transaction: Transaction) {
-  if (transaction.type === 'transfer' ? transaction.categoryId : !transaction.categoryId) {
-    throw new Error(transaction.type === 'transfer' ? 'Transfers cannot have a category.' : 'Choose a category before saving this transaction.')
+  const hasNoCategory = transaction.type === 'transfer' || transaction.type === 'opening_balance'
+  if (hasNoCategory ? transaction.categoryId : !transaction.categoryId) {
+    throw new Error(hasNoCategory ? 'Transfers and opening balances cannot have a category.' : 'Choose a category before saving this transaction.')
   }
   const periodId = await ensurePeriod(workspaceId, transaction.date.slice(0, 7))
   const { error } = await neon.from('transactions').insert({
@@ -694,7 +702,7 @@ export async function createTransaction(workspaceId: string, transaction: Transa
     destination_amount_minor: transaction.destinationAmountMinor ?? (transaction.type === 'transfer' ? transaction.amountMinor : 0),
     currency: transaction.currency,
     transaction_type: transaction.type,
-    payee_name: transaction.payee,
+    payee_name: transaction.type === 'opening_balance' ? null : transaction.payee,
     memo: transaction.note ?? null,
     posted: true,
     reconciled: true,
@@ -708,10 +716,10 @@ export async function updateTransactionDetails(workspaceId: string, transactionI
     .update({ payee_id: payeeId, category_id: categoryId })
     .eq('workspace_id', workspaceId)
     .eq('id', transactionId)
-    .neq('transaction_type', 'transfer')
+    .in('transaction_type', ['expense', 'income'])
     .select('id')
   if (error) throw error
-  if (!data?.length) throw new Error('The transaction could not be updated. Transfers do not have categories.')
+  if (!data?.length) throw new Error('The transaction could not be updated. Transfers and opening balances do not have categories.')
 }
 
 export async function updateTransactionCategories(workspaceId: string, transactionIds: string[], categoryId: string) {
@@ -720,10 +728,22 @@ export async function updateTransactionCategories(workspaceId: string, transacti
     .update({ category_id: categoryId })
     .eq('workspace_id', workspaceId)
     .in('id', transactionIds)
-    .neq('transaction_type', 'transfer')
+    .in('transaction_type', ['expense', 'income'])
     .select('id')
   if (error) throw error
   if (data?.length !== transactionIds.length) throw new Error('Some matching transactions could not be updated.')
+}
+
+export async function updateOpeningBalance(workspaceId: string, transactionId: string, date: string, amountMinor: number) {
+  const periodId = await ensurePeriod(workspaceId, date.slice(0, 7))
+  const { data, error } = await neon.from('transactions')
+    .update({ transaction_date: date, period_id: periodId, amount_minor: amountMinor })
+    .eq('workspace_id', workspaceId)
+    .eq('id', transactionId)
+    .eq('transaction_type', 'opening_balance')
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The opening balance could not be updated.')
 }
 
 export async function updatePayeeDefaultCategory(workspaceId: string, payeeId: string, categoryId: string | null) {

@@ -117,7 +117,7 @@ export type Transaction = {
   note?: string
   amountMinor: number
   destinationAmountMinor?: number
-  type: 'expense' | 'income' | 'transfer'
+  type: 'expense' | 'income' | 'transfer' | 'opening_balance'
   accountId: string
   categoryId?: string
   toAccountId?: string

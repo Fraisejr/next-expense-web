@@ -68,11 +68,26 @@ h1, h2, h3, p { margin: 0; }
 h1 { font-family: 'Newsreader', serif; font-size: 27px; line-height: 1; margin-top: 5px; letter-spacing: -.02em; }
 h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; letter-spacing: -.02em; }
 .top-actions { display: flex; align-items: center; gap: 11px; }
-.month-switcher { display: flex; align-items: center; height: 38px; background: #fbfaf6; border: 1px solid #d9dad4; border-radius: 7px; overflow: hidden; }
+.month-switcher { display: flex; align-items: center; height: 38px; background: #fbfaf6; border: 1px solid #d9dad4; border-radius: 7px; }
 .month-switcher button { height: 100%; width: 33px; border: 0; background: transparent; display: grid; place-items: center; cursor: pointer; }
 .month-switcher button:hover { background: #efeee8; }
-.month-switcher label { min-width: 157px; height: 100%; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 0 10px; border-inline: 1px solid #e1e1db; font-size: 11px; font-weight: 600; }
-.month-switcher input { width: 112px; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 10px; font-weight: 600; cursor: pointer; }
+.month-picker { position: relative; height: 100%; }
+.month-switcher .month-picker-trigger { width: 176px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 11px; border-inline: 1px solid #e1e1db; border-radius: 0; color: var(--ink); font-size: 10.5px; font-weight: 700; }
+.month-picker-trigger span { flex: 1; white-space: nowrap; }
+.month-picker-trigger > svg:first-child { color: #55736b; }
+.month-picker-trigger > svg:last-child { color: #858b83; }
+.month-picker-popover { position: absolute; z-index: 40; top: calc(100% + 9px); left: 50%; width: 292px; padding: 13px; transform: translateX(-50%); border: 1px solid #d6d9d1; border-radius: 11px; background: var(--paper); box-shadow: 0 18px 50px rgba(28, 36, 32, .2); }
+.month-picker-year { display: grid; grid-template-columns: 34px 1fr 34px; align-items: center; padding-bottom: 11px; border-bottom: 1px solid #e5e5df; }
+.month-picker-year strong { text-align: center; font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 600; }
+.month-switcher .month-picker-year button { width: 32px; height: 32px; border: 1px solid #e0e2db; border-radius: 7px; }
+.month-picker-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 12px 0; }
+.month-switcher .month-picker-grid button { position: relative; width: 100%; height: 36px; border: 1px solid transparent; border-radius: 7px; color: #59615a; font-size: 10.5px; font-weight: 700; }
+.month-switcher .month-picker-grid button:hover { border-color: #d5ddd8; background: #edf2ef; }
+.month-switcher .month-picker-grid button.current::after { content: ''; position: absolute; left: 50%; bottom: 4px; width: 3px; height: 3px; transform: translateX(-50%); border-radius: 50%; background: #4f796e; }
+.month-switcher .month-picker-grid button.selected { color: #fff; border-color: var(--green); background: var(--green); }
+.month-switcher .month-picker-grid button.selected::after { background: #dce9e5; }
+.month-switcher .month-picker-today { width: 100%; height: 34px; border-top: 1px solid #e5e5df; color: #35685c; font-size: 9.5px; font-weight: 800; }
+.month-switcher .month-picker-today:hover { background: #eef3f0; }
 .primary-button, .secondary-button { border: 0; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border-radius: 8px; padding: 10px 15px; font-size: 12px; font-weight: 700; cursor: pointer; transition: .18s ease; }
 .primary-button { color: #fff; background: var(--green); box-shadow: 0 5px 14px rgba(36,77,69,.13); }
 .primary-button:hover { background: #173e37; transform: translateY(-1px); }
@@ -591,13 +606,12 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .topbar-title { grid-column: 1; grid-row: 1; min-width: 0; }
   .top-actions { display: contents; }
   .month-switcher { grid-column: 1 / -1; grid-row: 2; width: 100%; }
-  .month-switcher label { flex: 1; }
+  .month-picker { flex: 1; }
   .top-actions .primary-button { grid-column: 2; grid-row: 1; }
   .topbar .eyebrow { display: none; }
   h1 { font-size: 22px; margin: 0; }
-  .month-switcher label { min-width: 112px; }
-  .month-switcher label svg { display: none; }
-  .month-switcher input { width: 92px; }
+  .month-switcher .month-picker-trigger { width: 100%; }
+  .month-picker-popover { width: min(292px, calc(100vw - 32px)); }
   .top-actions .primary-button { width: 38px; height: 38px; padding: 0; }
   .top-actions .primary-button:not(.form-submit) { font-size: 0; gap: 0; }
   .page-content { padding: 18px 16px 35px; }
@@ -671,8 +685,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 }
 
 @media (max-width: 480px) {
-  .month-switcher label { min-width: 98px; font-size: 9px; }
-  .month-switcher input { width: 82px; font-size: 9px; }
+  .month-switcher .month-picker-trigger { font-size: 9.5px; }
   .month-switcher button { width: 28px; }
   .hero-grid { grid-template-columns: 1fr; }
   .metric-card:last-child { grid-column: auto; }
