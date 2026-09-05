@@ -994,7 +994,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
         )}
         {selectedCategory && (
-          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTimeTransactionCount={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id).length} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} onUpdateBudget={updateBudget} onUpdateGroup={changeCategoryGroup} onRename={() => setModal('edit-category')} onDelete={removeUnusedCategory} onSetHidden={setCategoryHidden} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
+          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTransactions={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} onUpdateBudget={updateBudget} onUpdateGroup={changeCategoryGroup} onRename={() => setModal('edit-category')} onDelete={removeUnusedCategory} onSetHidden={setCategoryHidden} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
         )}
         {selectedPayee && (
           <PayeeDetailPage key={selectedPayee.id} payee={selectedPayee} payees={data.payees} mappings={data.payeeMappings.filter((mapping) => mapping.payeeId === selectedPayee.id)} transactions={data.transactions.filter((transaction) => transaction.payeeId === selectedPayee.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/payees')} onEditTransaction={setCategoryTarget} onRename={renamePayee} onUpdateDefaults={changePayeeDefaults} onAddMapping={addPayeeMapping} onUpdateMapping={changePayeeMapping} onRemoveMapping={removePayeeMapping} />
@@ -1850,7 +1850,7 @@ function formatSyncDiagnostic(diagnostic: NonNullable<Account['lastSyncDiagnosti
   ].filter(Boolean).join(' · ')
 }
 
-function CategoryDetailPage({ category, spent, budget, transactions, allTimeTransactionCount, categories, categoryGroups, accounts, onUpdateBudget, onUpdateGroup, onRename, onDelete, onSetHidden, onBack, onSelectCategory, onEditTransaction }: { category: Category; spent: number; budget: number; transactions: Transaction[]; allTimeTransactionCount: number; categories: Category[]; categoryGroups: CategoryGroup[]; accounts: Account[]; onUpdateBudget: (categoryId: string, amountMinor: number) => void; onUpdateGroup: (categoryId: string, categoryGroupId: string) => Promise<void>; onRename: () => void; onDelete: (categoryId: string) => Promise<void>; onSetHidden: (categoryId: string, hidden: boolean) => void; onBack: () => void; onSelectCategory: (id: string) => void; onEditTransaction: (transaction: Transaction) => void }) {
+function CategoryDetailPage({ category, spent, budget, transactions, allTransactions, categories, categoryGroups, accounts, onUpdateBudget, onUpdateGroup, onRename, onDelete, onSetHidden, onBack, onSelectCategory, onEditTransaction }: { category: Category; spent: number; budget: number; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; categoryGroups: CategoryGroup[]; accounts: Account[]; onUpdateBudget: (categoryId: string, amountMinor: number) => void; onUpdateGroup: (categoryId: string, categoryGroupId: string) => Promise<void>; onRename: () => void; onDelete: (categoryId: string) => Promise<void>; onSetHidden: (categoryId: string, hidden: boolean) => void; onBack: () => void; onSelectCategory: (id: string) => void; onEditTransaction: (transaction: Transaction) => void }) {
   const Icon = categoryIcons[category.icon as keyof typeof categoryIcons] ?? Sparkles
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -1861,7 +1861,7 @@ function CategoryDetailPage({ category, spent, budget, transactions, allTimeTran
       <label><span>Category</span><select value={category.id} onChange={(event) => onSelectCategory(event.target.value)}>{categories.map((option) => <option key={option.id} value={option.id}>{option.name}{option.hidden ? ' (hidden)' : ''}</option>)}</select></label>
     </div>
     <section className="panel entity-detail-panel">
-      <div className="entity-heading"><div className="entity-heading-icon" style={{ color: category.color, background: `${category.color}18` }}><Icon size={20} /></div><div><span className="eyebrow">{category.reportGroup.replace('_', ' ')}{category.hidden ? ' · Hidden' : ''}</span><h2>{category.name}</h2></div><div className="entity-heading-actions"><button className="secondary-button" type="button" onClick={onRename}><Pencil size={16} />Rename</button><button className="secondary-button" type="button" onClick={() => onSetHidden(category.id, !category.hidden)}>{category.hidden ? <Eye size={16} /> : <EyeOff size={16} />}{category.hidden ? 'Unhide category' : 'Hide category'}</button>{allTimeTransactionCount === 0 && <button className={confirmingDelete ? 'danger-button confirming' : 'danger-button'} type="button" disabled={deleting} onClick={async () => {
+      <div className="entity-heading"><div className="entity-heading-icon" style={{ color: category.color, background: `${category.color}18` }}><Icon size={20} /></div><div><span className="eyebrow">{category.reportGroup.replace('_', ' ')}{category.hidden ? ' · Hidden' : ''}</span><h2>{category.name}</h2></div><div className="entity-heading-actions"><button className="secondary-button" type="button" onClick={onRename}><Pencil size={16} />Rename</button><button className="secondary-button" type="button" onClick={() => onSetHidden(category.id, !category.hidden)}>{category.hidden ? <Eye size={16} /> : <EyeOff size={16} />}{category.hidden ? 'Unhide category' : 'Hide category'}</button>{allTransactions.length === 0 && <button className={confirmingDelete ? 'danger-button confirming' : 'danger-button'} type="button" disabled={deleting} onClick={async () => {
         if (!confirmingDelete) { setConfirmingDelete(true); setDeleteError(''); return }
         setDeleting(true)
         try { await onDelete(category.id) } catch (cause) { setDeleteError(getErrorMessage(cause, 'Could not delete the category.')); setDeleting(false); setConfirmingDelete(false) }
@@ -1869,7 +1869,7 @@ function CategoryDetailPage({ category, spent, budget, transactions, allTimeTran
       {confirmingDelete && !deleting && <div className="category-delete-confirmation"><span>Deleting this category will also remove its budgets and clear it from payee defaults.</span><button type="button" onClick={() => setConfirmingDelete(false)}>Cancel</button></div>}
       {deleteError && <p className="auth-error" role="alert">{deleteError}</p>}
       <CategoryGroupAssignment key={`${category.id}-${category.categoryGroupId ?? 'none'}`} category={category} groups={categoryGroups} onSubmit={onUpdateGroup} />
-      <CategoryDetail key={`${category.id}-${budget}`} category={category} spent={spent} budget={budget} transactions={transactions} categories={categories} accounts={accounts} onUpdateBudget={onUpdateBudget} onEditTransaction={onEditTransaction} />
+      <CategoryDetail key={`${category.id}-${budget}`} category={category} spent={spent} budget={budget} transactions={transactions} allTransactions={allTransactions} categories={categories} accounts={accounts} onUpdateBudget={onUpdateBudget} onEditTransaction={onEditTransaction} />
     </section>
   </div>
 }
@@ -1896,7 +1896,17 @@ function CategoryGroupAssignment({ category, groups, onSubmit }: { category: Cat
   </div>
 }
 
-function CategoryDetail({ category, spent, budget, transactions, categories, accounts, onUpdateBudget, onEditTransaction }: { category: Category; spent: number; budget: number; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onUpdateBudget: (categoryId: string, amountMinor: number) => void; onEditTransaction: (transaction: Transaction) => void }) {
+function CategoryDetail({ category, spent, budget, transactions, allTransactions, categories, accounts, onUpdateBudget, onEditTransaction }: { category: Category; spent: number; budget: number; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; accounts: Account[]; onUpdateBudget: (categoryId: string, amountMinor: number) => void; onEditTransaction: (transaction: Transaction) => void }) {
+  const [transactionPeriod, setTransactionPeriod] = useState<'month' | 'all'>('month')
+  const [transactionPage, setTransactionPage] = useState(1)
+  const sortedAllTransactions = useMemo(() => [...allTransactions].sort((left, right) => right.date.localeCompare(left.date)), [allTransactions])
+  const periodTransactions = transactionPeriod === 'all' ? sortedAllTransactions : transactions
+  const pageCount = Math.max(1, Math.ceil(periodTransactions.length / detailTransactionPageSize))
+  const displayedTransactions = transactionPeriod === 'all'
+    ? periodTransactions.slice((transactionPage - 1) * detailTransactionPageSize, transactionPage * detailTransactionPageSize)
+    : periodTransactions
+  useEffect(() => setTransactionPage(1), [category.id, transactionPeriod])
+  useEffect(() => setTransactionPage((current) => Math.min(current, pageCount)), [pageCount])
   const [budgetInput, setBudgetInput] = useState((budget / 100).toFixed(2))
   const remaining = budget - spent
   const saveBudget = () => {
@@ -1914,24 +1924,25 @@ function CategoryDetail({ category, spent, budget, transactions, categories, acc
       <label><span>Monthly plan</span><input type="number" min="0" step="0.01" value={budgetInput} onChange={(event) => setBudgetInput(event.target.value)} /></label>
       <button className="secondary-button" type="button" onClick={saveBudget}>Update budget</button>
     </div>
-    <div className="category-detail-heading"><span>{transactions.length} transaction{transactions.length === 1 ? '' : 's'} this month</span></div>
+    <div className="category-detail-heading account-transaction-heading"><span>{periodTransactions.length} transaction{periodTransactions.length === 1 ? '' : 's'} {transactionPeriod === 'all' ? 'across all dates' : 'in the selected month'}</span><div><div className="segmented account-transaction-period"><button type="button" className={transactionPeriod === 'month' ? 'active transfer' : ''} onClick={() => setTransactionPeriod('month')}>Selected month</button><button type="button" className={transactionPeriod === 'all' ? 'active transfer' : ''} onClick={() => setTransactionPeriod('all')}>All dates</button></div></div></div>
     <div className="category-detail-list">
-      {transactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} showAccount onEditCategory={() => onEditTransaction(transaction)} />)}
-      {!transactions.length && <div className="empty-state compact-empty"><ReceiptText size={24} /><h3>No transactions yet</h3></div>}
+      {displayedTransactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} showAccount onEditCategory={() => onEditTransaction(transaction)} />)}
+      {!periodTransactions.length && <div className="empty-state compact-empty"><ReceiptText size={24} /><h3>No transactions yet</h3></div>}
     </div>
+    {transactionPeriod === 'all' && pageCount > 1 && <nav className="account-transaction-pagination" aria-label="Category transaction pages"><button type="button" className="secondary-button" disabled={transactionPage === 1} onClick={() => setTransactionPage((current) => Math.max(1, current - 1))}><ChevronLeft size={15} />Previous</button><span>Page {transactionPage} of {pageCount} · {detailTransactionPageSize} per page</span><button type="button" className="secondary-button" disabled={transactionPage === pageCount} onClick={() => setTransactionPage((current) => Math.min(pageCount, current + 1))}>Next<ChevronRight size={15} /></button></nav>}
   </div>
 }
 
-const accountTransactionPageSize = 50
+const detailTransactionPageSize = 50
 
 function AccountDetail({ account, transactions, allTransactions, categories, accounts, onEditTransaction }: { account: Account; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; accounts: Account[]; onEditTransaction: (transaction: Transaction) => void }) {
   const [transactionPeriod, setTransactionPeriod] = useState<'month' | 'all'>('month')
   const [transactionPage, setTransactionPage] = useState(1)
   const sortedAllTransactions = useMemo(() => [...allTransactions].sort((left, right) => right.date.localeCompare(left.date)), [allTransactions])
   const periodTransactions = transactionPeriod === 'all' ? sortedAllTransactions : transactions
-  const pageCount = Math.max(1, Math.ceil(periodTransactions.length / accountTransactionPageSize))
+  const pageCount = Math.max(1, Math.ceil(periodTransactions.length / detailTransactionPageSize))
   const displayedTransactions = transactionPeriod === 'all'
-    ? periodTransactions.slice((transactionPage - 1) * accountTransactionPageSize, transactionPage * accountTransactionPageSize)
+    ? periodTransactions.slice((transactionPage - 1) * detailTransactionPageSize, transactionPage * detailTransactionPageSize)
     : periodTransactions
   useEffect(() => setTransactionPage(1), [account.id, transactionPeriod])
   useEffect(() => setTransactionPage((current) => Math.min(current, pageCount)), [pageCount])
@@ -1953,7 +1964,7 @@ function AccountDetail({ account, transactions, allTransactions, categories, acc
       {displayedTransactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} focusAccountId={account.id} onEditCategory={transaction.type === 'expense' || transaction.type === 'income' || transaction.type === 'opening_balance' ? () => onEditTransaction(transaction) : undefined} />)}
       {!periodTransactions.length && <div className="empty-state compact-empty"><ReceiptText size={24} /><h3>No transactions yet</h3></div>}
     </div>
-    {transactionPeriod === 'all' && pageCount > 1 && <nav className="account-transaction-pagination" aria-label="Account transaction pages"><button type="button" className="secondary-button" disabled={transactionPage === 1} onClick={() => setTransactionPage((current) => Math.max(1, current - 1))}><ChevronLeft size={15} />Previous</button><span>Page {transactionPage} of {pageCount} · {accountTransactionPageSize} per page</span><button type="button" className="secondary-button" disabled={transactionPage === pageCount} onClick={() => setTransactionPage((current) => Math.min(pageCount, current + 1))}>Next<ChevronRight size={15} /></button></nav>}
+    {transactionPeriod === 'all' && pageCount > 1 && <nav className="account-transaction-pagination" aria-label="Account transaction pages"><button type="button" className="secondary-button" disabled={transactionPage === 1} onClick={() => setTransactionPage((current) => Math.max(1, current - 1))}><ChevronLeft size={15} />Previous</button><span>Page {transactionPage} of {pageCount} · {detailTransactionPageSize} per page</span><button type="button" className="secondary-button" disabled={transactionPage === pageCount} onClick={() => setTransactionPage((current) => Math.min(pageCount, current + 1))}>Next<ChevronRight size={15} /></button></nav>}
   </div>
 }
 
