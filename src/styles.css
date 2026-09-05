@@ -138,6 +138,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .transfer-amount { color: #587486 !important; }
 .side-stack { display: grid; gap: 18px; }
 .account-row, .transaction-row { display: grid; grid-template-columns: 38px 1fr auto; gap: 11px; align-items: center; padding: 13px 5px; border-bottom: 1px solid #e9e9e3; }
+.transaction-row.editable { grid-template-columns: 38px minmax(0, 1fr) minmax(105px, auto) auto; }
 .account-row { width: 100%; border-width: 0 0 1px; background: transparent; text-align: left; cursor: pointer; border-radius: 5px; transition: background .16s ease; }
 .account-row:hover { background: #f4f4ef; }
 .account-row:last-child, .transaction-row:last-child { border-bottom: 0; }
@@ -148,9 +149,17 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .account-row div span, .transaction-row div span { color: var(--muted); font-size: 9.5px; margin-top: 4px; }
 .account-row > b, .transaction-row > b { font-family: 'DM Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: -.03em; }
 .transaction-icon { border-radius: 50%; }
+.transaction-category-edit { max-width: 145px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; overflow: hidden; padding: 6px 8px; border: 1px solid #d9ddd6; border-radius: 6px; color: #59645d; background: #f5f6f2; font-size: 9px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.transaction-category-edit:hover { border-color: #bfc9c1; background: #edf2ee; }
+.transaction-category-edit.missing { border-color: #dfbfa8; color: #9a563b; background: #fff1e6; }
 
 .full-panel { min-height: 540px; }
 .transaction-heading { margin-bottom: 12px; }
+.transaction-heading-actions { display: flex; align-items: center; gap: 10px; }
+.transaction-view-toggle { min-width: 245px; }
+.transaction-view-toggle button { padding-inline: 10px; }
+.transaction-view-toggle button b { min-width: 18px; display: inline-block; margin-left: 4px; padding: 2px 5px; border-radius: 8px; background: #dedfd8; font-family: 'DM Mono', monospace; font-size: 8px; }
+.transaction-view-toggle button.active b { color: #984e36; background: #f3dfd2; }
 .search-box { width: 230px; display: flex; align-items: center; gap: 8px; border: 1px solid #dcded7; background: #f6f5f0; border-radius: 7px; padding: 8px 10px; }
 .search-box input { width: 100%; border: 0; outline: 0; background: transparent; font-size: 11px; }
 .table-header { display: grid; grid-template-columns: 1fr 190px 120px; padding: 10px; background: #f0f0eb; color: #7e847c; font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
@@ -158,6 +167,9 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .transaction-table-row { position: relative; display: grid; grid-template-columns: 1fr 190px; align-items: center; padding: 0 10px; border-bottom: 1px solid #e8e8e2; }
 .transaction-table-row .transaction-row { border: 0; }
 .transaction-table-row .account-name { color: var(--muted); font-size: 10px; }
+.bank-review-category select { width: 100%; height: 36px; padding: 0 28px 0 10px; border: 1px solid #d9dbd4; border-radius: 7px; background: var(--paper); color: var(--ink); font-size: 10.5px; }
+.remember-category { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 9px; line-height: 1.3; }
+.remember-category input { accent-color: var(--green); }
 .payee-heading { align-items: flex-end; }
 .payee-controls { display: flex; align-items: center; gap: 10px; }
 .unmatched-payees { margin: 0 0 22px; border: 1px solid #dfcdbf; border-radius: 9px; background: #faf5ef; }
@@ -252,13 +264,20 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .bank-review-queue { border-top: 1px solid #dedfd8; background: var(--paper); }
 .bank-review-summary { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; background: #f0f1ec; color: var(--muted); font-size: 9px; }
 .bank-review-summary strong { color: var(--ink); font-size: 9.5px; }
-.bank-review-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 16px; align-items: center; padding: 12px 14px; border-top: 1px solid #e8e8e2; }
+.bank-review-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(170px, 220px) auto; gap: 16px; align-items: center; padding: 12px 14px; border-top: 1px solid #e8e8e2; }
 .bank-review-row:first-of-type { border-top: 0; }
 .bank-review-row > div:first-child { min-width: 0; }
 .bank-review-row strong, .bank-review-row span { display: block; }
 .bank-review-row strong { overflow: hidden; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .bank-review-row span { margin-top: 4px; overflow: hidden; color: var(--muted); font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
 .bank-review-row > b { font-family: 'DM Mono', monospace; font-size: 10.5px; font-weight: 500; }
+.bank-review-category { display: grid; gap: 6px; }
+.hidden-category-warning { display: flex; align-items: flex-start; gap: 6px; padding: 7px 8px; border: 1px solid #e5c9b2; border-radius: 6px; color: #9a563b; background: #fff4e9; }
+.hidden-category-warning svg { flex: 0 0 auto; margin-top: 1px; }
+.hidden-category-warning p { margin: 0; font-size: 8.5px; line-height: 1.45; }
+.hidden-category-warning p strong { display: inline; color: #87462f; font-size: inherit; }
+.hidden-category-warning button { padding: 0; border: 0; color: #7c4937; background: transparent; font: inherit; font-weight: 800; text-decoration: underline; cursor: pointer; }
+.hidden-category-warning button:disabled { cursor: wait; opacity: .6; }
 .bank-review-actions { display: flex; gap: 7px; }
 .bank-review-actions button { height: 32px; padding-inline: 10px; }
 .entity-detail-panel .category-detail-list { max-height: none; }
@@ -272,6 +291,12 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .form label > span i { color: #a2a59e; font-style: normal; font-weight: 500; }
 .form input, .form select { width: 100%; height: 41px; border: 1px solid #d9dbd4; border-radius: 7px; padding: 0 11px; background: #fff; color: var(--ink); font-size: 12px; }
 .form input:disabled { opacity: .5; }
+.category-edit-transaction { display: grid; grid-template-columns: 38px 1fr; gap: 11px; align-items: center; padding: 11px; border-radius: 8px; background: #f4f4ef; }
+.category-edit-transaction strong, .category-edit-transaction span { display: block; }
+.category-edit-transaction strong { font-size: 11.5px; }
+.category-edit-transaction span { margin-top: 4px; color: var(--muted); font-size: 9.5px; }
+.category-edit-warning { display: flex; align-items: flex-start; gap: 7px; padding: 9px 10px; border: 1px solid #e5c9b2; border-radius: 7px; color: #8b4e38; background: #fff4e9; font-size: 9.5px; line-height: 1.45; }
+.category-edit-warning svg { flex: 0 0 auto; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
 .segmented { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; background: #edeee9; border-radius: 8px; }
 .segmented.three-way { grid-template-columns: repeat(3, 1fr); }
@@ -407,6 +432,10 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .transaction-table-row .transaction-row { padding-bottom: 21px; }
   .search-box { width: 100%; }
   .transaction-heading { align-items: stretch; flex-direction: column; }
+  .transaction-heading-actions { align-items: stretch; flex-direction: column; }
+  .transaction-view-toggle { min-width: 0; }
+  .transaction-row.editable { grid-template-columns: 38px minmax(0, 1fr) auto; }
+  .transaction-row.editable .transaction-category-edit { grid-column: 2 / -1; grid-row: 2; justify-self: start; max-width: 100%; }
   .payee-heading { align-items: stretch; flex-direction: column; }
   .payee-controls { align-items: stretch; flex-direction: column; }
   .sort-box { justify-content: space-between; }
@@ -433,6 +462,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .bank-import-review-heading { align-items: stretch; flex-direction: column; }
   .bank-import-mode { flex-basis: auto; width: 100%; }
   .bank-review-row { grid-template-columns: 1fr auto; }
+  .bank-review-category { grid-column: 1 / -1; }
   .bank-review-actions { grid-column: 1 / -1; }
   .account-balance-summary { grid-template-columns: 1fr 1fr; }
   .account-balance-summary > div:first-child { grid-column: 1 / -1; }

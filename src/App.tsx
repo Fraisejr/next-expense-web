@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import {
   ArrowDownLeft, ArrowLeftRight, ArrowRight, ArrowUpRight, BadgeEuro, Banknote, BriefcaseBusiness,
   BarChart3, BriefcaseMedical, CalendarDays, CarFront, ChevronDown, ChevronLeft, ChevronRight, CircleHelp,
-  ArrowDown, ArrowUp, Check, CreditCard, Dumbbell, Eye, EyeOff, GripVertical, HeartHandshake, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Plane, Plus, ReceiptText, Search, Settings,
+  ArrowDown, ArrowUp, Check, CreditCard, Dumbbell, Eye, EyeOff, GripVertical, HeartHandshake, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Pencil, Plane, Plus, ReceiptText, Search, Settings,
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, assignPayeeMapping, createAccount, createCategory, createTransaction, ensurePayees, linkBankAccount, loadWorkspace, rejectBankImportCandidate, saveAccountOrder, saveBankSync, saveBudget, updateBankImportMode, updateCategoryHidden, updateTaxRate, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
+import { approveBankImportCandidate, assignPayeeMapping, createAccount, createCategory, createTransaction, ensurePayees, linkBankAccount, loadWorkspace, rejectBankImportCandidate, saveAccountOrder, saveBankSync, saveBudget, updateBankImportMode, updateCategoryHidden, updateTaxRate, updateTransactionCategory, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
 import { neon } from './neon'
 import type { Account, AccountScope, AppData, BankImportCandidate, Category, Payee, ReportGroup, Transaction } from './types'
 
@@ -167,6 +167,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   const [companyAccountsOpen, setCompanyAccountsOpen] = useState(true)
   const [closedAccountsOpen, setClosedAccountsOpen] = useState(false)
   const [bankTarget, setBankTarget] = useState<Account | null>(null)
+  const [categoryTarget, setCategoryTarget] = useState<Transaction | null>(null)
   const [syncingAccountId, setSyncingAccountId] = useState('')
   const [reviewingCandidateId, setReviewingCandidateId] = useState('')
   const [syncNotice, setSyncNotice] = useState<{ accountId: string; message: string } | null>(null)
@@ -386,6 +387,20 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
+  async function changeTransactionCategory(transactionId: string, categoryId: string) {
+    try {
+      setSyncError('')
+      await updateTransactionCategory(workspace.workspaceId, transactionId, categoryId)
+      setData((current) => ({
+        ...current,
+        transactions: current.transactions.map((transaction) => transaction.id === transactionId ? { ...transaction, categoryId } : transaction),
+      }))
+      setCategoryTarget(null)
+    } catch (error) {
+      setSyncError(getErrorMessage(error, 'Could not update the transaction category.'))
+    }
+  }
+
   async function mapUnmatchedPayee(sourceName: string, payeeId: string) {
     try {
       setSyncError('')
@@ -444,11 +459,14 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
-  async function decideBankImportCandidate(candidateId: string, decision: 'approve' | 'reject') {
+  async function decideBankImportCandidate(candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory = false) {
     try {
       setSyncError('')
       setReviewingCandidateId(candidateId)
-      if (decision === 'approve') await approveBankImportCandidate(workspace.workspaceId, candidateId)
+      if (decision === 'approve') {
+        if (!categoryId) throw new Error('Choose a category before approving this transaction.')
+        await approveBankImportCandidate(workspace.workspaceId, candidateId, categoryId, rememberCategory)
+      }
       else await rejectBankImportCandidate(workspace.workspaceId, candidateId)
       const refreshed = await loadWorkspace()
       setData(refreshed.data)
@@ -560,7 +578,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           />
         )}
         {page === 'transactions' && (
-          <TransactionsPage transactions={transactions} accounts={data.accounts} categories={data.categories} search={search} setSearch={setSearch} />
+          <TransactionsPage transactions={transactions} allTransactions={data.transactions} accounts={data.accounts} categories={data.categories} search={search} setSearch={setSearch} onEditCategory={setCategoryTarget} />
         )}
         {page === 'payees' && !selectedPayee && (
           <PayeesPage payees={data.payees} transactions={data.transactions} onSelectPayee={(id) => goTo(`/payees/${id}`)} onMapPayee={mapUnmatchedPayee} onCreatePayee={createPayeeFromUnmatched} />
@@ -575,7 +593,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <AccountsPage accounts={activeAccounts} totalBalance={totalBalance} onAdd={() => setModal('account')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onReorder={reorderAccounts} />
         )}
         {selectedAccount && (
-          <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} reviewingCandidateId={reviewingCandidateId} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
+          <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} reviewingCandidateId={reviewingCandidateId} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
         )}
         {selectedCategory && (
           <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} accounts={data.accounts} onUpdateBudget={updateBudget} onSetHidden={setCategoryHidden} onBack={() => goTo('/budgets')} onSelectCategory={(id) => goTo(`/categories/${id}`)} />
@@ -593,6 +611,9 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           {modal === 'bank' && bankTarget && <BankLinkForm account={bankTarget} workspaceId={workspace.workspaceId} onComplete={() => window.location.reload()} />}
         </ModalShell>
       )}
+      {categoryTarget && <ModalShell title="Edit category" onClose={() => setCategoryTarget(null)}>
+        <TransactionCategoryForm transaction={categoryTarget} categories={data.categories} onSubmit={(categoryId) => changeTransactionCategory(categoryTarget.id, categoryId)} />
+      </ModalShell>}
     </div>
   )
 }
@@ -753,7 +774,7 @@ function CategoryRow({ category, spent, budget, onSelect }: { category: Category
   )
 }
 
-function TransactionRow({ transaction, categories, accounts, compact = false, focusAccountId }: { transaction: Transaction; categories: Category[]; accounts: Account[]; compact?: boolean; focusAccountId?: string }) {
+function TransactionRow({ transaction, categories, accounts, compact = false, focusAccountId, onEditCategory }: { transaction: Transaction; categories: Category[]; accounts: Account[]; compact?: boolean; focusAccountId?: string; onEditCategory?: () => void }) {
   const category = categories.find((item) => item.id === transaction.categoryId)
   const sourceAccount = accounts.find((item) => item.id === transaction.accountId)
   const destinationAccount = accounts.find((item) => item.id === transaction.toAccountId)
@@ -762,32 +783,38 @@ function TransactionRow({ transaction, categories, accounts, compact = false, fo
   const prefix = transaction.type === 'income' || transferIsIncoming ? '+' : transaction.type === 'expense' || (isTransfer && focusAccountId) ? '−' : ''
   const Icon = isTransfer ? ArrowLeftRight : category ? (categoryIcons[category.icon as keyof typeof categoryIcons] ?? Sparkles) : ReceiptText
   return (
-    <div className={compact ? 'transaction-row compact' : 'transaction-row'}>
+    <div className={`${compact ? 'transaction-row compact' : 'transaction-row'}${onEditCategory ? ' editable' : ''}`}>
       <span className="transaction-icon" style={{ color: isTransfer ? '#587486' : category?.color, background: isTransfer ? '#e5ecef' : `${category?.color ?? '#777'}18` }}><Icon size={18} /></span>
       <div>
         <strong>{isTransfer ? `Transfer to ${destinationAccount?.name ?? 'account'}` : transaction.payee}{transaction.posted === false && <em className="pending-badge">Pending</em>}</strong>
         <span>{isTransfer ? `${sourceAccount?.name ?? 'Account'} → ${destinationAccount?.name ?? 'Account'}` : category?.name ?? 'Uncategorised'} · {shortDate.format(new Date(`${transaction.date}T12:00:00`))}</span>
       </div>
+      {onEditCategory && <button type="button" className={category ? 'transaction-category-edit' : 'transaction-category-edit missing'} onClick={onEditCategory} aria-label={`Edit category for ${transaction.payee}`}><Pencil size={12} />{category?.name ?? 'Choose category'}</button>}
       <b className={transaction.type === 'income' || transferIsIncoming ? 'positive' : isTransfer && !focusAccountId ? 'transfer-amount' : ''}>{prefix}{formatMoney(transaction.amountMinor, transaction.currency)}</b>
     </div>
   )
 }
 
-function TransactionsPage({ transactions, accounts, categories, search, setSearch }: { transactions: Transaction[]; accounts: Account[]; categories: Category[]; search: string; setSearch: (value: string) => void }) {
-  const filtered = transactions.filter((t) => `${t.payee} ${t.note ?? ''} ${categories.find(c => c.id === t.categoryId)?.name ?? ''}`.toLowerCase().includes(search.toLowerCase()))
+function TransactionsPage({ transactions, allTransactions, accounts, categories, search, setSearch, onEditCategory }: { transactions: Transaction[]; allTransactions: Transaction[]; accounts: Account[]; categories: Category[]; search: string; setSearch: (value: string) => void; onEditCategory: (transaction: Transaction) => void }) {
+  const [view, setView] = useState<'month' | 'uncategorized'>('month')
+  const uncategorized = [...allTransactions]
+    .filter((transaction) => transaction.type !== 'transfer' && !transaction.categoryId)
+    .sort((left, right) => right.date.localeCompare(left.date))
+  const displayed = view === 'uncategorized' ? uncategorized : transactions
+  const filtered = displayed.filter((t) => `${t.payee} ${t.note ?? ''} ${categories.find(c => c.id === t.categoryId)?.name ?? ''}`.toLowerCase().includes(search.toLowerCase()))
   return (
     <div className="page-content narrow-page">
       <div className="panel full-panel">
-        <div className="panel-heading transaction-heading"><div><span className="eyebrow">Ledger</span><h2>All transactions</h2></div><label className="search-box"><Search size={17} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search transactions" /></label></div>
+        <div className="panel-heading transaction-heading"><div><span className="eyebrow">Ledger</span><h2>{view === 'uncategorized' ? 'Transactions needing a category' : 'This month’s transactions'}</h2></div><div className="transaction-heading-actions"><div className="segmented transaction-view-toggle"><button type="button" className={view === 'month' ? 'active transfer' : ''} onClick={() => setView('month')}>This month</button><button type="button" className={view === 'uncategorized' ? 'active' : ''} onClick={() => setView('uncategorized')}>Needs category <b>{uncategorized.length}</b></button></div><label className="search-box"><Search size={17} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search transactions" /></label></div></div>
         <div className="table-header"><span>Description</span><span>Account</span><span>Amount</span></div>
         <div className="transaction-list-full">
           {filtered.map((transaction) => (
             <div className="transaction-table-row" key={transaction.id}>
-              <TransactionRow transaction={transaction} categories={categories} accounts={accounts} />
+              <TransactionRow transaction={transaction} categories={categories} accounts={accounts} onEditCategory={transaction.type === 'transfer' ? undefined : () => onEditCategory(transaction)} />
               <span className="account-name">{accounts.find((a) => a.id === transaction.accountId)?.name}{transaction.type === 'transfer' ? ` → ${accounts.find((a) => a.id === transaction.toAccountId)?.name ?? ''}` : ''}</span>
             </div>
           ))}
-          {!filtered.length && <div className="empty-state"><ReceiptText size={28} /><h3>No transactions found</h3><p>Try a different search or add a new transaction.</p></div>}
+          {!filtered.length && <div className="empty-state"><ReceiptText size={28} /><h3>{view === 'uncategorized' && !search ? 'Everything is categorized' : 'No transactions found'}</h3><p>{view === 'uncategorized' && !search ? 'All non-transfer transactions have a category.' : 'Try a different search or add a new transaction.'}</p></div>}
         </div>
       </div>
     </div>
@@ -1118,7 +1145,7 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
   return <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}><div className="modal"><div className="modal-heading"><div><span className="eyebrow">Next Expense</span><h2>{title}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></div>{children}</div></div>
 }
 
-function AccountDetailPage({ account, transactions, candidates, categories, accounts, onBack, onSelectAccount, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, reviewingCandidateId, syncing, syncNotice }: { account: Account; transactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; accounts: Account[]; onBack: () => void; onSelectAccount: (id: string) => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject') => void; reviewingCandidateId: string; syncing: boolean; syncNotice: string }) {
+function AccountDetailPage({ account, transactions, candidates, categories, accounts, onBack, onSelectAccount, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, onUnhideCategory, reviewingCandidateId, syncing, syncNotice }: { account: Account; transactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; accounts: Account[]; onBack: () => void; onSelectAccount: (id: string) => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean) => void; onUnhideCategory: (categoryId: string) => Promise<void>; reviewingCandidateId: string; syncing: boolean; syncNotice: string }) {
   return <div className="page-content narrow-page entity-page">
     <div className="entity-page-toolbar">
       <button className="entity-back" onClick={onBack}><ChevronLeft size={16} />All accounts</button>
@@ -1127,18 +1154,22 @@ function AccountDetailPage({ account, transactions, candidates, categories, acco
     <section className="panel entity-detail-panel">
       <div className="entity-heading"><div className="entity-heading-icon" style={{ background: account.color }}><CreditCard size={20} /></div><div><span className="eyebrow">{account.scope} · {account.type}{account.providerAccountId ? ' · Bank connected' : ''}</span><h2>{account.name}</h2></div><div className="entity-heading-actions">{account.providerAccountId && <button className="primary-button" disabled={syncing} onClick={onSyncBank}>{syncing ? <LoaderCircle className="spin-icon" size={16} /> : <RefreshCw size={16} />}{syncing ? 'Syncing…' : 'Sync now'}</button>}<button className="secondary-button" onClick={onLinkBank}><Link2 size={16} />{account.providerAccountId ? 'Reconnect' : 'Connect bank'}</button></div></div>
       {account.providerAccountId && <div className="bank-sync-status"><div><strong>{account.connectionStatus === 'active' ? 'Bank connection active' : 'Bank connected'}</strong><span>{account.lastSyncedAt ? `Last synced ${new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(account.lastSyncedAt))}` : 'Not synced yet'}</span>{account.lastSyncDiagnostic && !syncNotice && <span>{formatSyncDiagnostic(account.lastSyncDiagnostic)}</span>}</div><span>{syncNotice || formatRateLimits(account)}</span></div>}
-      {account.providerAccountId && <BankImportReview account={account} candidates={candidates} reviewingCandidateId={reviewingCandidateId} onModeChange={onImportModeChange} onReview={onReviewCandidate} />}
+      {account.providerAccountId && <BankImportReview account={account} candidates={candidates} categories={categories} reviewingCandidateId={reviewingCandidateId} onModeChange={onImportModeChange} onReview={onReviewCandidate} onUnhideCategory={onUnhideCategory} />}
       <AccountDetail account={account} transactions={transactions} categories={categories} accounts={accounts} />
     </section>
   </div>
 }
 
-function BankImportReview({ account, candidates, reviewingCandidateId, onModeChange, onReview }: { account: Account; candidates: BankImportCandidate[]; reviewingCandidateId: string; onModeChange: (mode: 'review' | 'automatic') => void; onReview: (candidateId: string, decision: 'approve' | 'reject') => void }) {
+function BankImportReview({ account, candidates, categories, reviewingCandidateId, onModeChange, onReview, onUnhideCategory }: { account: Account; candidates: BankImportCandidate[]; categories: Category[]; reviewingCandidateId: string; onModeChange: (mode: 'review' | 'automatic') => void; onReview: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean) => void; onUnhideCategory: (categoryId: string) => Promise<void> }) {
   const mode = account.bankImportMode ?? 'review'
+  const [categoryAssignments, setCategoryAssignments] = useState<Record<string, string>>({})
+  const [rememberChoices, setRememberChoices] = useState<Record<string, boolean>>({})
+  const [unhidingCategoryId, setUnhidingCategoryId] = useState('')
   const pendingNet = candidates.reduce((sum, candidate) => sum + (candidate.type === 'income' ? candidate.amountMinor : -candidate.amountMinor), 0)
+  const availableCategories = categories.filter((category) => !category.hidden)
   return <section className="bank-import-review">
     <div className="bank-import-review-heading">
-      <div><span className="eyebrow">New bank transactions</span><strong>{mode === 'review' ? 'Review before adding' : 'Add automatically'}</strong><p>{mode === 'review' ? 'Duplicates and confident transfers are still handled automatically.' : 'New transactions are added directly after duplicate and transfer checks.'}</p></div>
+      <div><span className="eyebrow">New bank transactions</span><strong>{mode === 'review' ? 'Review before adding' : 'Add categorized transactions automatically'}</strong><p>{mode === 'review' ? 'Choose a category before each transaction enters the ledger. Duplicates and confident transfers are still handled automatically.' : 'Transactions with a saved payee category are added automatically; the rest wait here for review.'}</p></div>
       <div className="segmented bank-import-mode" aria-label="Bank transaction import mode">
         <button type="button" className={mode === 'review' ? 'active transfer' : ''} onClick={() => onModeChange('review')}>Review first</button>
         <button type="button" className={mode === 'automatic' ? 'active income' : ''} onClick={() => onModeChange('automatic')}>Add automatically</button>
@@ -1146,14 +1177,36 @@ function BankImportReview({ account, candidates, reviewingCandidateId, onModeCha
     </div>
     {candidates.length > 0 && <div className="bank-review-queue">
       <div className="bank-review-summary"><strong>{candidates.length} awaiting review</strong><span>Net effect if approved: {formatMoney(pendingNet, account.currency)}</span></div>
-      {candidates.map((candidate) => <div className="bank-review-row" key={candidate.id}>
-        <div><strong>{candidate.payee}</strong><span>{shortDate.format(new Date(`${candidate.date}T12:00:00Z`))}{candidate.note ? ` · ${candidate.note}` : ''}{candidate.posted ? '' : ' · Pending'}</span></div>
-        <b className={candidate.type === 'income' ? 'positive' : ''}>{candidate.type === 'income' ? '+' : '−'}{formatMoney(candidate.amountMinor, candidate.currency)}</b>
-        <div className="bank-review-actions">
-          <button className="secondary-button" type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => onReview(candidate.id, 'reject')}><X size={14} />Reject</button>
-          <button className="primary-button" type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => onReview(candidate.id, 'approve')}>{reviewingCandidateId === candidate.id ? <LoaderCircle className="spin-icon" size={14} /> : <Check size={14} />}Approve</button>
+      {candidates.map((candidate) => {
+        const categoryId = categoryAssignments[candidate.id] ?? candidate.categoryId ?? ''
+        const rememberCategory = rememberChoices[candidate.id] ?? Boolean(candidate.payeeId)
+        const selectedCategory = categories.find((category) => category.id === categoryId)
+        const hiddenCategory = selectedCategory?.hidden ? selectedCategory : undefined
+        return <div className="bank-review-row" key={candidate.id}>
+          <div><strong>{candidate.payee}</strong><span>{shortDate.format(new Date(`${candidate.date}T12:00:00Z`))}{candidate.note ? ` · ${candidate.note}` : ''}{candidate.posted ? '' : ' · Pending'}</span></div>
+          <b className={candidate.type === 'income' ? 'positive' : ''}>{candidate.type === 'income' ? '+' : '−'}{formatMoney(candidate.amountMinor, candidate.currency)}</b>
+          <div className="bank-review-category">
+            <select aria-label={`Category for ${candidate.payee}`} value={categoryId} onChange={(event) => setCategoryAssignments((current) => ({ ...current, [candidate.id]: event.target.value }))}>
+              <option value="">Choose category…</option>
+              {hiddenCategory && <option value={hiddenCategory.id}>{hiddenCategory.name} (hidden)</option>}
+              {availableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+            </select>
+            {candidate.payeeId && <label className="remember-category"><input type="checkbox" checked={rememberCategory} onChange={(event) => setRememberChoices((current) => ({ ...current, [candidate.id]: event.target.checked }))} />Remember for this payee</label>}
+            {hiddenCategory && <div className="hidden-category-warning"><ShieldAlert size={14} /><p><strong>{hiddenCategory.name} is hidden.</strong> Choose an active category and remember it for this payee, or <button type="button" disabled={Boolean(unhidingCategoryId)} onClick={async () => {
+              setUnhidingCategoryId(hiddenCategory.id)
+              try {
+                await onUnhideCategory(hiddenCategory.id)
+              } finally {
+                setUnhidingCategoryId('')
+              }
+            }}>{unhidingCategoryId === hiddenCategory.id ? 'unhiding…' : 'unhide this category'}</button>.</p></div>}
+          </div>
+          <div className="bank-review-actions">
+            <button className="secondary-button" type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => onReview(candidate.id, 'reject')}><X size={14} />Reject</button>
+            <button className="primary-button" type="button" disabled={!categoryId || Boolean(hiddenCategory) || Boolean(reviewingCandidateId)} onClick={() => onReview(candidate.id, 'approve', categoryId, rememberCategory)}>{reviewingCandidateId === candidate.id ? <LoaderCircle className="spin-icon" size={14} /> : <Check size={14} />}Approve</button>
+          </div>
         </div>
-      </div>)}
+      })}
     </div>}
   </section>
 }
@@ -1365,6 +1418,23 @@ function BankLinkForm({ account, workspaceId, onComplete }: { account: Account; 
     {error && <p className="auth-error" role="alert">{error}</p>}
     <button className="primary-button form-submit" disabled={loading || saving || !institutionId}>{saving ? 'Opening bank…' : 'Continue to bank'}<ArrowRight size={18} /></button>
     <small className="bank-link-note">Next Expense never sees or stores your bank login. GoCardless consent normally lasts up to 90 days.</small>
+  </form>
+}
+
+function TransactionCategoryForm({ transaction, categories, onSubmit }: { transaction: Transaction; categories: Category[]; onSubmit: (categoryId: string) => Promise<void> }) {
+  const currentCategory = categories.find((category) => category.id === transaction.categoryId)
+  const availableCategories = categories.filter((category) => !category.hidden || category.id === transaction.categoryId)
+  const [categoryId, setCategoryId] = useState(transaction.categoryId ?? '')
+  const [saving, setSaving] = useState(false)
+
+  return <form className="form" onSubmit={async (event) => { event.preventDefault(); if (!categoryId) return; setSaving(true); try { await onSubmit(categoryId) } finally { setSaving(false) } }}>
+    <div className="category-edit-transaction">
+      <span className="transaction-icon"><ReceiptText size={18} /></span>
+      <div><strong>{transaction.payee}</strong><span>{shortDate.format(new Date(`${transaction.date}T12:00:00`))} · {formatMoney(transaction.amountMinor, transaction.currency)}</span></div>
+    </div>
+    <label><span>Category</span><select autoFocus required value={categoryId} onChange={(event) => setCategoryId(event.target.value)}><option value="">Choose category…</option>{availableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}{category.hidden ? ' (hidden)' : ''}</option>)}</select></label>
+    {currentCategory?.hidden && categoryId === currentCategory.id && <p className="category-edit-warning"><ShieldAlert size={15} />This category is hidden. Choose an active category to keep future reporting easier to understand.</p>}
+    <button className="primary-button form-submit" disabled={!categoryId || categoryId === transaction.categoryId || saving}>{saving ? 'Saving…' : 'Save category'}<ArrowRight size={18} /></button>
   </form>
 }
 

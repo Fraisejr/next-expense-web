@@ -61,6 +61,8 @@ export type BankImportCandidate = {
   currency: string
   type: 'expense' | 'income'
   payee: string
+  payeeId?: string
+  categoryId?: string
   note?: string
   posted: boolean
 }
@@ -77,6 +79,7 @@ export type Category = {
 export type Payee = {
   id: string
   name: string
+  defaultCategoryId?: string
 }
 
 export type Budget = {

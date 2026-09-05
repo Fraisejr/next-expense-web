@@ -25,6 +25,8 @@ All monetary values are stored as integer minor units (cents). Decimal conversio
 - Multiple currencies are supported. Transactions and accounts retain their original currency instead of being coerced to EUR.
 - Historical exchange rates are supported and must be preserved during migration for cross-currency balances, transfers, and reporting.
 - Recurring transaction generation is intentionally unsupported. Legacy recurrence metadata may be retained for audit purposes, but future-dated generated transactions are excluded from imports and rejected by the database.
+- Every new income or expense transaction must have a category; new transfers must not have one. Historical transaction records remain untouched.
+- The transaction ledger includes an all-time **Needs category** view for historical gaps. Any existing non-transfer transaction can be assigned or moved to an active category from its row.
 
 ## Database
 
@@ -62,11 +64,15 @@ candidate, and the counterparty alias must agree. Provider references are kept
 per account-side so a single logical transfer can retain the different IDs
 reported by both banks. Unlinked bank legs are reconsidered after later syncs.
 
-Each connected account can either add new bank transactions automatically or
-hold them for review. Review mode is the default. Approvals create ledger rows
-atomically; rejections remain as provider-ID tombstones so later syncs do not
-offer them again. Exact duplicates and confident transfers bypass the inbox and
-continue to reconcile automatically in either mode.
+Each connected account can either add categorized bank transactions automatically
+or hold them for review. Review mode is the default. Approvals require a category
+and create ledger rows atomically; the chosen category can be remembered on the
+payee for future imports. In automatic mode, only transactions with a visible
+saved category enter the ledger, while the rest wait for review. A hidden saved
+category is shown as a warning so it can be replaced on the payee or unhidden
+before approval. Rejections remain as provider-ID tombstones so later syncs do
+not offer them again. Exact duplicates and confident transfers bypass the inbox
+and continue to reconcile automatically in either mode.
 
 Transactions retain both GoCardless's `internalTransactionId` as the canonical
 provider identifier and the financial institution's `transactionId` as a

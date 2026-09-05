@@ -91,6 +91,10 @@ export type LoadedWorkspace = {
 }
 
 export async function loadWorkspace(): Promise<LoadedWorkspace> {
+  return loadWorkspaceWithRetries(3)
+}
+
+async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<LoadedWorkspace> {
   const { data: memberships, error: membershipError } = await neon
     .from('workspace_members')
     .select('workspace_id')
@@ -180,6 +184,7 @@ export async function loadWorkspace(): Promise<LoadedWorkspace> {
   const payees: Payee[] = payeeRows.map((row) => ({
     id: row.id as string,
     name: row.name as string,
+    defaultCategoryId: (row.default_category_id as string | null) ?? undefined,
   }))
   const budgets: Budget[] = budgetRows.flatMap((row) => {
     const month = periods.get(row.period_id as string)
@@ -201,11 +206,24 @@ export async function loadWorkspace(): Promise<LoadedWorkspace> {
       currency: String(row.currency),
       type: row.transaction_type as BankImportCandidate['type'],
       payee: String(row.payee_name),
+      payeeId: (row.payee_id as string | null) ?? undefined,
+      categoryId: (row.category_id as string | null) ?? undefined,
       note: (row.memo as string | null) ?? undefined,
       posted: Boolean(row.posted),
     }))
   const workspace = (workspaceResult.data?.[0] as unknown as Row | undefined)
-  if (!workspace) throw new Error('The linked workspace could not be read.')
+  if (!workspace) {
+    // Neon Auth can restore its browser session just before the Data API starts
+    // applying that session to RLS-protected reads. A membership row without its
+    // referenced workspace cannot be a stable database state, so retry the whole
+    // snapshot instead of asking the user to do it manually.
+    if (retriesRemaining > 0) {
+      const attempt = 4 - retriesRemaining
+      await new Promise((resolve) => setTimeout(resolve, 200 * (2 ** (attempt - 1))))
+      return loadWorkspaceWithRetries(retriesRemaining - 1)
+    }
+    throw new Error('The linked workspace could not be read.')
+  }
 
   return {
     workspaceId,
@@ -258,10 +276,12 @@ export async function updateBankImportMode(workspaceId: string, accountId: strin
   if (error) throw error
 }
 
-export async function approveBankImportCandidate(workspaceId: string, candidateId: string) {
+export async function approveBankImportCandidate(workspaceId: string, candidateId: string, categoryId: string, rememberCategory: boolean) {
   const { data, error } = await neon.rpc('approve_bank_import_candidate', {
     p_workspace_id: workspaceId,
     p_candidate_id: candidateId,
+    p_category_id: categoryId,
+    p_remember_category: rememberCategory,
   })
   if (error) throw error
   return String(data)
@@ -304,13 +324,17 @@ async function resolvePayees(workspaceId: string, sourceNames: string[], createM
   if (!names.length) return []
 
   const [payeeResult, mappingResult] = await Promise.all([
-    neon.from('payees').select('id,name').eq('workspace_id', workspaceId).order('id', { ascending: true }),
+    neon.from('payees').select('id,name,default_category_id').eq('workspace_id', workspaceId).order('id', { ascending: true }),
     neon.from('payee_mappings').select('normalized_name,payee_id').eq('workspace_id', workspaceId).order('id', { ascending: true }),
   ])
   if (payeeResult.error) throw payeeResult.error
   if (mappingResult.error) throw mappingResult.error
 
-  const payees = (payeeResult.data ?? []).map((row) => ({ id: String(row.id), name: String(row.name) }))
+  const payees: Payee[] = (payeeResult.data ?? []).map((row) => ({
+    id: String(row.id),
+    name: String(row.name),
+    defaultCategoryId: row.default_category_id ? String(row.default_category_id) : undefined,
+  }))
   const payeeById = new Map(payees.map((payee) => [payee.id, payee]))
   const payeeByName = new Map<string, Payee>()
   for (const row of mappingResult.data ?? []) {
@@ -327,7 +351,7 @@ async function resolvePayees(workspaceId: string, sourceNames: string[], createM
     for (const name of names) {
       const normalized = normalizedPayeeName(name)
       if (payeeByName.has(normalized)) continue
-      const payee = { id: crypto.randomUUID(), name }
+      const payee: Payee = { id: crypto.randomUUID(), name }
       const { error } = await neon.from('payees').insert({
         id: payee.id,
         workspace_id: workspaceId,
@@ -450,6 +474,9 @@ export async function saveBudget(workspaceId: string, budget: Budget) {
 }
 
 export async function createTransaction(workspaceId: string, transaction: Transaction) {
+  if (transaction.type === 'transfer' ? transaction.categoryId : !transaction.categoryId) {
+    throw new Error(transaction.type === 'transfer' ? 'Transfers cannot have a category.' : 'Choose a category before saving this transaction.')
+  }
   const periodId = await ensurePeriod(workspaceId, transaction.date.slice(0, 7))
   const { error } = await neon.from('transactions').insert({
     id: transaction.id,
@@ -473,6 +500,27 @@ export async function createTransaction(workspaceId: string, transaction: Transa
     source: 'manual',
   })
   if (error) throw error
+}
+
+export async function updateTransactionDetails(workspaceId: string, transactionId: string, payeeId: string, categoryId: string) {
+  const { data, error } = await neon.from('transactions')
+    .update({ payee_id: payeeId, category_id: categoryId })
+    .eq('workspace_id', workspaceId)
+    .eq('id', transactionId)
+    .neq('transaction_type', 'transfer')
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The transaction could not be updated. Transfers do not have categories.')
+}
+
+export async function updatePayeeDefaultCategory(workspaceId: string, payeeId: string, categoryId: string) {
+  const { data, error } = await neon.from('payees')
+    .update({ default_category_id: categoryId })
+    .eq('workspace_id', workspaceId)
+    .eq('id', payeeId)
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The payee default category could not be updated.')
 }
 
 export async function updateTaxRate(workspaceId: string, estimatedCompanyTaxRateBps: number) {
@@ -859,16 +907,34 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
     // from an older consent. Establish a clean delta boundary on its first sync.
     .filter((transaction) => transaction.date <= today)
   const duplicates = Math.max(0, receivedTransactions.length - unseenTransactions.length - pendingPromoted - transfersMatched)
-  const transactionsToStage = account.bankImportMode === 'automatic' ? [] : newTransactions
-  const transactionsToInsert = account.bankImportMode === 'automatic' ? newTransactions : []
 
   const sourcePayeeNames = [...new Set(newTransactions.map((transaction) => transaction.payee.normalize('NFKC').trim()).filter(Boolean))]
-  const resolvedPayees = await findPayees(workspaceId, sourcePayeeNames)
+  const [resolvedPayees, categoryResult] = await Promise.all([
+    findPayees(workspaceId, sourcePayeeNames),
+    neon.from('categories').select('id,hidden').eq('workspace_id', workspaceId),
+  ])
+  if (categoryResult.error) throw categoryResult.error
+  const hiddenCategoryIds = new Set((categoryResult.data ?? []).filter((category) => category.hidden).map((category) => String(category.id)))
   const payeeIdByName = new Map<string, string>()
+  const defaultCategoryIdByName = new Map<string, string>()
   sourcePayeeNames.forEach((name, index) => {
     const payee = resolvedPayees[index]
-    if (payee) payeeIdByName.set(normalizedPayeeName(name), payee.id)
+    if (!payee) return
+    const normalizedName = normalizedPayeeName(name)
+    payeeIdByName.set(normalizedName, payee.id)
+    if (payee.defaultCategoryId) defaultCategoryIdByName.set(normalizedName, payee.defaultCategoryId)
   })
+  const defaultCategoryFor = (transaction: BankSyncPayload['transactions'][number]) => defaultCategoryIdByName.get(normalizedPayeeName(transaction.payee))
+  const canApplyDefaultCategory = (transaction: BankSyncPayload['transactions'][number]) => {
+    const categoryId = defaultCategoryFor(transaction)
+    return Boolean(categoryId && !hiddenCategoryIds.has(categoryId))
+  }
+  const transactionsToInsert = account.bankImportMode === 'automatic'
+    ? newTransactions.filter(canApplyDefaultCategory)
+    : []
+  const transactionsToStage = account.bankImportMode === 'automatic'
+    ? newTransactions.filter((transaction) => !canApplyDefaultCategory(transaction))
+    : newTransactions
 
   const periodIds = new Map<string, string>()
   const rows: Row[] = []
@@ -891,6 +957,7 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
       destination_amount_minor: 0,
       currency: transaction.currency,
       transaction_type: transaction.type,
+      category_id: defaultCategoryFor(transaction),
       payee_id: payeeIdByName.get(normalizedPayeeName(transaction.payee)) ?? null,
       payee_name: transaction.payee,
       memo: transaction.note || null,
@@ -917,6 +984,7 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
     amount_minor: amountToMinor(transaction.amount, transaction.currency),
     currency: transaction.currency,
     transaction_type: transaction.type,
+    category_id: defaultCategoryFor(transaction) ?? null,
     payee_id: payeeIdByName.get(normalizedPayeeName(transaction.payee)) ?? null,
     payee_name: transaction.payee,
     memo: transaction.note || null,
