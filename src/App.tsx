@@ -6,7 +6,7 @@ import {
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, assignPayeeMapping, createAccount, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteCategoryGroup, deletePayeeMapping, deleteUnusedCategory, ensurePayees, linkBankAccount, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, updateAccountDetails, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateCategoryName, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updateTaxRate, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
+import { approveBankImportCandidate, assignPayeeMapping, createAccount, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteCategoryGroup, deletePayeeMapping, deleteUnusedCategory, ensurePayees, linkBankAccount, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, updateAccountDetails, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateCategoryName, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updateTaxRate, updateTransactionCategories, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
 import { neon } from './neon'
 import type { Account, AccountScope, AppData, BalanceSheetGroup, BankImportCandidate, Category, CategoryGroup, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
 
@@ -535,7 +535,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
-  async function changeTransactionDetails(transactionId: string, payeeName: string, payeeId: string | undefined, categoryId: string, rememberDefault: boolean, rememberMapping: boolean, mappingSource: string) {
+  async function changeTransactionDetails(transactionId: string, payeeName: string, payeeId: string | undefined, categoryId: string, rememberDefault: boolean, rememberMapping: boolean, mappingSource: string, matchingTransactionIds: string[]) {
     try {
       setSyncError('')
       const selectedPayee = payeeId ? data.payees.find((payee) => payee.id === payeeId) : undefined
@@ -543,6 +543,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       const createdPayee = !data.payees.some((item) => item.id === payee.id)
       const transaction = data.transactions.find((item) => item.id === transactionId)
       await updateTransactionDetails(workspace.workspaceId, transactionId, payee.id, categoryId)
+      await updateTransactionCategories(workspace.workspaceId, matchingTransactionIds, categoryId)
       if (createdPayee && transaction) await updatePayeeDefaults(workspace.workspaceId, payee.id, categoryId, transaction.accountId)
       else if (rememberDefault) await updatePayeeDefaultCategory(workspace.workspaceId, payee.id, categoryId)
       if (rememberMapping && mappingSource.trim()) {
@@ -565,7 +566,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         payees: current.payees.some((item) => item.id === payee.id)
           ? current.payees.map((item) => item.id === payee.id ? payeeWithDefaults : item)
           : [...current.payees, payeeWithDefaults],
-        transactions: current.transactions.map((transaction) => transaction.id === transactionId ? { ...transaction, payeeId: payee.id, payee: payee.name, categoryId } : transaction),
+        transactions: current.transactions.map((transaction) => transaction.id === transactionId ? { ...transaction, payeeId: payee.id, payee: payee.name, categoryId } : matchingTransactionIds.includes(transaction.id) ? { ...transaction, categoryId } : transaction),
       }))
       setCategoryTarget(null)
     } catch (error) {
@@ -872,7 +873,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         </ModalShell>
       )}
       {categoryTarget && <ModalShell title="Edit transaction" onClose={() => setCategoryTarget(null)}>
-        <TransactionDetailsForm transaction={categoryTarget} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} onSubmit={(payeeName, payeeId, categoryId, rememberDefault, rememberMapping, mappingSource) => changeTransactionDetails(categoryTarget.id, payeeName, payeeId, categoryId, rememberDefault, rememberMapping, mappingSource)} />
+        <TransactionDetailsForm transaction={categoryTarget} transactions={data.transactions} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} onSubmit={(payeeName, payeeId, categoryId, rememberDefault, rememberMapping, mappingSource, matchingTransactionIds) => changeTransactionDetails(categoryTarget.id, payeeName, payeeId, categoryId, rememberDefault, rememberMapping, mappingSource, matchingTransactionIds)} />
       </ModalShell>}
     </div>
   )
@@ -1868,13 +1869,14 @@ function BankLinkForm({ account, workspaceId, onComplete }: { account: Account; 
   </form>
 }
 
-function TransactionDetailsForm({ transaction, categories, payees, mappings, onSubmit }: { transaction: Transaction; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; onSubmit: (payeeName: string, payeeId: string | undefined, categoryId: string, rememberDefault: boolean, rememberMapping: boolean, mappingSource: string) => Promise<void> }) {
+function TransactionDetailsForm({ transaction, transactions, categories, payees, mappings, onSubmit }: { transaction: Transaction; transactions: Transaction[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; onSubmit: (payeeName: string, payeeId: string | undefined, categoryId: string, rememberDefault: boolean, rememberMapping: boolean, mappingSource: string, matchingTransactionIds: string[]) => Promise<void> }) {
   const [categoryId, setCategoryId] = useState(transaction.categoryId ?? '')
   const [payeeQuery, setPayeeQuery] = useState(transaction.payee)
   const [selectedPayeeId, setSelectedPayeeId] = useState(transaction.payeeId ?? '')
   const [pickerOpen, setPickerOpen] = useState(false)
   const [rememberDefault, setRememberDefault] = useState(false)
   const [rememberMapping, setRememberMapping] = useState(true)
+  const [selectedRelatedIds, setSelectedRelatedIds] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const normalizedQuery = payeeQuery.trim().toLocaleLowerCase('en')
   const matchingPayees = payees
@@ -1900,17 +1902,26 @@ function TransactionDetailsForm({ transaction, categories, payees, mappings, onS
   const mappingAlreadyExists = Boolean(selectedPayee && mappings.some((mapping) => mapping.payeeId === selectedPayee.id && normalizedPayeeName(mapping.sourceName) === normalizedPayeeName(bankMappingSource)))
   const targetPayeeName = selectedPayee?.name ?? payeeQuery.trim()
   const offerMapping = Boolean(payeeChanged && targetPayeeName && bankMappingSource && normalizedPayeeName(bankMappingSource) !== normalizedPayeeName(targetPayeeName) && !mappingAlreadyExists)
+  const normalizedTargetPayee = normalizedPayeeName(targetPayeeName)
+  const relatedTransactions = transactions
+    .filter((item) => item.id !== transaction.id && item.type !== 'transfer')
+    .filter((item) => selectedPayeeId ? item.payeeId === selectedPayeeId : normalizedPayeeName(item.payee) === normalizedTargetPayee)
+    .sort((left, right) => right.date.localeCompare(left.date))
+  const selectableRelated = relatedTransactions.filter((item) => item.categoryId !== categoryId)
+  const selectedRelatedCount = selectableRelated.filter((item) => selectedRelatedIds.includes(item.id)).length
+  const showRelatedTransactions = Boolean(categoryId && categoryId !== transaction.categoryId && relatedTransactions.length)
 
-  return <form className="form" onSubmit={async (event) => { event.preventDefault(); if (!categoryId || !payeeQuery.trim()) return; setSaving(true); try { await onSubmit(payeeQuery.trim(), selectedPayee?.id, categoryId, rememberDefault, offerMapping && rememberMapping, bankMappingSource) } finally { setSaving(false) } }}>
+  return <form className="form" onSubmit={async (event) => { event.preventDefault(); if (!categoryId || !payeeQuery.trim()) return; setSaving(true); try { await onSubmit(payeeQuery.trim(), selectedPayee?.id, categoryId, rememberDefault, offerMapping && rememberMapping, bankMappingSource, selectedRelatedIds.filter((id) => selectableRelated.some((item) => item.id === id))) } finally { setSaving(false) } }}>
     <div className="category-edit-transaction">
       <span className="transaction-icon"><ReceiptText size={18} /></span>
       <div><strong>{transaction.payee}</strong><span>{shortDate.format(new Date(`${transaction.date}T12:00:00`))} · {formatMoney(transaction.amountMinor, transaction.currency)}</span></div>
     </div>
-    <label><span>Payee</span><div className="transaction-payee-picker"><Search size={16} /><input autoFocus required value={payeeQuery} autoComplete="off" onFocus={() => setPickerOpen(true)} onBlur={() => setPickerOpen(false)} onChange={(event) => {
+    <label><span>Payee</span><div className="transaction-payee-picker"><Search size={16} /><input required value={payeeQuery} autoComplete="off" onFocus={() => setPickerOpen(true)} onBlur={() => setPickerOpen(false)} onChange={(event) => {
       const query = event.target.value
       const exact = payees.find((payee) => payee.name.localeCompare(query.trim(), undefined, { sensitivity: 'accent' }) === 0)
       setPayeeQuery(query)
       setSelectedPayeeId(exact?.id ?? '')
+      setSelectedRelatedIds([])
       const exactDefault = categories.find((category) => category.id === exact?.defaultCategoryId)
       if (exactDefault) setCategoryId(exactDefault.id)
       setRememberDefault(false)
@@ -1920,17 +1931,29 @@ function TransactionDetailsForm({ transaction, categories, payees, mappings, onS
       {pickerOpen && <div className="transaction-payee-options" role="listbox">
         {matchingPayees.map((payee) => {
           const payeeDefault = categories.find((category) => category.id === payee.defaultCategoryId)
-          return <button type="button" role="option" aria-selected={payee.id === selectedPayeeId} key={payee.id} onMouseDown={(event) => event.preventDefault()} onClick={() => { setPayeeQuery(payee.name); setSelectedPayeeId(payee.id); if (payeeDefault) setCategoryId(payeeDefault.id); setRememberDefault(false); if (payee.id !== selectedPayeeId) setRememberMapping(true); setPickerOpen(false) }}><strong>{payee.name}</strong><small>Default category: {payeeDefault ? `${payeeDefault.name}${payeeDefault.hidden ? ' (hidden)' : ''}` : 'None'}</small></button>
+          return <button type="button" role="option" aria-selected={payee.id === selectedPayeeId} key={payee.id} onMouseDown={(event) => event.preventDefault()} onClick={() => { setPayeeQuery(payee.name); setSelectedPayeeId(payee.id); setSelectedRelatedIds([]); if (payeeDefault) setCategoryId(payeeDefault.id); setRememberDefault(false); if (payee.id !== selectedPayeeId) setRememberMapping(true); setPickerOpen(false) }}><strong>{payee.name}</strong><small>Default category: {payeeDefault ? `${payeeDefault.name}${payeeDefault.hidden ? ' (hidden)' : ''}` : 'None'}</small></button>
         })}
         {!matchingPayees.length && payeeQuery.trim() && <div className="new-payee-option"><strong>Create “{payeeQuery.trim()}”</strong><small>This payee does not exist yet.</small></div>}
       </div>}
     </div></label>
     <div className="selected-payee-default"><div><span>Selected payee default</span><strong>{selectedPayee ? (defaultCategory ? `${defaultCategory.name}${defaultCategory.hidden ? ' (hidden)' : ''}` : 'No default category') : payeeQuery.trim() ? 'New payee · transaction category will become its default' : 'Choose or enter a payee'}</strong></div></div>
-    <label><span>Category</span><select required value={categoryId} onChange={(event) => { const nextCategoryId = event.target.value; setCategoryId(nextCategoryId); setRememberDefault(Boolean(selectedPayee && nextCategoryId && selectedPayee.defaultCategoryId !== nextCategoryId)) }}><option value="">Choose category…</option>{availableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}{category.hidden ? ' (hidden)' : ''}</option>)}</select></label>
+    <label><span>Category</span><CategorySearchPicker ariaLabel="Category" value={categoryId} categories={availableCategories} onChange={(nextCategoryId) => { setCategoryId(nextCategoryId); setSelectedRelatedIds([]); setRememberDefault(Boolean(selectedPayee && nextCategoryId && selectedPayee.defaultCategoryId !== nextCategoryId)) }} /></label>
     {selectedCategory?.hidden && <p className="category-edit-warning"><ShieldAlert size={15} />This category is hidden. Choose an active category to keep future reporting easier to understand.</p>}
     {selectedPayee && categoryId && selectedPayee.defaultCategoryId !== categoryId && <label className="remember-category transaction-default-choice"><input type="checkbox" checked={rememberDefault} onChange={(event) => setRememberDefault(event.target.checked)} />Make {selectedCategory?.name ?? 'this category'} the default for {selectedPayee.name}</label>}
     {offerMapping && <label className="remember-category transaction-default-choice transaction-mapping-choice"><input type="checkbox" checked={rememberMapping} onChange={(event) => setRememberMapping(event.target.checked)} /><span>Add the {bankMappingLabel} “{bankMappingSource}” as an alternative name for <strong>{targetPayeeName}</strong></span></label>}
-    <button className="primary-button form-submit" disabled={!categoryId || !payeeQuery.trim() || (!changed && !rememberDefault) || saving}>{saving ? 'Saving…' : 'Save transaction'}<ArrowRight size={18} /></button>
+    {showRelatedTransactions && <section className="related-transactions-choice">
+      <div className="related-transactions-heading"><div><strong>Other transactions for {targetPayeeName}</strong><span>Select any that should use {selectedCategory?.name ?? 'this category'} too.</span></div>{selectableRelated.length > 1 && <label><input type="checkbox" checked={selectedRelatedCount === selectableRelated.length} onChange={(event) => setSelectedRelatedIds(event.target.checked ? selectableRelated.map((item) => item.id) : [])} />Select all</label>}</div>
+      <div className="related-transactions-list">{relatedTransactions.map((item) => {
+        const currentCategory = categories.find((category) => category.id === item.categoryId)
+        const alreadyUsesCategory = item.categoryId === categoryId
+        return <label className={alreadyUsesCategory ? 'related-transaction already-matched' : 'related-transaction'} key={item.id}>
+          <input type="checkbox" disabled={alreadyUsesCategory} checked={alreadyUsesCategory || selectedRelatedIds.includes(item.id)} onChange={(event) => setSelectedRelatedIds((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} />
+          <span><strong>{shortDate.format(new Date(`${item.date}T12:00:00`))}</strong><small>{currentCategory?.name ?? 'Uncategorised'}</small></span>
+          <b className={item.type === 'income' ? 'positive' : ''}>{item.type === 'income' ? '+' : '−'}{formatMoney(item.amountMinor, item.currency)}</b>
+        </label>
+      })}</div>
+    </section>}
+    <button className="primary-button form-submit" disabled={!categoryId || !payeeQuery.trim() || (!changed && !rememberDefault) || saving}>{saving ? 'Saving…' : selectedRelatedCount ? `Save ${selectedRelatedCount + 1} transactions` : 'Save transaction'}<ArrowRight size={18} /></button>
   </form>
 }
 

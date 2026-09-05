@@ -677,6 +677,18 @@ export async function updateTransactionDetails(workspaceId: string, transactionI
   if (!data?.length) throw new Error('The transaction could not be updated. Transfers do not have categories.')
 }
 
+export async function updateTransactionCategories(workspaceId: string, transactionIds: string[], categoryId: string) {
+  if (!transactionIds.length) return
+  const { data, error } = await neon.from('transactions')
+    .update({ category_id: categoryId })
+    .eq('workspace_id', workspaceId)
+    .in('id', transactionIds)
+    .neq('transaction_type', 'transfer')
+    .select('id')
+  if (error) throw error
+  if (data?.length !== transactionIds.length) throw new Error('Some matching transactions could not be updated.')
+}
+
 export async function updatePayeeDefaultCategory(workspaceId: string, payeeId: string, categoryId: string | null) {
   const { data, error } = await neon.from('payees')
     .update({ default_category_id: categoryId })
