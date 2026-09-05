@@ -6,7 +6,7 @@ import {
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, assignPayeeMapping, createAccount, createCategory, createTransaction, ensurePayees, linkBankAccount, loadWorkspace, rejectBankImportCandidate, saveAccountOrder, saveBankSync, saveBudget, updateBankImportMode, updateCategoryHidden, updateTaxRate, updateTransactionCategory, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
+import { approveBankImportCandidate, assignPayeeMapping, createAccount, createCategory, createTransaction, ensurePayees, linkBankAccount, loadWorkspace, rejectBankImportCandidate, saveAccountOrder, saveBankSync, saveBudget, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryHidden, updatePayeeDefaultCategory, updateTaxRate, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace } from './database'
 import { neon } from './neon'
 import type { Account, AccountScope, AppData, BankImportCandidate, Category, Payee, ReportGroup, Transaction } from './types'
 
@@ -387,17 +387,27 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
-  async function changeTransactionCategory(transactionId: string, categoryId: string) {
+  async function changeTransactionDetails(transactionId: string, payeeName: string, payeeId: string | undefined, categoryId: string, rememberDefault: boolean) {
     try {
       setSyncError('')
-      await updateTransactionCategory(workspace.workspaceId, transactionId, categoryId)
+      const selectedPayee = payeeId ? data.payees.find((payee) => payee.id === payeeId) : undefined
+      const [payee] = selectedPayee ? [selectedPayee] : await ensurePayees(workspace.workspaceId, [payeeName])
+      await updateTransactionDetails(workspace.workspaceId, transactionId, payee.id, categoryId)
       setData((current) => ({
         ...current,
-        transactions: current.transactions.map((transaction) => transaction.id === transactionId ? { ...transaction, categoryId } : transaction),
+        payees: current.payees.some((item) => item.id === payee.id) ? current.payees : [...current.payees, payee],
+        transactions: current.transactions.map((transaction) => transaction.id === transactionId ? { ...transaction, payeeId: payee.id, payee: payee.name, categoryId } : transaction),
       }))
+      if (rememberDefault) {
+        await updatePayeeDefaultCategory(workspace.workspaceId, payee.id, categoryId)
+        setData((current) => ({
+          ...current,
+          payees: current.payees.map((item) => item.id === payee.id ? { ...item, defaultCategoryId: categoryId } : item),
+        }))
+      }
       setCategoryTarget(null)
     } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not update the transaction category.'))
+      setSyncError(getErrorMessage(error, 'Could not update the transaction.'))
     }
   }
 
@@ -459,12 +469,13 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
-  async function decideBankImportCandidate(candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory = false) {
+  async function decideBankImportCandidate(candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory = false, payeeId?: string | null) {
     try {
       setSyncError('')
       setReviewingCandidateId(candidateId)
       if (decision === 'approve') {
         if (!categoryId) throw new Error('Choose a category before approving this transaction.')
+        await updateBankImportCandidatePayee(workspace.workspaceId, candidateId, payeeId ?? null)
         await approveBankImportCandidate(workspace.workspaceId, candidateId, categoryId, rememberCategory)
       }
       else await rejectBankImportCandidate(workspace.workspaceId, candidateId)
@@ -593,13 +604,13 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <AccountsPage accounts={activeAccounts} totalBalance={totalBalance} onAdd={() => setModal('account')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onReorder={reorderAccounts} />
         )}
         {selectedAccount && (
-          <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} reviewingCandidateId={reviewingCandidateId} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
+          <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} accounts={data.accounts} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
         )}
         {selectedCategory && (
-          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} accounts={data.accounts} onUpdateBudget={updateBudget} onSetHidden={setCategoryHidden} onBack={() => goTo('/budgets')} onSelectCategory={(id) => goTo(`/categories/${id}`)} />
+          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} accounts={data.accounts} onUpdateBudget={updateBudget} onSetHidden={setCategoryHidden} onBack={() => goTo('/budgets')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
         )}
         {selectedPayee && (
-          <PayeeDetailPage payee={selectedPayee} transactions={data.transactions.filter((transaction) => transaction.payeeId === selectedPayee.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/payees')} />
+          <PayeeDetailPage payee={selectedPayee} transactions={data.transactions.filter((transaction) => transaction.payeeId === selectedPayee.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/payees')} onEditTransaction={setCategoryTarget} />
         )}
       </main>
 
@@ -611,8 +622,8 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           {modal === 'bank' && bankTarget && <BankLinkForm account={bankTarget} workspaceId={workspace.workspaceId} onComplete={() => window.location.reload()} />}
         </ModalShell>
       )}
-      {categoryTarget && <ModalShell title="Edit category" onClose={() => setCategoryTarget(null)}>
-        <TransactionCategoryForm transaction={categoryTarget} categories={data.categories} onSubmit={(categoryId) => changeTransactionCategory(categoryTarget.id, categoryId)} />
+      {categoryTarget && <ModalShell title="Edit transaction" onClose={() => setCategoryTarget(null)}>
+        <TransactionDetailsForm transaction={categoryTarget} categories={data.categories} payees={data.payees} onSubmit={(payeeName, payeeId, categoryId, rememberDefault) => changeTransactionDetails(categoryTarget.id, payeeName, payeeId, categoryId, rememberDefault)} />
       </ModalShell>}
     </div>
   )
@@ -789,7 +800,7 @@ function TransactionRow({ transaction, categories, accounts, compact = false, fo
         <strong>{isTransfer ? `Transfer to ${destinationAccount?.name ?? 'account'}` : transaction.payee}{transaction.posted === false && <em className="pending-badge">Pending</em>}</strong>
         <span>{isTransfer ? `${sourceAccount?.name ?? 'Account'} → ${destinationAccount?.name ?? 'Account'}` : category?.name ?? 'Uncategorised'} · {shortDate.format(new Date(`${transaction.date}T12:00:00`))}</span>
       </div>
-      {onEditCategory && <button type="button" className={category ? 'transaction-category-edit' : 'transaction-category-edit missing'} onClick={onEditCategory} aria-label={`Edit category for ${transaction.payee}`}><Pencil size={12} />{category?.name ?? 'Choose category'}</button>}
+      {onEditCategory && <button type="button" className={category ? 'transaction-category-edit' : 'transaction-category-edit missing'} onClick={onEditCategory} aria-label={`Edit ${transaction.payee}`}><Pencil size={12} />Edit</button>}
       <b className={transaction.type === 'income' || transferIsIncoming ? 'positive' : isTransfer && !focusAccountId ? 'transfer-amount' : ''}>{prefix}{formatMoney(transaction.amountMinor, transaction.currency)}</b>
     </div>
   )
@@ -941,7 +952,7 @@ function PayeesPage({ payees, transactions, onSelectPayee, onMapPayee, onCreateP
   </div>
 }
 
-function PayeeDetailPage({ payee, transactions, categories, accounts, onBack }: { payee: Payee; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onBack: () => void }) {
+function PayeeDetailPage({ payee, transactions, categories, accounts, onBack, onEditTransaction }: { payee: Payee; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onBack: () => void; onEditTransaction: (transaction: Transaction) => void }) {
   const sortedTransactions = [...transactions].sort((left, right) => right.date.localeCompare(left.date))
   const expenseCount = transactions.filter((transaction) => transaction.type === 'expense').length
   const incomeCount = transactions.filter((transaction) => transaction.type === 'income').length
@@ -960,7 +971,7 @@ function PayeeDetailPage({ payee, transactions, categories, accounts, onBack }: 
       <div className="table-header"><span>Description</span><span>Account</span><span>Amount</span></div>
       <div className="transaction-list-full">
         {sortedTransactions.map((transaction) => <div className="transaction-table-row" key={transaction.id}>
-          <TransactionRow transaction={transaction} categories={categories} accounts={accounts} />
+          <TransactionRow transaction={transaction} categories={categories} accounts={accounts} onEditCategory={transaction.type === 'transfer' ? undefined : () => onEditTransaction(transaction)} />
           <span className="account-name">{accounts.find((account) => account.id === transaction.accountId)?.name}</span>
         </div>)}
         {!sortedTransactions.length && <div className="empty-state"><ReceiptText size={28} /><h3>No linked transactions</h3><p>This payee is in the register but has no transaction history.</p></div>}
@@ -1145,7 +1156,7 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
   return <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}><div className="modal"><div className="modal-heading"><div><span className="eyebrow">Next Expense</span><h2>{title}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></div>{children}</div></div>
 }
 
-function AccountDetailPage({ account, transactions, candidates, categories, accounts, onBack, onSelectAccount, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, onUnhideCategory, reviewingCandidateId, syncing, syncNotice }: { account: Account; transactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; accounts: Account[]; onBack: () => void; onSelectAccount: (id: string) => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean) => void; onUnhideCategory: (categoryId: string) => Promise<void>; reviewingCandidateId: string; syncing: boolean; syncNotice: string }) {
+function AccountDetailPage({ account, transactions, candidates, categories, payees, accounts, onBack, onSelectAccount, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, onUnhideCategory, onEditTransaction, reviewingCandidateId, syncing, syncNotice }: { account: Account; transactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; accounts: Account[]; onBack: () => void; onSelectAccount: (id: string) => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null) => void; onUnhideCategory: (categoryId: string) => Promise<void>; onEditTransaction: (transaction: Transaction) => void; reviewingCandidateId: string; syncing: boolean; syncNotice: string }) {
   return <div className="page-content narrow-page entity-page">
     <div className="entity-page-toolbar">
       <button className="entity-back" onClick={onBack}><ChevronLeft size={16} />All accounts</button>
@@ -1154,15 +1165,63 @@ function AccountDetailPage({ account, transactions, candidates, categories, acco
     <section className="panel entity-detail-panel">
       <div className="entity-heading"><div className="entity-heading-icon" style={{ background: account.color }}><CreditCard size={20} /></div><div><span className="eyebrow">{account.scope} · {account.type}{account.providerAccountId ? ' · Bank connected' : ''}</span><h2>{account.name}</h2></div><div className="entity-heading-actions">{account.providerAccountId && <button className="primary-button" disabled={syncing} onClick={onSyncBank}>{syncing ? <LoaderCircle className="spin-icon" size={16} /> : <RefreshCw size={16} />}{syncing ? 'Syncing…' : 'Sync now'}</button>}<button className="secondary-button" onClick={onLinkBank}><Link2 size={16} />{account.providerAccountId ? 'Reconnect' : 'Connect bank'}</button></div></div>
       {account.providerAccountId && <div className="bank-sync-status"><div><strong>{account.connectionStatus === 'active' ? 'Bank connection active' : 'Bank connected'}</strong><span>{account.lastSyncedAt ? `Last synced ${new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(account.lastSyncedAt))}` : 'Not synced yet'}</span>{account.lastSyncDiagnostic && !syncNotice && <span>{formatSyncDiagnostic(account.lastSyncDiagnostic)}</span>}</div><span>{syncNotice || formatRateLimits(account)}</span></div>}
-      {account.providerAccountId && <BankImportReview account={account} candidates={candidates} categories={categories} reviewingCandidateId={reviewingCandidateId} onModeChange={onImportModeChange} onReview={onReviewCandidate} onUnhideCategory={onUnhideCategory} />}
-      <AccountDetail account={account} transactions={transactions} categories={categories} accounts={accounts} />
+      {account.providerAccountId && <BankImportReview account={account} candidates={candidates} categories={categories} payees={payees} reviewingCandidateId={reviewingCandidateId} onModeChange={onImportModeChange} onReview={onReviewCandidate} onUnhideCategory={onUnhideCategory} />}
+      <AccountDetail account={account} transactions={transactions} categories={categories} accounts={accounts} onEditTransaction={onEditTransaction} />
     </section>
   </div>
 }
 
-function BankImportReview({ account, candidates, categories, reviewingCandidateId, onModeChange, onReview, onUnhideCategory }: { account: Account; candidates: BankImportCandidate[]; categories: Category[]; reviewingCandidateId: string; onModeChange: (mode: 'review' | 'automatic') => void; onReview: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean) => void; onUnhideCategory: (categoryId: string) => Promise<void> }) {
+function CategoryLabel({ category }: { category: Category }) {
+  const Icon = categoryIcons[category.icon as keyof typeof categoryIcons] ?? Sparkles
+  return <span className="picker-category-label"><i style={{ color: category.color, background: `${category.color}18` }}><Icon size={13} /></i><span>{category.name}</span>{category.hidden && <em>Hidden</em>}</span>
+}
+
+function PayeeSearchPicker({ ariaLabel, value, payees, categories, allowEmpty = false, onChange }: { ariaLabel: string; value: string; payees: Payee[]; categories: Category[]; allowEmpty?: boolean; onChange: (value: string) => void }) {
+  const selected = payees.find((payee) => payee.id === value)
+  const [query, setQuery] = useState(selected?.name ?? '')
+  const [open, setOpen] = useState(false)
+  useEffect(() => setQuery(selected?.name ?? ''), [selected?.name])
+  const normalizedQuery = query.trim().toLocaleLowerCase('en')
+  const options = [...payees].filter((payee) => !normalizedQuery || payee.name.toLocaleLowerCase('en').includes(normalizedQuery)).sort((left, right) => left.name.localeCompare(right.name)).slice(0, 20)
+
+  return <div className="search-picker">
+    <Search size={14} />
+    <input aria-label={ariaLabel} role="combobox" aria-expanded={open} autoComplete="off" placeholder="Search payees…" value={query} onFocus={(event) => { setOpen(true); event.currentTarget.select() }} onBlur={() => { setOpen(false); setQuery(selected?.name ?? '') }} onKeyDown={(event) => { if (event.key === 'Escape') { setOpen(false); event.currentTarget.blur() } }} onChange={(event) => { setQuery(event.target.value); setOpen(true) }} />
+    <ChevronDown size={14} />
+    {open && <div className="search-picker-options" role="listbox">
+      {allowEmpty && <button type="button" role="option" aria-selected={!value} onMouseDown={(event) => event.preventDefault()} onClick={() => { onChange(''); setQuery(''); setOpen(false) }}><span className="picker-option-copy"><strong>No payee selected</strong><small>Use the bank description</small></span></button>}
+      {options.map((payee) => {
+        const defaultCategory = categories.find((category) => category.id === payee.defaultCategoryId)
+        return <button type="button" role="option" aria-selected={payee.id === value} key={payee.id} onMouseDown={(event) => event.preventDefault()} onClick={() => { onChange(payee.id); setQuery(payee.name); setOpen(false) }}><span className="picker-option-copy"><strong>{payee.name}</strong><small>{defaultCategory ? 'Default category' : 'No default category'}</small></span>{defaultCategory && <CategoryLabel category={defaultCategory} />}{payee.id === value && <Check className="picker-check" size={14} />}</button>
+      })}
+      {!options.length && <span className="picker-empty">No matching payees</span>}
+    </div>}
+  </div>
+}
+
+function CategorySearchPicker({ ariaLabel, value, categories, onChange }: { ariaLabel: string; value: string; categories: Category[]; onChange: (value: string) => void }) {
+  const selected = categories.find((category) => category.id === value)
+  const [query, setQuery] = useState(selected?.name ?? '')
+  const [open, setOpen] = useState(false)
+  useEffect(() => setQuery(selected?.name ?? ''), [selected?.name])
+  const normalizedQuery = query.trim().toLocaleLowerCase('en')
+  const options = [...categories].filter((category) => !normalizedQuery || category.name.toLocaleLowerCase('en').includes(normalizedQuery)).sort((left, right) => left.name.localeCompare(right.name))
+
+  return <div className="search-picker category-search-picker">
+    <Search size={14} />
+    <input aria-label={ariaLabel} role="combobox" aria-expanded={open} autoComplete="off" placeholder="Search categories…" value={query} onFocus={(event) => { setOpen(true); event.currentTarget.select() }} onBlur={() => { setOpen(false); setQuery(selected?.name ?? '') }} onKeyDown={(event) => { if (event.key === 'Escape') { setOpen(false); event.currentTarget.blur() } }} onChange={(event) => { setQuery(event.target.value); setOpen(true) }} />
+    <ChevronDown size={14} />
+    {open && <div className="search-picker-options" role="listbox">
+      {options.map((category) => <button type="button" role="option" aria-selected={category.id === value} key={category.id} onMouseDown={(event) => event.preventDefault()} onClick={() => { onChange(category.id); setQuery(category.name); setOpen(false) }}><CategoryLabel category={category} />{category.id === value && <Check className="picker-check" size={14} />}</button>)}
+      {!options.length && <span className="picker-empty">No matching categories</span>}
+    </div>}
+  </div>
+}
+
+function BankImportReview({ account, candidates, categories, payees, reviewingCandidateId, onModeChange, onReview, onUnhideCategory }: { account: Account; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; reviewingCandidateId: string; onModeChange: (mode: 'review' | 'automatic') => void; onReview: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null) => void; onUnhideCategory: (categoryId: string) => Promise<void> }) {
   const mode = account.bankImportMode ?? 'review'
   const [categoryAssignments, setCategoryAssignments] = useState<Record<string, string>>({})
+  const [payeeAssignments, setPayeeAssignments] = useState<Record<string, string>>({})
   const [rememberChoices, setRememberChoices] = useState<Record<string, boolean>>({})
   const [unhidingCategoryId, setUnhidingCategoryId] = useState('')
   const pendingNet = candidates.reduce((sum, candidate) => sum + (candidate.type === 'income' ? candidate.amountMinor : -candidate.amountMinor), 0)
@@ -1178,20 +1237,31 @@ function BankImportReview({ account, candidates, categories, reviewingCandidateI
     {candidates.length > 0 && <div className="bank-review-queue">
       <div className="bank-review-summary"><strong>{candidates.length} awaiting review</strong><span>Net effect if approved: {formatMoney(pendingNet, account.currency)}</span></div>
       {candidates.map((candidate) => {
+        const payeeId = payeeAssignments[candidate.id] ?? candidate.payeeId ?? ''
+        const selectedPayee = payees.find((payee) => payee.id === payeeId)
+        const payeeDefaultCategory = categories.find((category) => category.id === selectedPayee?.defaultCategoryId)
         const categoryId = categoryAssignments[candidate.id] ?? candidate.categoryId ?? ''
-        const rememberCategory = rememberChoices[candidate.id] ?? Boolean(candidate.payeeId)
+        const rememberCategory = rememberChoices[candidate.id] ?? Boolean(payeeId)
         const selectedCategory = categories.find((category) => category.id === categoryId)
         const hiddenCategory = selectedCategory?.hidden ? selectedCategory : undefined
+        const distinctNote = candidate.note?.trim().toLocaleLowerCase('en') === candidate.payee.trim().toLocaleLowerCase('en') ? '' : candidate.note
         return <div className="bank-review-row" key={candidate.id}>
-          <div><strong>{candidate.payee}</strong><span>{shortDate.format(new Date(`${candidate.date}T12:00:00Z`))}{candidate.note ? ` · ${candidate.note}` : ''}{candidate.posted ? '' : ' · Pending'}</span></div>
+          <div className="bank-review-description"><strong>{selectedPayee?.name ?? candidate.payee}{candidate.posted ? null : <em className="pending-badge">Pending</em>}</strong><span>{shortDate.format(new Date(`${candidate.date}T12:00:00Z`))} · {selectedPayee ? `Bank: ${candidate.payee}` : 'Bank description only'}{distinctNote ? ` · ${distinctNote}` : ''}</span><em className={selectedPayee ? 'payee-match-badge matched' : 'payee-match-badge'}>{selectedPayee ? 'Matched payee' : 'No payee selected'}</em></div>
           <b className={candidate.type === 'income' ? 'positive' : ''}>{candidate.type === 'income' ? '+' : '−'}{formatMoney(candidate.amountMinor, candidate.currency)}</b>
+          <div className="bank-review-payee">
+            <PayeeSearchPicker ariaLabel={`Payee for ${candidate.payee}`} value={payeeId} payees={payees} categories={categories} allowEmpty onChange={(nextPayeeId) => {
+              const nextPayee = payees.find((payee) => payee.id === nextPayeeId)
+              const nextDefault = categories.find((category) => category.id === nextPayee?.defaultCategoryId)
+              setPayeeAssignments((current) => ({ ...current, [candidate.id]: nextPayeeId }))
+              setRememberChoices((current) => ({ ...current, [candidate.id]: Boolean(nextPayeeId) }))
+              if (nextDefault && !nextDefault.hidden) setCategoryAssignments((current) => ({ ...current, [candidate.id]: nextDefault.id }))
+            }} />
+            <span className="payee-default-summary">Default category: {payeeDefaultCategory ? <CategoryLabel category={payeeDefaultCategory} /> : 'None'}</span>
+            {payeeDefaultCategory && payeeDefaultCategory.id !== categoryId && !payeeDefaultCategory.hidden && <button type="button" onClick={() => setCategoryAssignments((current) => ({ ...current, [candidate.id]: payeeDefaultCategory.id }))}>Use default</button>}
+          </div>
           <div className="bank-review-category">
-            <select aria-label={`Category for ${candidate.payee}`} value={categoryId} onChange={(event) => setCategoryAssignments((current) => ({ ...current, [candidate.id]: event.target.value }))}>
-              <option value="">Choose category…</option>
-              {hiddenCategory && <option value={hiddenCategory.id}>{hiddenCategory.name} (hidden)</option>}
-              {availableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-            </select>
-            {candidate.payeeId && <label className="remember-category"><input type="checkbox" checked={rememberCategory} onChange={(event) => setRememberChoices((current) => ({ ...current, [candidate.id]: event.target.checked }))} />Remember for this payee</label>}
+            <CategorySearchPicker ariaLabel={`Category for ${candidate.payee}`} value={categoryId} categories={hiddenCategory ? [hiddenCategory, ...availableCategories] : availableCategories} onChange={(nextCategoryId) => setCategoryAssignments((current) => ({ ...current, [candidate.id]: nextCategoryId }))} />
+            {payeeId && selectedPayee?.defaultCategoryId !== categoryId && <label className="remember-category"><input type="checkbox" checked={rememberCategory} onChange={(event) => setRememberChoices((current) => ({ ...current, [candidate.id]: event.target.checked }))} />Make this the default category for {selectedPayee?.name}</label>}
             {hiddenCategory && <div className="hidden-category-warning"><ShieldAlert size={14} /><p><strong>{hiddenCategory.name} is hidden.</strong> Choose an active category and remember it for this payee, or <button type="button" disabled={Boolean(unhidingCategoryId)} onClick={async () => {
               setUnhidingCategoryId(hiddenCategory.id)
               try {
@@ -1203,7 +1273,7 @@ function BankImportReview({ account, candidates, categories, reviewingCandidateI
           </div>
           <div className="bank-review-actions">
             <button className="secondary-button" type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => onReview(candidate.id, 'reject')}><X size={14} />Reject</button>
-            <button className="primary-button" type="button" disabled={!categoryId || Boolean(hiddenCategory) || Boolean(reviewingCandidateId)} onClick={() => onReview(candidate.id, 'approve', categoryId, rememberCategory)}>{reviewingCandidateId === candidate.id ? <LoaderCircle className="spin-icon" size={14} /> : <Check size={14} />}Approve</button>
+            <button className="primary-button" type="button" disabled={!categoryId || Boolean(hiddenCategory) || Boolean(reviewingCandidateId)} onClick={() => onReview(candidate.id, 'approve', categoryId, rememberCategory, payeeId || null)}>{reviewingCandidateId === candidate.id ? <LoaderCircle className="spin-icon" size={14} /> : <Check size={14} />}Approve</button>
           </div>
         </div>
       })}
@@ -1222,25 +1292,25 @@ function formatRateLimits(account: Account) {
 }
 
 function formatSyncDiagnostic(diagnostic: NonNullable<Account['lastSyncDiagnostic']>) {
-  const returned = `${diagnostic.bookedReturned} booked + ${diagnostic.pendingReturned} pending returned`
-  const results = [
-    diagnostic.bookedImported ? `${diagnostic.bookedImported} booked added` : null,
-    diagnostic.pendingImported ? `${diagnostic.pendingImported} pending added` : null,
-    diagnostic.staged ? `${diagnostic.staged} awaiting review` : null,
-    diagnostic.imported === 0 ? '0 added' : null,
-    diagnostic.pendingPromoted ? `${diagnostic.pendingPromoted} pending → booked` : null,
-    diagnostic.duplicates ? `${diagnostic.duplicates} duplicate${diagnostic.duplicates === 1 ? '' : 's'}` : null,
+  const reported = diagnostic.bookedReturned + diagnostic.pendingReturned
+  return [
+    `Bank reported ${reported} transaction${reported === 1 ? '' : 's'}`,
+    diagnostic.bookedReturned ? `${diagnostic.bookedReturned} posted` : null,
+    diagnostic.pendingReturned ? `${diagnostic.pendingReturned} pending` : null,
+    diagnostic.staged ? `${diagnostic.staged} need review` : null,
+    diagnostic.imported ? `${diagnostic.imported} added automatically` : null,
+    diagnostic.pendingPromoted ? `${diagnostic.pendingPromoted} pending → posted` : null,
+    diagnostic.duplicates ? `${diagnostic.duplicates} already known` : null,
     diagnostic.transfersMatched ? `${diagnostic.transfersMatched} transfer${diagnostic.transfersMatched === 1 ? '' : 's'} matched` : null,
-    diagnostic.cutoffIgnored ? `${diagnostic.cutoffIgnored} before migration cutoff` : null,
-    diagnostic.futureIgnored ? `${diagnostic.futureIgnored} future-dated` : null,
-    diagnostic.malformedIgnored ? `${diagnostic.malformedIgnored} malformed` : null,
+    diagnostic.cutoffIgnored ? `${diagnostic.cutoffIgnored} older than imported history` : null,
+    diagnostic.futureIgnored ? `${diagnostic.futureIgnored} future-dated ignored` : null,
+    diagnostic.malformedIgnored ? `${diagnostic.malformedIgnored} could not be read` : null,
     diagnostic.transactionError ? `Transactions error: ${diagnostic.transactionError}` : null,
     diagnostic.balanceError ? `Balance error: ${diagnostic.balanceError}` : null,
-  ].filter(Boolean)
-  return `${returned} · ${results.join(' · ')}`
+  ].filter(Boolean).join(' · ')
 }
 
-function CategoryDetailPage({ category, spent, budget, transactions, categories, accounts, onUpdateBudget, onSetHidden, onBack, onSelectCategory }: { category: Category; spent: number; budget: number; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onUpdateBudget: (categoryId: string, amountMinor: number, scope: AccountScope) => void; onSetHidden: (categoryId: string, hidden: boolean) => void; onBack: () => void; onSelectCategory: (id: string) => void }) {
+function CategoryDetailPage({ category, spent, budget, transactions, categories, accounts, onUpdateBudget, onSetHidden, onBack, onSelectCategory, onEditTransaction }: { category: Category; spent: number; budget: number; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onUpdateBudget: (categoryId: string, amountMinor: number, scope: AccountScope) => void; onSetHidden: (categoryId: string, hidden: boolean) => void; onBack: () => void; onSelectCategory: (id: string) => void; onEditTransaction: (transaction: Transaction) => void }) {
   const Icon = categoryIcons[category.icon as keyof typeof categoryIcons] ?? Sparkles
   return <div className="page-content narrow-page entity-page">
     <div className="entity-page-toolbar">
@@ -1249,12 +1319,12 @@ function CategoryDetailPage({ category, spent, budget, transactions, categories,
     </div>
     <section className="panel entity-detail-panel">
       <div className="entity-heading"><div className="entity-heading-icon" style={{ color: category.color, background: `${category.color}18` }}><Icon size={20} /></div><div><span className="eyebrow">{category.reportGroup.replace('_', ' ')}{category.hidden ? ' · Hidden' : ''}</span><h2>{category.name}</h2></div><button className="secondary-button entity-heading-action" type="button" onClick={() => onSetHidden(category.id, !category.hidden)}>{category.hidden ? <Eye size={16} /> : <EyeOff size={16} />}{category.hidden ? 'Unhide category' : 'Hide category'}</button></div>
-      <CategoryDetail key={`${category.id}-${budget}`} category={category} spent={spent} budget={budget} transactions={transactions} categories={categories} accounts={accounts} onUpdateBudget={onUpdateBudget} />
+      <CategoryDetail key={`${category.id}-${budget}`} category={category} spent={spent} budget={budget} transactions={transactions} categories={categories} accounts={accounts} onUpdateBudget={onUpdateBudget} onEditTransaction={onEditTransaction} />
     </section>
   </div>
 }
 
-function CategoryDetail({ category, spent, budget, transactions, categories, accounts, onUpdateBudget }: { category: Category; spent: number; budget: number; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onUpdateBudget: (categoryId: string, amountMinor: number, scope: AccountScope) => void }) {
+function CategoryDetail({ category, spent, budget, transactions, categories, accounts, onUpdateBudget, onEditTransaction }: { category: Category; spent: number; budget: number; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onUpdateBudget: (categoryId: string, amountMinor: number, scope: AccountScope) => void; onEditTransaction: (transaction: Transaction) => void }) {
   const [budgetInput, setBudgetInput] = useState((budget / 100).toFixed(2))
   const [budgetScope, setBudgetScope] = useState<AccountScope>('Personal')
   const remaining = budget - spent
@@ -1276,13 +1346,13 @@ function CategoryDetail({ category, spent, budget, transactions, categories, acc
     </div>
     <div className="category-detail-heading"><span>{transactions.length} transaction{transactions.length === 1 ? '' : 's'} this month</span></div>
     <div className="category-detail-list">
-      {transactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} />)}
+      {transactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} onEditCategory={() => onEditTransaction(transaction)} />)}
       {!transactions.length && <div className="empty-state compact-empty"><ReceiptText size={24} /><h3>No transactions yet</h3></div>}
     </div>
   </div>
 }
 
-function AccountDetail({ account, transactions, categories, accounts }: { account: Account; transactions: Transaction[]; categories: Category[]; accounts: Account[] }) {
+function AccountDetail({ account, transactions, categories, accounts, onEditTransaction }: { account: Account; transactions: Transaction[]; categories: Category[]; accounts: Account[]; onEditTransaction: (transaction: Transaction) => void }) {
   const incoming = transactions.reduce((sum, transaction) => sum + (transaction.type === 'income' || transaction.toAccountId === account.id ? transaction.amountMinor : 0), 0)
   const outgoing = transactions.reduce((sum, transaction) => sum + (transaction.type === 'expense' || (transaction.type === 'transfer' && transaction.accountId === account.id) ? transaction.amountMinor : 0), 0)
   const hasBankBalance = account.bankBalanceMinor !== undefined && Boolean(account.bankBalanceCurrency)
@@ -1298,7 +1368,7 @@ function AccountDetail({ account, transactions, categories, accounts }: { accoun
     </div>
     <div className="category-detail-heading"><span>{transactions.length} transaction{transactions.length === 1 ? '' : 's'} this month</span><b>{account.scope} · {account.type}</b></div>
     <div className="category-detail-list">
-      {transactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} focusAccountId={account.id} />)}
+      {transactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} focusAccountId={account.id} onEditCategory={transaction.type === 'transfer' ? undefined : () => onEditTransaction(transaction)} />)}
       {!transactions.length && <div className="empty-state compact-empty"><ReceiptText size={24} /><h3>No transactions yet</h3></div>}
     </div>
   </div>
@@ -1421,20 +1491,53 @@ function BankLinkForm({ account, workspaceId, onComplete }: { account: Account; 
   </form>
 }
 
-function TransactionCategoryForm({ transaction, categories, onSubmit }: { transaction: Transaction; categories: Category[]; onSubmit: (categoryId: string) => Promise<void> }) {
+function TransactionDetailsForm({ transaction, categories, payees, onSubmit }: { transaction: Transaction; categories: Category[]; payees: Payee[]; onSubmit: (payeeName: string, payeeId: string | undefined, categoryId: string, rememberDefault: boolean) => Promise<void> }) {
   const currentCategory = categories.find((category) => category.id === transaction.categoryId)
   const availableCategories = categories.filter((category) => !category.hidden || category.id === transaction.categoryId)
   const [categoryId, setCategoryId] = useState(transaction.categoryId ?? '')
+  const [payeeQuery, setPayeeQuery] = useState(transaction.payee)
+  const [selectedPayeeId, setSelectedPayeeId] = useState(transaction.payeeId ?? '')
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [rememberDefault, setRememberDefault] = useState(false)
   const [saving, setSaving] = useState(false)
+  const normalizedQuery = payeeQuery.trim().toLocaleLowerCase('en')
+  const matchingPayees = payees
+    .filter((payee) => !normalizedQuery || payee.name.toLocaleLowerCase('en').includes(normalizedQuery))
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .slice(0, 12)
+  const selectedPayee = payees.find((payee) => payee.id === selectedPayeeId)
+  const defaultCategory = categories.find((category) => category.id === selectedPayee?.defaultCategoryId)
+  const payeeChanged = selectedPayeeId
+    ? selectedPayeeId !== transaction.payeeId
+    : !transaction.payeeId || payeeQuery.trim().localeCompare(transaction.payee, undefined, { sensitivity: 'accent' }) !== 0
+  const changed = payeeChanged || categoryId !== transaction.categoryId
 
-  return <form className="form" onSubmit={async (event) => { event.preventDefault(); if (!categoryId) return; setSaving(true); try { await onSubmit(categoryId) } finally { setSaving(false) } }}>
+  return <form className="form" onSubmit={async (event) => { event.preventDefault(); if (!categoryId || !payeeQuery.trim()) return; setSaving(true); try { await onSubmit(payeeQuery.trim(), selectedPayee?.id, categoryId, rememberDefault) } finally { setSaving(false) } }}>
     <div className="category-edit-transaction">
       <span className="transaction-icon"><ReceiptText size={18} /></span>
       <div><strong>{transaction.payee}</strong><span>{shortDate.format(new Date(`${transaction.date}T12:00:00`))} · {formatMoney(transaction.amountMinor, transaction.currency)}</span></div>
     </div>
-    <label><span>Category</span><select autoFocus required value={categoryId} onChange={(event) => setCategoryId(event.target.value)}><option value="">Choose category…</option>{availableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}{category.hidden ? ' (hidden)' : ''}</option>)}</select></label>
+    <label><span>Payee</span><div className="transaction-payee-picker"><Search size={16} /><input autoFocus required value={payeeQuery} autoComplete="off" onFocus={() => setPickerOpen(true)} onBlur={() => setPickerOpen(false)} onChange={(event) => {
+      const query = event.target.value
+      const exact = payees.find((payee) => payee.name.localeCompare(query.trim(), undefined, { sensitivity: 'accent' }) === 0)
+      setPayeeQuery(query)
+      setSelectedPayeeId(exact?.id ?? '')
+      setRememberDefault(false)
+      setPickerOpen(true)
+    }} />
+      {pickerOpen && <div className="transaction-payee-options" role="listbox">
+        {matchingPayees.map((payee) => {
+          const payeeDefault = categories.find((category) => category.id === payee.defaultCategoryId)
+          return <button type="button" role="option" aria-selected={payee.id === selectedPayeeId} key={payee.id} onMouseDown={(event) => event.preventDefault()} onClick={() => { setPayeeQuery(payee.name); setSelectedPayeeId(payee.id); setRememberDefault(false); setPickerOpen(false) }}><strong>{payee.name}</strong><small>Default category: {payeeDefault ? `${payeeDefault.name}${payeeDefault.hidden ? ' (hidden)' : ''}` : 'None'}</small></button>
+        })}
+        {!matchingPayees.length && payeeQuery.trim() && <div className="new-payee-option"><strong>Create “{payeeQuery.trim()}”</strong><small>This payee does not exist yet.</small></div>}
+      </div>}
+    </div></label>
+    <div className="selected-payee-default"><div><span>Selected payee default</span><strong>{selectedPayee ? (defaultCategory ? `${defaultCategory.name}${defaultCategory.hidden ? ' (hidden)' : ''}` : 'No default category') : payeeQuery.trim() ? 'New payee · no default category' : 'Choose or enter a payee'}</strong></div>{defaultCategory && defaultCategory.id !== categoryId && !defaultCategory.hidden && <button type="button" className="secondary-button" onClick={() => setCategoryId(defaultCategory.id)}>Use default</button>}</div>
+    <label><span>Category</span><select required value={categoryId} onChange={(event) => setCategoryId(event.target.value)}><option value="">Choose category…</option>{availableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}{category.hidden ? ' (hidden)' : ''}</option>)}</select></label>
     {currentCategory?.hidden && categoryId === currentCategory.id && <p className="category-edit-warning"><ShieldAlert size={15} />This category is hidden. Choose an active category to keep future reporting easier to understand.</p>}
-    <button className="primary-button form-submit" disabled={!categoryId || categoryId === transaction.categoryId || saving}>{saving ? 'Saving…' : 'Save category'}<ArrowRight size={18} /></button>
+    {payeeQuery.trim() && categoryId && selectedPayee?.defaultCategoryId !== categoryId && <label className="remember-category transaction-default-choice"><input type="checkbox" checked={rememberDefault} onChange={(event) => setRememberDefault(event.target.checked)} />Make {categories.find((category) => category.id === categoryId)?.name ?? 'this category'} the default for {selectedPayee?.name ?? payeeQuery.trim()}</label>}
+    <button className="primary-button form-submit" disabled={!categoryId || !payeeQuery.trim() || (!changed && !rememberDefault) || saving}>{saving ? 'Saving…' : 'Save transaction'}<ArrowRight size={18} /></button>
   </form>
 }
 

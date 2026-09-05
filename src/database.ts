@@ -296,6 +296,17 @@ export async function rejectBankImportCandidate(workspaceId: string, candidateId
   if (error) throw error
 }
 
+export async function updateBankImportCandidatePayee(workspaceId: string, candidateId: string, payeeId: string | null) {
+  const { data, error } = await neon.from('bank_import_candidates')
+    .update({ payee_id: payeeId })
+    .eq('workspace_id', workspaceId)
+    .eq('id', candidateId)
+    .eq('status', 'pending')
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The bank transaction awaiting review could not be updated.')
+}
+
 export async function createCategory(workspaceId: string, category: Category) {
   const categoryType = category.reportGroup === 'income' ? 'Income' : category.reportGroup === 'capital_gain' ? 'Investment' : 'Expense'
   const { error } = await neon.from('categories').insert({
@@ -712,7 +723,7 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
   const pageSize = 1000
   for (let start = 0; ; start += pageSize) {
     const { data, error } = await neon.from('transactions')
-      .select('id,provider_transaction_id,bank_transaction_id,transaction_date,source,amount_minor,currency,transaction_type,payee_name,memo,posted')
+      .select('id,provider_transaction_id,bank_transaction_id,transaction_date,source,amount_minor,currency,transaction_type,category_id,payee_id,payee_name,memo,posted')
       .eq('workspace_id', workspaceId)
       .eq('account_id', account.id)
       .order('id', { ascending: true })
@@ -766,8 +777,45 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
   }
 
   let pendingPromoted = 0
+  let pendingStaged = 0
   let transfersMatched = 0
   const promotePending = async (row: Row, transaction: BankSyncPayload['transactions'][number]) => {
+    if (!row.category_id) {
+      const candidate = candidateFor(transaction)
+      const candidateValues = {
+        transaction_id: row.id,
+        transaction_date: transaction.date,
+        amount_minor: amountToMinor(transaction.amount, transaction.currency),
+        currency: transaction.currency,
+        transaction_type: transaction.type,
+        payee_id: row.payee_id ?? null,
+        payee_name: transaction.payee,
+        memo: transaction.note || null,
+        posted: true,
+        fetched_at: sync.fetchedAt,
+        raw_payload: transaction.rawPayload ?? null,
+        provider_transaction_id: transaction.providerTransactionId,
+        bank_transaction_id: transaction.bankTransactionId ?? null,
+      }
+      if (candidate) {
+        if (candidate.status !== 'pending') return
+        const candidateUpdate = await neon.from('bank_import_candidates').update(candidateValues).eq('workspace_id', workspaceId).eq('id', candidate.id)
+        if (candidateUpdate.error) throw candidateUpdate.error
+      } else {
+        const candidateInsert = await neon.from('bank_import_candidates').insert({
+          id: crypto.randomUUID(),
+          workspace_id: workspaceId,
+          account_id: account.id,
+          provider: 'gocardless_bank_account_data',
+          category_id: null,
+          status: 'pending',
+          ...candidateValues,
+        })
+        if (candidateInsert.error) throw candidateInsert.error
+      }
+      pendingStaged += 1
+      return
+    }
     const periodId = await ensurePeriod(workspaceId, transaction.date.slice(0, 7))
     const promotionResult = await neon.from('transactions').update({
       period_id: periodId,
@@ -852,7 +900,7 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
       ?? (transaction.bankTransactionId ? existingByBankId.get(transaction.bankTransactionId) : undefined)
     if (existing?.posted === false) {
       await promotePending(existing, transaction)
-    } else if (existing && String(existing.payee_name ?? '').trim().toLocaleLowerCase('en') === 'bank transaction'
+    } else if (existing && existing.category_id && String(existing.payee_name ?? '').trim().toLocaleLowerCase('en') === 'bank transaction'
       && (transaction.payee !== 'Bank transaction' || transaction.note)) {
       const repairResult = await neon.from('transactions').update({
         payee_name: transaction.payee,
@@ -1061,7 +1109,7 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
     pendingReturned: sync.providerDiagnostics?.pendingReturned ?? sync.transactions.filter((transaction) => transaction.status === 'pending').length,
     malformedIgnored: sync.providerDiagnostics?.malformedIgnored ?? 0,
     imported: rows.length,
-    staged: candidateRowsToInsert.length,
+    staged: candidateRowsToInsert.length + pendingStaged,
     bookedImported,
     pendingImported,
     duplicates,

@@ -149,6 +149,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .account-row div span, .transaction-row div span { color: var(--muted); font-size: 9.5px; margin-top: 4px; }
 .account-row > b, .transaction-row > b { font-family: 'DM Mono', monospace; font-size: 10.5px; font-weight: 500; letter-spacing: -.03em; }
 .transaction-icon { border-radius: 50%; }
+.transaction-row .transaction-icon { display: grid; place-items: center; }
 .transaction-category-edit { max-width: 145px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; overflow: hidden; padding: 6px 8px; border: 1px solid #d9ddd6; border-radius: 6px; color: #59645d; background: #f5f6f2; font-size: 9px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .transaction-category-edit:hover { border-color: #bfc9c1; background: #edf2ee; }
 .transaction-category-edit.missing { border-color: #dfbfa8; color: #9a563b; background: #fff1e6; }
@@ -167,7 +168,26 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .transaction-table-row { position: relative; display: grid; grid-template-columns: 1fr 190px; align-items: center; padding: 0 10px; border-bottom: 1px solid #e8e8e2; }
 .transaction-table-row .transaction-row { border: 0; }
 .transaction-table-row .account-name { color: var(--muted); font-size: 10px; }
-.bank-review-category select { width: 100%; height: 36px; padding: 0 28px 0 10px; border: 1px solid #d9dbd4; border-radius: 7px; background: var(--paper); color: var(--ink); font-size: 10.5px; }
+.search-picker { position: relative; min-width: 0; }
+.search-picker > svg:first-child { position: absolute; z-index: 2; left: 10px; top: 11px; color: #858b83; pointer-events: none; }
+.search-picker > svg:nth-of-type(2) { position: absolute; z-index: 2; right: 9px; top: 11px; color: #727970; pointer-events: none; }
+.search-picker > input { width: 100%; height: 36px; padding: 0 30px; border: 1px solid #d9dbd4; border-radius: 7px; outline: 0; background: var(--paper); color: var(--ink); font-size: 10.5px; }
+.search-picker > input:focus { border-color: #7fa297; box-shadow: 0 0 0 3px rgba(81, 130, 119, .12); }
+.search-picker-options { position: absolute; z-index: 45; top: calc(100% + 5px); left: 0; right: 0; max-height: 290px; overflow-y: auto; padding: 4px; border: 1px solid #d3d7cf; border-radius: 8px; background: var(--paper); box-shadow: 0 14px 32px rgba(31, 40, 35, .16); }
+.search-picker-options button { width: 100%; min-height: 42px; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+.search-picker-options button:hover, .search-picker-options button[aria-selected="true"] { background: var(--pale-green); }
+.search-picker-options .picker-option-copy { min-width: 0; flex: 1; margin: 0; }
+.search-picker-options .picker-option-copy strong, .search-picker-options .picker-option-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-picker-options .picker-option-copy strong { font-size: 10px; }
+.search-picker-options .picker-option-copy small { margin-top: 3px; color: var(--muted); font-size: 8px; }
+.picker-category-label { min-width: 0; display: inline-flex !important; align-items: center; gap: 6px; margin: 0 !important; color: #4f5852 !important; font-size: 8.5px !important; white-space: nowrap; }
+.picker-category-label > i { width: 25px; height: 25px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 7px; }
+.picker-category-label > span { min-width: 0; display: inline !important; margin: 0 !important; overflow: hidden; color: inherit !important; font-size: inherit !important; text-overflow: ellipsis; }
+.picker-category-label > em { padding: 2px 4px; border-radius: 4px; color: #886044; background: #f2e5d8; font-size: 7px; font-style: normal; font-weight: 800; text-transform: uppercase; }
+.picker-check { flex: 0 0 auto; color: var(--green); }
+.picker-empty { display: block; padding: 10px; color: var(--muted); font-size: 9px; }
+.category-search-picker .search-picker-options button { justify-content: space-between; }
+.category-search-picker .picker-category-label { flex: 1; font-size: 10px !important; }
 .remember-category { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 9px; line-height: 1.3; }
 .remember-category input { accent-color: var(--green); }
 .payee-heading { align-items: flex-end; }
@@ -264,13 +284,20 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .bank-review-queue { border-top: 1px solid #dedfd8; background: var(--paper); }
 .bank-review-summary { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; background: #f0f1ec; color: var(--muted); font-size: 9px; }
 .bank-review-summary strong { color: var(--ink); font-size: 9.5px; }
-.bank-review-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(170px, 220px) auto; gap: 16px; align-items: center; padding: 12px 14px; border-top: 1px solid #e8e8e2; }
+.bank-review-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(190px, 250px) minmax(170px, 220px) auto; gap: 14px; align-items: center; padding: 12px 14px; border-top: 1px solid #e8e8e2; }
 .bank-review-row:first-of-type { border-top: 0; }
 .bank-review-row > div:first-child { min-width: 0; }
 .bank-review-row strong, .bank-review-row span { display: block; }
 .bank-review-row strong { overflow: hidden; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .bank-review-row span { margin-top: 4px; overflow: hidden; color: var(--muted); font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
 .bank-review-row > b { font-family: 'DM Mono', monospace; font-size: 10.5px; font-weight: 500; }
+.payee-match-badge { width: fit-content; margin-top: 6px; padding: 3px 6px; border-radius: 5px; color: #8a5b42; background: #f5e7dc; font-size: 7.5px; font-style: normal; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.payee-match-badge.matched { color: #346859; background: #e4eee9; }
+.bank-review-payee { display: grid; gap: 5px; }
+.bank-review-payee > span { margin: 0; color: var(--muted); font-size: 8.5px; white-space: normal; }
+.bank-review-payee .payee-default-summary { display: flex; align-items: center; gap: 6px; }
+.bank-review-payee .payee-default-summary .picker-category-label { flex: 0 1 auto; }
+.bank-review-payee > button { width: fit-content; padding: 0; border: 0; color: #3d6d61; background: transparent; font-size: 8.5px; font-weight: 800; cursor: pointer; }
 .bank-review-category { display: grid; gap: 6px; }
 .hidden-category-warning { display: flex; align-items: flex-start; gap: 6px; padding: 7px 8px; border: 1px solid #e5c9b2; border-radius: 6px; color: #9a563b; background: #fff4e9; }
 .hidden-category-warning svg { flex: 0 0 auto; margin-top: 1px; }
@@ -295,6 +322,23 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .category-edit-transaction strong, .category-edit-transaction span { display: block; }
 .category-edit-transaction strong { font-size: 11.5px; }
 .category-edit-transaction span { margin-top: 4px; color: var(--muted); font-size: 9.5px; }
+.transaction-payee-picker { position: relative; }
+.transaction-payee-picker > svg { position: absolute; z-index: 2; left: 11px; top: 13px; color: #858b83; pointer-events: none; }
+.transaction-payee-picker > input { padding-left: 34px; }
+.transaction-payee-options { position: absolute; z-index: 35; top: calc(100% + 5px); left: 0; right: 0; max-height: 270px; overflow-y: auto; padding: 4px; border: 1px solid #d3d7cf; border-radius: 8px; background: var(--paper); box-shadow: 0 14px 32px rgba(31, 40, 35, .16); }
+.transaction-payee-options button, .new-payee-option { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 9px 10px; border: 0; border-radius: 6px; background: transparent; text-align: left; }
+.transaction-payee-options button { cursor: pointer; }
+.transaction-payee-options button:hover, .transaction-payee-options button[aria-selected="true"] { background: var(--pale-green); }
+.transaction-payee-options strong, .transaction-payee-options small { display: block; }
+.transaction-payee-options strong { overflow: hidden; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.transaction-payee-options small { flex: 0 0 auto; color: var(--muted); font-size: 8.5px; }
+.new-payee-option { color: #526159; }
+.selected-payee-default { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 11px; border: 1px solid #e0e2db; border-radius: 8px; background: #f7f7f3; }
+.selected-payee-default span, .selected-payee-default strong { display: block; }
+.selected-payee-default span { color: var(--muted); font-size: 8.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.selected-payee-default strong { margin-top: 4px; font-size: 10.5px; }
+.selected-payee-default .secondary-button { flex: 0 0 auto; padding: 7px 10px; }
+.transaction-default-choice { padding: 9px 10px; border-radius: 7px; background: #f2f5f1; }
 .category-edit-warning { display: flex; align-items: flex-start; gap: 7px; padding: 9px 10px; border: 1px solid #e5c9b2; border-radius: 7px; color: #8b4e38; background: #fff4e9; font-size: 9.5px; line-height: 1.45; }
 .category-edit-warning svg { flex: 0 0 auto; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
@@ -462,6 +506,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .bank-import-review-heading { align-items: stretch; flex-direction: column; }
   .bank-import-mode { flex-basis: auto; width: 100%; }
   .bank-review-row { grid-template-columns: 1fr auto; }
+  .bank-review-payee { grid-column: 1 / -1; }
   .bank-review-category { grid-column: 1 / -1; }
   .bank-review-actions { grid-column: 1 / -1; }
   .account-balance-summary { grid-template-columns: 1fr 1fr; }
