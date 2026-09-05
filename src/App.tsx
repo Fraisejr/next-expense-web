@@ -1279,17 +1279,18 @@ function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate }: { 
   const [period, setPeriod] = useState<ReportPeriod>('month')
   const monthKey = toMonthKey(viewedMonth)
   const yearKey = String(viewedMonth.getFullYear())
-  const accountById = new Map(data.accounts.map((account) => [account.id, account]))
   const categoryById = new Map(data.categories.map((category) => [category.id, category]))
+  const companyCategoryGroupIds = new Set(data.categoryGroups.filter((group) => group.name.toLocaleLowerCase('en') === 'company').map((group) => group.id))
+  const isCompanyCategory = (categoryId?: string) => {
+    const categoryGroupId = categoryById.get(categoryId ?? '')?.categoryGroupId
+    return Boolean(categoryGroupId && companyCategoryGroupIds.has(categoryGroupId))
+  }
   const inPeriod = (date: string) => period === 'month' ? date.startsWith(monthKey) : date.startsWith(yearKey)
   const reportTransactions = data.transactions.filter((transaction) => transaction.currency === defaultCurrency && inPeriod(transaction.date) && transaction.type !== 'transfer')
-  const companyTransactions = reportTransactions.filter((transaction) => {
-    const account = accountById.get(transaction.accountId)
-    return account ? accountBalanceSheetGroup(account) === 'Company' : false
-  })
+  const companyTransactions = reportTransactions.filter((transaction) => isCompanyCategory(transaction.categoryId))
   const budgetInPeriod = (month: string) => period === 'month' ? month === monthKey : month.startsWith(yearKey)
   const reportBudgets = data.budgets.filter((budget) => budgetInPeriod(budget.month))
-  const companyBudgets = data.budgets.filter((budget) => budgetInPeriod(budget.month) && budget.scope === 'Company')
+  const companyBudgets = data.budgets.filter((budget) => budgetInPeriod(budget.month) && isCompanyCategory(budget.categoryId))
 
   const totalTransactionsForGroup = (transactions: Transaction[], group: ReportGroup) => transactions
     .filter((transaction) => categoryById.get(transaction.categoryId ?? '')?.reportGroup === group)
