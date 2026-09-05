@@ -11,18 +11,22 @@ const dateInMonth = (day: number) => {
 
 export const seedData: AppData = {
   accounts: [
-    { id: 'checking', name: 'Everyday checking', type: 'Checking', balanceMinor: 384216, color: '#234e46', currency: 'EUR', scope: 'Personal', closed: false, autoSync: false },
-    { id: 'savings', name: 'Rainy day', type: 'Savings', balanceMinor: 1248000, color: '#d68853', currency: 'EUR', scope: 'Personal', closed: false },
-    { id: 'wallet', name: 'Wallet', type: 'Cash', balanceMinor: 8640, color: '#777a6d', currency: 'EUR', scope: 'Personal', closed: false },
+    { id: 'checking', name: 'Everyday checking', type: 'Checking', balanceMinor: 384216, color: '#234e46', currency: 'EUR', scope: 'Personal', balanceSheetGroup: 'Personal', closed: false, autoSync: false },
+    { id: 'savings', name: 'Rainy day', type: 'Savings', balanceMinor: 1248000, color: '#d68853', currency: 'EUR', scope: 'Personal', balanceSheetGroup: 'Personal', closed: false },
+    { id: 'wallet', name: 'Wallet', type: 'Cash', balanceMinor: 8640, color: '#777a6d', currency: 'EUR', scope: 'Personal', balanceSheetGroup: 'Personal', closed: false },
+  ],
+  categoryGroups: [
+    { id: 'income-group', name: 'Income', sortOrder: 0, showCategories: true },
+    { id: 'daily-group', name: 'Daily expenses', sortOrder: 10, showCategories: true },
   ],
   categories: [
-    { id: 'salary', name: 'Salary', color: '#2f6f62', icon: 'briefcase', reportGroup: 'income', hidden: false },
-    { id: 'housing', name: 'Housing', color: '#cc7048', icon: 'house', reportGroup: 'expense', hidden: false },
-    { id: 'groceries', name: 'Groceries', color: '#738c5a', icon: 'basket', reportGroup: 'expense', hidden: false },
-    { id: 'transport', name: 'Transport', color: '#d49b4d', icon: 'car', reportGroup: 'expense', hidden: false },
-    { id: 'dining', name: 'Dining out', color: '#9b6a71', icon: 'utensils', reportGroup: 'expense', hidden: false },
-    { id: 'fun', name: 'Fun & leisure', color: '#5d7d91', icon: 'sparkles', reportGroup: 'expense', hidden: false },
-    { id: 'bills', name: 'Bills', color: '#7f7062', icon: 'receipt', reportGroup: 'expense', hidden: false },
+    { id: 'salary', name: 'Salary', color: '#2f6f62', icon: 'briefcase', reportGroup: 'income', categoryGroupId: 'income-group', hidden: false },
+    { id: 'housing', name: 'Housing', color: '#cc7048', icon: 'house', reportGroup: 'expense', categoryGroupId: 'daily-group', hidden: false },
+    { id: 'groceries', name: 'Groceries', color: '#738c5a', icon: 'basket', reportGroup: 'expense', categoryGroupId: 'daily-group', hidden: false },
+    { id: 'transport', name: 'Transport', color: '#d49b4d', icon: 'car', reportGroup: 'expense', categoryGroupId: 'daily-group', hidden: false },
+    { id: 'dining', name: 'Dining out', color: '#9b6a71', icon: 'utensils', reportGroup: 'expense', categoryGroupId: 'daily-group', hidden: false },
+    { id: 'fun', name: 'Fun & leisure', color: '#5d7d91', icon: 'sparkles', reportGroup: 'expense', categoryGroupId: 'daily-group', hidden: false },
+    { id: 'bills', name: 'Bills', color: '#7f7062', icon: 'receipt', reportGroup: 'expense', categoryGroupId: 'daily-group', hidden: false },
   ],
   budgets: [
     { id: 'budget-housing', month: currentMonth, categoryId: 'housing', scope: 'Personal', amountMinor: 145000 },
@@ -41,6 +45,7 @@ export const seedData: AppData = {
     { id: 'cinema-lumiere', name: 'Cinema Lumière' },
     { id: 'acme-studio', name: 'Acme Studio' },
   ],
+  payeeMappings: [],
   transactions: [
     { id: 't1', date: dateInMonth(28), payee: 'Green Market', payeeId: 'green-market', note: 'Weekly groceries', amountMinor: 8420, type: 'expense', accountId: 'checking', categoryId: 'groceries', currency: 'EUR' },
     { id: 't2', date: dateInMonth(26), payee: 'Northline Energy', payeeId: 'northline-energy', amountMinor: 11280, type: 'expense', accountId: 'checking', categoryId: 'bills', currency: 'EUR' },

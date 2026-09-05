@@ -1,6 +1,6 @@
 import { neon } from './neon'
 import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
-import type { Account, AccountScope, AppData, BankImportCandidate, BankRateLimit, BankSyncDiagnostic, Budget, Category, Payee, ReportGroup, Transaction } from './types'
+import type { Account, AccountScope, AppData, BankImportCandidate, BankRateLimit, BankSyncDiagnostic, Budget, Category, CategoryGroup, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
 
 type Row = Record<string, unknown>
 
@@ -14,8 +14,17 @@ function number(value: unknown) {
   return Number(value ?? 0)
 }
 
-function normalizedPayeeName(value: string) {
-  return value.normalize('NFKC').trim().toLocaleLowerCase('en')
+export function normalizedPayeeName(value: string) {
+  const decoded = value.replace(/&#(x[\da-f]+|\d+);/gi, (entity, code: string) => {
+    const point = code.toLocaleLowerCase('en').startsWith('x') ? Number.parseInt(code.slice(1), 16) : Number.parseInt(code, 10)
+    try { return Number.isFinite(point) ? String.fromCodePoint(point) : entity } catch { return entity }
+  }).replace(/&(amp|quot|apos|lt|gt);/gi, (entity) => ({ '&amp;': '&', '&quot;': '"', '&apos;': "'", '&lt;': '<', '&gt;': '>' }[entity.toLocaleLowerCase('en')] ?? entity))
+  return decoded.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en')
+}
+
+export function prefixMappingMatches(sourceName: string, mappingName: string) {
+  if (!sourceName.startsWith(mappingName) || sourceName.length === mappingName.length) return false
+  return !/[\p{L}\p{N}]/u.test(sourceName.slice(mappingName.length, mappingName.length + 1))
 }
 
 function daysApart(left: unknown, right: string) {
@@ -103,13 +112,15 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
   const workspaceId = (memberships?.[0] as Row | undefined)?.workspace_id as string | undefined
   if (!workspaceId) throw new WorkspaceNotLinkedError()
 
-  const [workspaceResult, accountRows, categoryRows, periodRows, budgetRows, payeeRows, transactionRows, connectionRows, candidateRows] = await Promise.all([
+  const [workspaceResult, accountRows, categoryGroupRows, categoryRows, periodRows, budgetRows, payeeRows, mappingRows, transactionRows, connectionRows, candidateRows] = await Promise.all([
     neon.from('workspaces').select('name,default_currency,estimated_company_tax_rate_bps').eq('id', workspaceId).limit(1),
     allRows('accounts', '*', 'sort_order'),
+    allRows('category_groups', '*', 'sort_order'),
     allRows('categories', '*', 'sort_order'),
     allRows('periods', '*', 'period_start_date'),
     allRows('budgets'),
     allRows('payees', '*', 'sort_order'),
+    allRows('payee_mappings'),
     allRows('transactions'),
     allRows('bank_connections'),
     allRows('bank_import_candidates'),
@@ -154,6 +165,10 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
       color: row.color as string,
       currency: row.currency as string,
       scope: row.scope as AccountScope,
+      balanceSheetGroup: (row.balance_sheet_group as Account['balanceSheetGroup'] | undefined)
+        ?? (Boolean(row.pension) ? 'Pension'
+          : /apartment|mortgage|bolån/i.test(String(row.name)) ? 'Real estate'
+            : row.scope === 'Company' ? 'Company' : 'Personal'),
       closed: Boolean(row.closed),
       autoSync: Boolean(row.auto_sync),
       bankImportMode: row.bank_import_mode === 'automatic' ? 'automatic' : 'review',
@@ -173,18 +188,32 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
       rateLimits: (metadata?.rate_limits as Account['rateLimits'] | undefined),
     }
   })
+  const categoryGroups: CategoryGroup[] = categoryGroupRows.map((row) => ({
+    id: row.id as string,
+    name: row.name as string,
+    sortOrder: number(row.sort_order),
+    showCategories: Boolean(row.show_categories),
+  }))
   const categories: Category[] = categoryRows.map((row) => ({
     id: row.id as string,
     name: row.name as string,
     color: normalizeCategoryColor(row.color),
     icon: normalizeCategoryIcon(row.icon, row.name as string),
     reportGroup: row.report_group as ReportGroup,
+    categoryGroupId: (row.category_group_id as string | null) ?? undefined,
     hidden: Boolean(row.hidden),
   }))
   const payees: Payee[] = payeeRows.map((row) => ({
     id: row.id as string,
     name: row.name as string,
     defaultCategoryId: (row.default_category_id as string | null) ?? undefined,
+    defaultAccountId: (row.default_account_id as string | null) ?? undefined,
+  }))
+  const payeeMappings: PayeeMapping[] = mappingRows.map((row) => ({
+    id: row.id as string,
+    sourceName: row.source_name as string,
+    payeeId: row.payee_id as string,
+    matchType: row.match_type === 'starts_with' ? 'starts_with' : 'exact',
   }))
   const budgets: Budget[] = budgetRows.flatMap((row) => {
     const month = periods.get(row.period_id as string)
@@ -231,8 +260,10 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
     defaultCurrency: workspace.default_currency as string,
     data: {
       accounts,
+      categoryGroups,
       categories,
       payees,
+      payeeMappings,
       budgets,
       transactions,
       bankImportCandidates,
@@ -246,14 +277,43 @@ export async function createAccount(workspaceId: string, account: Account, sortO
     id: account.id,
     workspace_id: workspaceId,
     name: account.name,
-    account_type: account.type === 'Savings' ? 'External' : 'Budget',
+    account_type: 'Budget',
     display_type: account.type,
     scope: account.scope,
+    balance_sheet_group: account.balanceSheetGroup,
     currency: account.currency,
     color: account.color,
     opening_balance_minor: account.balanceMinor,
     sort_order: sortOrder,
     closed: account.closed,
+  })
+  if (error) throw error
+}
+
+export async function updateAccountDetails(workspaceId: string, account: Account) {
+  const scope: AccountScope = account.balanceSheetGroup === 'Company' ? 'Company' : 'Personal'
+  const { data, error } = await neon.from('accounts')
+    .update({
+      name: account.name,
+      display_type: account.type,
+      balance_sheet_group: account.balanceSheetGroup,
+      scope,
+    })
+    .eq('workspace_id', workspaceId)
+    .eq('id', account.id)
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The account could not be updated.')
+}
+
+export async function createPayee(workspaceId: string, payee: Payee, sortOrder: number) {
+  const { error } = await neon.from('payees').insert({
+    id: payee.id,
+    workspace_id: workspaceId,
+    name: payee.name.normalize('NFKC').trim(),
+    sort_order: sortOrder,
+    default_category_id: payee.defaultCategoryId ?? null,
+    default_account_id: payee.defaultAccountId ?? null,
   })
   if (error) throw error
 }
@@ -315,6 +375,7 @@ export async function createCategory(workspaceId: string, category: Category) {
     name: category.name,
     category_type: categoryType,
     report_group: category.reportGroup,
+    category_group_id: category.categoryGroupId ?? null,
     color: category.color,
     icon: category.icon,
     hidden: category.hidden,
@@ -336,7 +397,7 @@ async function resolvePayees(workspaceId: string, sourceNames: string[], createM
 
   const [payeeResult, mappingResult] = await Promise.all([
     neon.from('payees').select('id,name,default_category_id').eq('workspace_id', workspaceId).order('id', { ascending: true }),
-    neon.from('payee_mappings').select('normalized_name,payee_id').eq('workspace_id', workspaceId).order('id', { ascending: true }),
+    neon.from('payee_mappings').select('normalized_name,payee_id,match_type').eq('workspace_id', workspaceId).order('id', { ascending: true }),
   ])
   if (payeeResult.error) throw payeeResult.error
   if (mappingResult.error) throw mappingResult.error
@@ -348,20 +409,29 @@ async function resolvePayees(workspaceId: string, sourceNames: string[], createM
   }))
   const payeeById = new Map(payees.map((payee) => [payee.id, payee]))
   const payeeByName = new Map<string, Payee>()
+  const prefixMappings: { normalizedName: string; payee: Payee }[] = []
   for (const row of mappingResult.data ?? []) {
     const payee = payeeById.get(String(row.payee_id))
     const normalized = String(row.normalized_name)
-    if (payee && !payeeByName.has(normalized)) payeeByName.set(normalized, payee)
+    if (payee && row.match_type === 'starts_with') prefixMappings.push({ normalizedName: normalized, payee })
+    else if (payee && !payeeByName.has(normalized)) payeeByName.set(normalized, payee)
   }
   for (const payee of payees) {
     const normalized = normalizedPayeeName(payee.name)
     if (!payeeByName.has(normalized)) payeeByName.set(normalized, payee)
   }
+  const prefixPayeeFor = (normalized: string) => {
+    const matches = prefixMappings.filter((mapping) => prefixMappingMatches(normalized, mapping.normalizedName)).sort((left, right) => right.normalizedName.length - left.normalizedName.length)
+    if (!matches.length) return undefined
+    const longestLength = matches[0].normalizedName.length
+    const longestPayees = new Map(matches.filter((mapping) => mapping.normalizedName.length === longestLength).map((mapping) => [mapping.payee.id, mapping.payee]))
+    return longestPayees.size === 1 ? [...longestPayees.values()][0] : undefined
+  }
 
   if (createMissing) {
     for (const name of names) {
       const normalized = normalizedPayeeName(name)
-      if (payeeByName.has(normalized)) continue
+      if (payeeByName.has(normalized) || prefixPayeeFor(normalized)) continue
       const payee: Payee = { id: crypto.randomUUID(), name }
       const { error } = await neon.from('payees').insert({
         id: payee.id,
@@ -375,7 +445,10 @@ async function resolvePayees(workspaceId: string, sourceNames: string[], createM
     }
   }
 
-  return names.map((name) => payeeByName.get(normalizedPayeeName(name)))
+  return names.map((name) => {
+    const normalized = normalizedPayeeName(name)
+    return payeeByName.get(normalized) ?? prefixPayeeFor(normalized)
+  })
 }
 
 export async function ensurePayees(workspaceId: string, sourceNames: string[]): Promise<Payee[]> {
@@ -399,6 +472,18 @@ export async function assignPayeeMapping(workspaceId: string, sourceName: string
     return assignPayeeMappingWithoutRpc(workspaceId, sourceName, normalizedName, payeeId)
   }
   return Array.isArray(data) ? data.map(String) : []
+}
+
+export async function createPayeeMapping(workspaceId: string, sourceName: string, payeeId: string): Promise<PayeeMapping> {
+  const cleanedName = sourceName.normalize('NFKC').trim()
+  if (!cleanedName) throw new Error('A bank description is required.')
+  const { data, error } = await neon.from('payee_mappings')
+    .insert({ id: crypto.randomUUID(), workspace_id: workspaceId, normalized_name: normalizedPayeeName(cleanedName), source_name: cleanedName, payee_id: payeeId })
+    .select('id,source_name,payee_id')
+  if (error) throw error
+  const row = data?.[0]
+  if (!row) throw new Error('The mapping could not be created.')
+  return { id: String(row.id), sourceName: String(row.source_name), payeeId: String(row.payee_id), matchType: 'exact' }
 }
 
 async function assignPayeeMappingWithoutRpc(workspaceId: string, sourceName: string, normalizedName: string, payeeId: string): Promise<string[]> {
@@ -524,7 +609,7 @@ export async function updateTransactionDetails(workspaceId: string, transactionI
   if (!data?.length) throw new Error('The transaction could not be updated. Transfers do not have categories.')
 }
 
-export async function updatePayeeDefaultCategory(workspaceId: string, payeeId: string, categoryId: string) {
+export async function updatePayeeDefaultCategory(workspaceId: string, payeeId: string, categoryId: string | null) {
   const { data, error } = await neon.from('payees')
     .update({ default_category_id: categoryId })
     .eq('workspace_id', workspaceId)
@@ -532,6 +617,38 @@ export async function updatePayeeDefaultCategory(workspaceId: string, payeeId: s
     .select('id')
   if (error) throw error
   if (!data?.length) throw new Error('The payee default category could not be updated.')
+}
+
+export async function updatePayeeDefaults(workspaceId: string, payeeId: string, categoryId: string | null, accountId: string | null) {
+  const { data, error } = await neon.from('payees')
+    .update({ default_category_id: categoryId, default_account_id: accountId })
+    .eq('workspace_id', workspaceId)
+    .eq('id', payeeId)
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The payee defaults could not be updated.')
+}
+
+export async function updatePayeeMapping(workspaceId: string, mappingId: string, sourceName: string, payeeId: string, matchType: PayeeMapping['matchType'] = 'exact') {
+  const cleanedName = sourceName.normalize('NFKC').trim()
+  if (!cleanedName) throw new Error('A bank description is required.')
+  const { data, error } = await neon.from('payee_mappings')
+    .update({ source_name: cleanedName, normalized_name: normalizedPayeeName(cleanedName), payee_id: payeeId, match_type: matchType })
+    .eq('workspace_id', workspaceId)
+    .eq('id', mappingId)
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The mapping could not be updated.')
+}
+
+export async function deletePayeeMapping(workspaceId: string, mappingId: string) {
+  const { data, error } = await neon.from('payee_mappings')
+    .delete()
+    .eq('workspace_id', workspaceId)
+    .eq('id', mappingId)
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The mapping could not be removed.')
 }
 
 export async function updateTaxRate(workspaceId: string, estimatedCompanyTaxRateBps: number) {
@@ -956,7 +1073,7 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
     .filter((transaction) => transaction.date <= today)
   const duplicates = Math.max(0, receivedTransactions.length - unseenTransactions.length - pendingPromoted - transfersMatched)
 
-  const sourcePayeeNames = [...new Set(newTransactions.map((transaction) => transaction.payee.normalize('NFKC').trim()).filter(Boolean))]
+  const sourcePayeeNames = [...new Set(newTransactions.flatMap((transaction) => [transaction.payee, transaction.note ?? '']).map((name) => name.normalize('NFKC').trim()).filter(Boolean))]
   const [resolvedPayees, categoryResult] = await Promise.all([
     findPayees(workspaceId, sourcePayeeNames),
     neon.from('categories').select('id,hidden').eq('workspace_id', workspaceId),
@@ -972,7 +1089,9 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
     payeeIdByName.set(normalizedName, payee.id)
     if (payee.defaultCategoryId) defaultCategoryIdByName.set(normalizedName, payee.defaultCategoryId)
   })
-  const defaultCategoryFor = (transaction: BankSyncPayload['transactions'][number]) => defaultCategoryIdByName.get(normalizedPayeeName(transaction.payee))
+  const matchedValueFor = <T,>(values: Map<string, T>, transaction: BankSyncPayload['transactions'][number]) => values.get(normalizedPayeeName(transaction.payee)) ?? (transaction.note ? values.get(normalizedPayeeName(transaction.note)) : undefined)
+  const payeeIdFor = (transaction: BankSyncPayload['transactions'][number]) => matchedValueFor(payeeIdByName, transaction)
+  const defaultCategoryFor = (transaction: BankSyncPayload['transactions'][number]) => matchedValueFor(defaultCategoryIdByName, transaction)
   const canApplyDefaultCategory = (transaction: BankSyncPayload['transactions'][number]) => {
     const categoryId = defaultCategoryFor(transaction)
     return Boolean(categoryId && !hiddenCategoryIds.has(categoryId))
@@ -1006,7 +1125,7 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
       currency: transaction.currency,
       transaction_type: transaction.type,
       category_id: defaultCategoryFor(transaction),
-      payee_id: payeeIdByName.get(normalizedPayeeName(transaction.payee)) ?? null,
+      payee_id: payeeIdFor(transaction) ?? null,
       payee_name: transaction.payee,
       memo: transaction.note || null,
       provider_transaction_id: transaction.providerTransactionId,
@@ -1033,7 +1152,7 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
     currency: transaction.currency,
     transaction_type: transaction.type,
     category_id: defaultCategoryFor(transaction) ?? null,
-    payee_id: payeeIdByName.get(normalizedPayeeName(transaction.payee)) ?? null,
+    payee_id: payeeIdFor(transaction) ?? null,
     payee_name: transaction.payee,
     memo: transaction.note || null,
     posted: transaction.status === 'booked',

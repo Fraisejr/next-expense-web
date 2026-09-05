@@ -1,4 +1,5 @@
 export type AccountScope = 'Personal' | 'Company'
+export type BalanceSheetGroup = 'Personal' | 'Company' | 'Real estate' | 'Pension'
 export type ReportGroup = 'income' | 'expense' | 'tax' | 'capital_gain'
 
 export type Account = {
@@ -9,6 +10,7 @@ export type Account = {
   color: string
   currency: string
   scope: AccountScope
+  balanceSheetGroup: BalanceSheetGroup
   closed: boolean
   autoSync?: boolean
   bankImportMode?: 'review' | 'automatic'
@@ -73,13 +75,29 @@ export type Category = {
   color: string
   icon: string
   reportGroup: ReportGroup
+  categoryGroupId?: string
   hidden: boolean
+}
+
+export type CategoryGroup = {
+  id: string
+  name: string
+  sortOrder: number
+  showCategories: boolean
 }
 
 export type Payee = {
   id: string
   name: string
   defaultCategoryId?: string
+  defaultAccountId?: string
+}
+
+export type PayeeMapping = {
+  id: string
+  sourceName: string
+  payeeId: string
+  matchType: 'exact' | 'starts_with'
 }
 
 export type Budget = {
@@ -112,8 +130,10 @@ export type Transaction = {
 
 export type AppData = {
   accounts: Account[]
+  categoryGroups: CategoryGroup[]
   categories: Category[]
   payees: Payee[]
+  payeeMappings: PayeeMapping[]
   budgets: Budget[]
   transactions: Transaction[]
   bankImportCandidates: BankImportCandidate[]
