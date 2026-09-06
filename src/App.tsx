@@ -127,14 +127,14 @@ function toMonthKey(date: Date) {
 }
 
 function MonthPicker({ value, onChange }: { value: string; onChange: (month: string) => void }) {
-  const selectedDate = fromMonthKey(value) ?? new Date()
+  const selectedDate = useMemo(() => fromMonthKey(value) ?? new Date(), [value])
   const [open, setOpen] = useState(false)
   const [viewingYear, setViewingYear] = useState(selectedDate.getFullYear())
   const pickerRef = useRef<HTMLDivElement>(null)
   const currentMonth = toMonthKey(new Date())
   const months = Array.from({ length: 12 }, (_, index) => new Intl.DateTimeFormat('en', { month: 'short' }).format(new Date(2020, index, 1)))
 
-  useEffect(() => setViewingYear(selectedDate.getFullYear()), [value])
+  useEffect(() => setViewingYear(selectedDate.getFullYear()), [selectedDate])
   useEffect(() => {
     if (!open) return
     const closeOutside = (event: MouseEvent) => {
@@ -198,7 +198,7 @@ function getErrorMessage(error: unknown, fallback: string) {
   return parts.length > 0 ? parts.join(' · ') : fallback
 }
 
-function useClientNavigation(event: React.MouseEvent<HTMLAnchorElement>, navigate: () => void) {
+function handleClientNavigation(event: React.MouseEvent<HTMLAnchorElement>, navigate: () => void) {
   if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
   event.preventDefault()
   navigate()
@@ -293,8 +293,9 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
             : location.pathname === '/accounts' ? 'accounts'
               : location.pathname === '/settings' ? 'settings'
               : 'overview'
-  const requestedMonth = fromMonthKey(new URLSearchParams(location.search).get('month'))
-  const viewedMonth = requestedMonth ?? new Date()
+  const requestedMonthKey = new URLSearchParams(location.search).get('month')
+  const requestedMonth = fromMonthKey(requestedMonthKey)
+  const viewedMonth = useMemo(() => fromMonthKey(requestedMonthKey) ?? new Date(), [requestedMonthKey])
   const selectedMonthKey = toMonthKey(viewedMonth)
   const reportView: ReportView = location.pathname === '/reports/net-worth' ? 'net-worth' : 'profit-loss'
 
@@ -304,7 +305,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     if (historyLoadedRef.current && !revalidate) return
     if (historyRequest.current) return historyRequest.current
     setHistoryLoading(true)
-    const request = loadCachedAllTransactions(workspace.workspaceId, data.transactions)
+    const request = loadCachedAllTransactions(workspace.workspaceId, data.transactions, revalidate)
       .then((allTransactions) => {
         historyLoadedRef.current = true
         setData((current) => ({ ...current, transactions: allTransactions }))
@@ -1177,14 +1178,14 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         <nav className="nav-list">
           <p className="nav-label">Workspace</p>
           {navItems.map(({ id, label, icon: Icon, path }) => (
-            <a key={id} href={pathWithMonth(path)} className={page === id ? 'nav-item active' : 'nav-item'} onClick={(event) => useClientNavigation(event, () => goTo(path))}>
+            <a key={id} href={pathWithMonth(path)} className={page === id ? 'nav-item active' : 'nav-item'} onClick={(event) => handleClientNavigation(event, () => goTo(path))}>
               <Icon size={19} /><span>{label}</span>
             </a>
           ))}
         </nav>
 
         <nav className="sidebar-accounts" aria-label="Accounts">
-          <a href={pathWithMonth('/accounts')} className={page === 'accounts' && !selectedAccount ? 'account-section-title active' : 'account-section-title'} onClick={(event) => useClientNavigation(event, () => goTo('/accounts'))}>
+          <a href={pathWithMonth('/accounts')} className={page === 'accounts' && !selectedAccount ? 'account-section-title active' : 'account-section-title'} onClick={(event) => handleClientNavigation(event, () => goTo('/accounts'))}>
             <span><WalletCards size={16} />Accounts</span><b>{formatMoney(totalBalance, workspace.defaultCurrency)}</b>
           </a>
           {accountsByBalanceSheetGroup.map(({ group, accounts }) => accounts.length > 0 && <SidebarAccountGroup key={group} label={group} accounts={accounts} pendingImportCounts={pendingImportCounts} open={openAccountGroups[group]} onToggle={() => setOpenAccountGroups((current) => ({ ...current, [group]: !current[group] }))} selectedAccountId={selectedAccount?.id} accountHref={(id) => pathWithMonth(`/accounts/${id}`)} onSelect={(id) => goTo(`/accounts/${id}`)} />)}
@@ -1194,7 +1195,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
 
         <div className="sidebar-bottom">
           <button className="nav-item"><CircleHelp size={19} /><span>Help & feedback</span></button>
-          <a href={pathWithMonth('/settings')} className={page === 'settings' ? 'nav-item active' : 'nav-item'} onClick={(event) => useClientNavigation(event, () => goTo('/settings'))}><Settings size={19} /><span>Settings</span></a>
+          <a href={pathWithMonth('/settings')} className={page === 'settings' ? 'nav-item active' : 'nav-item'} onClick={(event) => handleClientNavigation(event, () => goTo('/settings'))}><Settings size={19} /><span>Settings</span></a>
           <div className="profile">
             <div className="avatar">{userName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}</div>
             <div><strong>{userName}</strong><span>{workspace.workspaceName}</span></div>
@@ -1368,7 +1369,7 @@ function SidebarAccountGroup({ label, accounts, pendingImportCounts, open, onTog
     <button className="sidebar-account-group-title" onClick={onToggle} aria-expanded={open}>
       <span><ChevronDown size={12} className={open ? '' : 'collapsed'} />{label}</span><b>{currencies.length === 1 ? formatMoney(subtotal, currencies[0]) : `${accounts.length} accounts`}</b>
     </button>
-    {open && <div className="sidebar-account-list">{accounts.map((account) => <a key={account.id} href={accountHref(account.id)} className={selectedAccountId === account.id ? 'sidebar-account active' : 'sidebar-account'} onClick={(event) => useClientNavigation(event, () => onSelect(account.id))}><span><i style={{ background: account.color }} /><span className="sidebar-account-name">{account.name}</span>{account.providerAccountId && <BankImportConnectedIcon pendingCount={pendingImportCounts.get(account.id)} />}{accountIsReconciled(account) && <AccountReconciledIndicator />}</span><b className={account.balanceMinor < 0 ? 'negative' : ''}>{formatMoney(account.balanceMinor, account.currency)}</b></a>)}</div>}
+    {open && <div className="sidebar-account-list">{accounts.map((account) => <a key={account.id} href={accountHref(account.id)} className={selectedAccountId === account.id ? 'sidebar-account active' : 'sidebar-account'} onClick={(event) => handleClientNavigation(event, () => onSelect(account.id))}><span><i style={{ background: account.color }} /><span className="sidebar-account-name">{account.name}</span>{account.providerAccountId && <BankImportConnectedIcon pendingCount={pendingImportCounts.get(account.id)} />}{accountIsReconciled(account) && <AccountReconciledIndicator />}</span><b className={account.balanceMinor < 0 ? 'negative' : ''}>{formatMoney(account.balanceMinor, account.currency)}</b></a>)}</div>}
   </div>
 }
 
@@ -3059,7 +3060,7 @@ function BankLinkForm({ account, workspaceId, onComplete }: { account: Account; 
   const [institutionId, setInstitutionId] = useState(account.institutionId || '')
   const [providerAccounts, setProviderAccounts] = useState<GoCardlessAccount[]>([])
   const [providerAccountId, setProviderAccountId] = useState('')
-  const [pendingLink, setPendingLink] = useState<PendingBankLink | null>(() => {
+  const [pendingLink] = useState<PendingBankLink | null>(() => {
     if (new URLSearchParams(window.location.search).get('bank_link') !== 'complete') return null
     try {
       const pending = JSON.parse(sessionStorage.getItem(BANK_LINK_STORAGE_KEY) ?? 'null') as PendingBankLink | null

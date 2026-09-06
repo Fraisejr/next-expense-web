@@ -148,6 +148,7 @@ export async function loadAllTransactions(workspaceId: string): Promise<Transact
 const transactionCacheDatabase = 'next-expense-cache'
 const transactionCacheStore = 'transaction-history'
 const transactionCacheMaxAgeMs = 60 * 60 * 1000
+const transactionCacheVersion = 2
 
 function openTransactionCache(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(null)
@@ -161,7 +162,7 @@ function openTransactionCache(): Promise<IDBDatabase | null> {
   })
 }
 
-type CachedTransactionHistory = { savedAt: number; revision: number; transactions: Transaction[] }
+type CachedTransactionHistory = { version: number; savedAt: number; revision: number; transactions: Transaction[] }
 
 async function readTransactionCache(workspaceId: string): Promise<CachedTransactionHistory | null> {
   const database = await openTransactionCache()
@@ -170,7 +171,7 @@ async function readTransactionCache(workspaceId: string): Promise<CachedTransact
     const request = database.transaction(transactionCacheStore, 'readonly').objectStore(transactionCacheStore).get(workspaceId)
     request.onsuccess = () => {
       const cached = request.result as Partial<CachedTransactionHistory> | undefined
-      resolve(cached?.savedAt && typeof cached.revision === 'number' && Date.now() - cached.savedAt < transactionCacheMaxAgeMs && Array.isArray(cached.transactions)
+      resolve(cached?.version === transactionCacheVersion && cached.savedAt && typeof cached.revision === 'number' && Date.now() - cached.savedAt < transactionCacheMaxAgeMs && Array.isArray(cached.transactions)
         ? cached as CachedTransactionHistory
         : null)
       database.close()
@@ -183,21 +184,21 @@ async function writeTransactionCache(workspaceId: string, revision: number, tran
   const database = await openTransactionCache()
   if (!database) return
   await new Promise<void>((resolve) => {
-    const request = database.transaction(transactionCacheStore, 'readwrite').objectStore(transactionCacheStore).put({ savedAt: Date.now(), revision, transactions }, workspaceId)
+    const request = database.transaction(transactionCacheStore, 'readwrite').objectStore(transactionCacheStore).put({ version: transactionCacheVersion, savedAt: Date.now(), revision, transactions }, workspaceId)
     request.onsuccess = () => resolve()
     request.onerror = () => resolve()
   })
   database.close()
 }
 
-export async function loadCachedAllTransactions(workspaceId: string, currentTransactions: Transaction[] = []) {
+export async function loadCachedAllTransactions(workspaceId: string, currentTransactions: Transaction[] = [], revalidate = false) {
   const [cached, revisionResult] = await Promise.all([
     readTransactionCache(workspaceId),
     neon.rpc('workspace_transaction_revision', { p_workspace_id: workspaceId }),
   ])
   if (revisionResult.error) throw revisionResult.error
   const revision = number(revisionResult.data)
-  if (cached?.revision === revision) {
+  if (!revalidate && cached?.revision === revision) {
     const currentMonths = new Set(currentTransactions.map((transaction) => transaction.date.slice(0, 7)))
     return [...cached.transactions.filter((transaction) => !currentMonths.has(transaction.date.slice(0, 7))), ...currentTransactions]
   }
@@ -349,7 +350,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
       currency: row.currency as string,
       scope: row.scope as AccountScope,
       balanceSheetGroup: (row.balance_sheet_group as Account['balanceSheetGroup'] | undefined)
-        ?? (Boolean(row.pension) ? 'Pension'
+        ?? (row.pension ? 'Pension'
           : /apartment|mortgage|bolån/i.test(String(row.name)) ? 'Real estate'
             : row.scope === 'Company' ? 'Company' : 'Personal'),
       investment: Boolean(row.investment),
@@ -1360,6 +1361,7 @@ function amountToMinor(value: string, currency: string) {
   try {
     fractionDigits = new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits ?? 2
   } catch {
+    // Unknown currencies fall back to the standard two decimal places.
   }
   const amount = Number(value)
   const minor = Math.round(Math.abs(amount) * 10 ** fractionDigits)
@@ -1835,7 +1837,6 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
     }
   }
 
-  let balanceUpdated = false
   const accountUpdate: Row = { last_refresh_at: sync.fetchedAt }
   const bankBalance = sync.balance ? {
     amount_minor: amountToMinor(sync.balance.amount, sync.balance.currency) * (Number(sync.balance.amount) < 0 ? -1 : 1),
@@ -1843,7 +1844,7 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
     type: sync.balance.type,
     fetched_at: sync.fetchedAt,
   } : undefined
-  balanceUpdated = Boolean(bankBalance)
+  const balanceUpdated = Boolean(bankBalance)
   const accountResult = await neon.from('accounts').update(accountUpdate).eq('workspace_id', workspaceId).eq('id', account.id)
   if (accountResult.error) throw accountResult.error
 

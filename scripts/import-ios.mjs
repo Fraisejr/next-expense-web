@@ -87,7 +87,7 @@ const accountNames = new Set()
 const categoryNames = new Set()
 
 for (const row of selectedRows) {
-  const [account, dateFull, payee, category, memo, amount, currency, income, transfer, toAccount] = row.values
+  const [account, , payee, category, memo, amount, currency, income, transfer, toAccount] = row.values
   const recurring = row.values[13]
   if (recurring === 'true') {
     skippedRows.push({ lineNumber: row.lineNumber, reason: 'recurring transaction excluded' })
