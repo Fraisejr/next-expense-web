@@ -92,6 +92,10 @@ function isExpenseReportGroup(group?: ReportGroup) {
   return Boolean(group && expenseReportGroups.includes(group))
 }
 
+function isTaxReportGroup(group?: ReportGroup) {
+  return Boolean(group && taxReportGroups.includes(group))
+}
+
 function accountBalanceSheetGroup(account: Account): BalanceSheetGroup {
   return account.balanceSheetGroup ?? (account.scope === 'Company' ? 'Company' : 'Personal')
 }
@@ -2074,7 +2078,7 @@ function overviewBalanceGroup(account: Account): OverviewBalanceGroup {
 
 type OverviewPnl = { income: number; expenses: number; tax: number; net: number }
 
-type AnnualSpendingMetric = { year: number; income: number; expenses: number }
+type AnnualSpendingMetric = { year: number; income: number; expenses: number; taxes: number }
 
 function annualSpendingMetrics(data: AppData, scope: SpendingGoalScope, defaultCurrency: string, throughDate: string) {
   const categories = new Map(data.categories.map((category) => [category.id, category]))
@@ -2085,11 +2089,12 @@ function annualSpendingMetrics(data: AppData, scope: SpendingGoalScope, defaultC
     const categoryScope: AccountScope | null = group?.startsWith('personal_') ? 'Personal' : group?.startsWith('company_') ? 'Company' : null
     if (!group || !categoryScope || (scope !== 'Combined' && scope !== categoryScope)) continue
     const year = Number(transaction.date.slice(0, 4))
-    const metric = metrics.get(year) ?? { year, income: 0, expenses: 0 }
+    const metric = metrics.get(year) ?? { year, income: 0, expenses: 0, taxes: 0 }
     const amount = convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, data.fxRates) ?? 0
     const direction = transaction.type === 'income' ? 1 : -1
     if (isIncomeReportGroup(group)) metric.income += direction * amount
     if (isExpenseReportGroup(group)) metric.expenses += -direction * amount
+    if (isTaxReportGroup(group)) metric.taxes += -direction * amount
     metrics.set(year, metric)
   }
   return [...metrics.values()].sort((left, right) => left.year - right.year)
@@ -2103,8 +2108,8 @@ function YearlySpendingPlan({ data, defaultCurrency, historyLoading, onSaveGoal 
   const today = todayInParis()
   const currentYear = Number(today.slice(0, 4))
   const metrics = annualSpendingMetrics(data, scope, defaultCurrency, today)
-  const current = metrics.find((metric) => metric.year === currentYear) ?? { year: currentYear, income: 0, expenses: 0 }
-  const previous = metrics.filter((metric) => metric.year < currentYear && (metric.income !== 0 || metric.expenses !== 0)).slice(-3)
+  const current = metrics.find((metric) => metric.year === currentYear) ?? { year: currentYear, income: 0, expenses: 0, taxes: 0 }
+  const previous = metrics.filter((metric) => metric.year < currentYear && (metric.income !== 0 || metric.expenses !== 0 || metric.taxes !== 0)).slice(-3)
   const comparison = [...previous, current]
   const goal = data.yearlySpendingGoals.find((item) => item.year === currentYear && item.scope === scope)
   const goalAmount = goal?.amountMinor ?? 0
@@ -2123,7 +2128,7 @@ function YearlySpendingPlan({ data, defaultCurrency, historyLoading, onSaveGoal 
   const incomeAlignedExpenses = annualizedIncome > 0 ? annualizedIncome * (1 - savingsRate) : 0
   const suggestionInputs = [annualizedExpenses, historicalExpenses, incomeAlignedExpenses].filter((value) => value > 0)
   const suggestedGoal = Math.max(current.expenses, suggestionInputs.length ? Math.round((suggestionInputs.reduce((sum, value) => sum + value, 0) / suggestionInputs.length) / 10_000) * 10_000 : 0)
-  const comparisonMaximum = Math.max(1, ...comparison.flatMap((metric) => [metric.income, metric.expenses]))
+  const comparisonMaximum = Math.max(1, ...comparison.flatMap((metric) => [metric.income, metric.expenses, metric.taxes, Math.abs(metric.income - metric.expenses - metric.taxes)]))
 
   useEffect(() => {
     setGoalInput(goalAmount > 0 ? (goalAmount / 100).toFixed(0) : '')
@@ -2154,15 +2159,18 @@ function YearlySpendingPlan({ data, defaultCurrency, historyLoading, onSaveGoal 
     </div>
     {historyLoading && <div className="yearly-history-loading"><LoaderCircle size={14} />Loading complete history for an accurate year-to-date comparison…</div>}
     <div className="yearly-spending-summary">
-      <div className="yearly-spent-value"><span>Spent year to date</span><strong>{formatMoney(current.expenses, defaultCurrency)}</strong><small>{goalAmount > 0 ? `${Math.round(progress)}% of ${formatMoney(goalAmount, defaultCurrency)} goal` : 'No yearly goal set yet'}</small></div>
+      <div className="yearly-spent-value"><span>Spent year to date</span><strong>{formatMoney(current.expenses, defaultCurrency)}</strong><small>{goalAmount > 0 ? `${Math.round(progress)}% of ${formatMoney(goalAmount, defaultCurrency)} goal` : 'No yearly goal set yet'}</small><small className="taxes-excluded">Taxes excluded · {formatMoney(current.taxes, defaultCurrency)}</small></div>
       <div className="yearly-progress"><div className="yearly-progress-track"><span className={progress > 100 ? 'over' : ''} style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} /></div><div><span>{goalAmount > 0 ? formatMoney(Math.max(0, goalAmount - current.expenses), defaultCurrency) : '—'} remaining</span>{progress > 100 && <strong>{formatMoney(current.expenses - goalAmount, defaultCurrency)} over goal</strong>}</div></div>
-      <div className="yearly-goal-editor"><label><span>{scope} goal</span><div><b>{defaultCurrency}</b><input type="number" min="0.01" step="0.01" value={goalInput} onChange={(event) => setGoalInput(event.target.value)} placeholder="Set yearly goal" /></div></label><div><button type="button" className="text-button" disabled={!suggestedGoal} onClick={() => setGoalInput((suggestedGoal / 100).toFixed(0))}>Use {formatCompactMoney(suggestedGoal, defaultCurrency)} suggestion</button><button type="button" className="primary-button" disabled={saving} onClick={() => void saveGoal()}>{saving ? 'Saving…' : 'Save goal'}</button></div>{saveError && <p role="alert">{saveError}</p>}</div>
+      <div className="yearly-goal-editor"><label><span>{scope} goal <em>Excludes taxes</em></span><div><b>{defaultCurrency}</b><input type="number" min="0.01" step="0.01" value={goalInput} onChange={(event) => setGoalInput(event.target.value)} placeholder="Set yearly goal" /></div></label><div><button type="button" className="text-button" disabled={!suggestedGoal} onClick={() => setGoalInput((suggestedGoal / 100).toFixed(0))}>Use {formatCompactMoney(suggestedGoal, defaultCurrency)} suggestion</button><button type="button" className="primary-button" disabled={saving} onClick={() => void saveGoal()}>{saving ? 'Saving…' : 'Save goal'}</button></div>{saveError && <p role="alert">{saveError}</p>}</div>
     </div>
     <div className="yearly-comparison-heading"><div><span className="eyebrow">Planning context</span><h3>Income and expenses by year</h3></div><p>Suggestion blends this year’s expense run rate, average prior spending, and projected income at your historical savings rate.</p></div>
-    <div className="yearly-comparison">{comparison.map((metric) => <div className="yearly-comparison-row" key={metric.year}>
-      <div className="yearly-comparison-year"><strong>{metric.year}</strong><span>{metric.year === currentYear ? 'So far' : 'Full year'}</span></div>
-      <div className="yearly-comparison-bars"><div><span>Income</span><i><b style={{ width: `${Math.max(0, metric.income) / comparisonMaximum * 100}%` }} /></i><strong>{formatMoney(metric.income, defaultCurrency)}</strong></div><div className="expense"><span>Expenses</span><i><b style={{ width: `${Math.max(0, metric.expenses) / comparisonMaximum * 100}%` }} /></i><strong>{formatMoney(metric.expenses, defaultCurrency)}</strong></div></div>
-    </div>)}</div>
+    <div className="yearly-comparison">{comparison.map((metric) => {
+      const netIncome = metric.income - metric.expenses - metric.taxes
+      return <div className="yearly-comparison-row" key={metric.year}>
+        <div className="yearly-comparison-year"><strong>{metric.year}</strong><span>{metric.year === currentYear ? 'So far' : 'Full year'}</span></div>
+        <div className="yearly-comparison-bars"><div><span>Income</span><i><b style={{ width: `${Math.max(0, metric.income) / comparisonMaximum * 100}%` }} /></i><strong>{formatMoney(metric.income, defaultCurrency)}</strong></div><div className="expense"><span>Expenses</span><i><b style={{ width: `${Math.max(0, metric.expenses) / comparisonMaximum * 100}%` }} /></i><strong>{formatMoney(metric.expenses, defaultCurrency)}</strong></div><div className="tax"><span>Taxes</span><i><b style={{ width: `${Math.max(0, metric.taxes) / comparisonMaximum * 100}%` }} /></i><strong>{formatMoney(metric.taxes, defaultCurrency)}</strong></div><div className={`net-income ${netIncome < 0 ? 'negative-net' : ''}`}><span>Net income</span><i><b style={{ width: `${Math.abs(netIncome) / comparisonMaximum * 100}%` }} /></i><strong>{formatMoney(netIncome, defaultCurrency)}</strong></div></div>
+      </div>
+    })}</div>
     <div className="yearly-suggestion"><Sparkles size={16} /><p><strong>Suggested {scope.toLocaleLowerCase('en')} goal: {formatMoney(suggestedGoal, defaultCurrency)}</strong><span>Current annual pace {formatMoney(annualizedExpenses, defaultCurrency)} · projected income {formatMoney(annualizedIncome, defaultCurrency)} · historical savings rate {new Intl.NumberFormat('en', { style: 'percent', maximumFractionDigits: 0 }).format(savingsRate)}</span></p></div>
   </section>
 }
