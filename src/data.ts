@@ -37,7 +37,7 @@ export const seedData: AppData = {
     { id: 'budget-fun', month: currentMonth, categoryId: 'fun', scope: 'Personal', amountMinor: 18000 },
     { id: 'budget-bills', month: currentMonth, categoryId: 'bills', scope: 'Personal', amountMinor: 39000 },
   ],
-  yearlySpendingGoals: [],
+  yearlyFinancialPlans: [],
   fxRates: [],
   payees: [
     { id: 'green-market', name: 'Green Market' },

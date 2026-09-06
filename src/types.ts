@@ -113,10 +113,12 @@ export type Budget = {
   amountMinor: number
 }
 
-export type YearlySpendingGoal = {
+export type YearlyFinancialPlan = {
   year: number
-  scope: SpendingGoalScope
-  amountMinor: number
+  projectedIncomeMinor: number
+  projectedTaxesMinor: number
+  savingsGoalMinor: number
+  companySpendingMinor: number
 }
 
 export type FxRate = {
@@ -158,7 +160,7 @@ export type AppData = {
   unusedPayeeIds: string[]
   payeeMappings: PayeeMapping[]
   budgets: Budget[]
-  yearlySpendingGoals: YearlySpendingGoal[]
+  yearlyFinancialPlans: YearlyFinancialPlan[]
   fxRates: FxRate[]
   transactions: Transaction[]
   bankImportCandidates: BankImportCandidate[]

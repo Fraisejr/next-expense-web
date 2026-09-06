@@ -1,6 +1,6 @@
 import { neon } from './neon'
 import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
-import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankImportCandidate, BankRateLimit, BankSyncDiagnostic, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, Transaction, YearlySpendingGoal } from './types'
+import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankImportCandidate, BankRateLimit, BankSyncDiagnostic, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, Transaction, YearlyFinancialPlan } from './types'
 
 type Row = Record<string, unknown>
 
@@ -137,18 +137,23 @@ export async function loadTransactionPage(workspaceId: string, query: Transactio
   return { transactions: mapTransactionRows(rows), total: rows.length ? number(rows[0].total_count) : 0 }
 }
 
-export async function loadAllTransactions(workspaceId: string): Promise<Transaction[]> {
+export async function loadAllTransactions(workspaceId: string, retriesRemaining = 1): Promise<Transaction[]> {
   const firstPage = await loadTransactionPage(workspaceId, { limit: 1000 })
   if (firstPage.transactions.length >= firstPage.total) return firstPage.transactions
   const remainingOffsets = Array.from({ length: Math.ceil(firstPage.total / 1000) - 1 }, (_, index) => (index + 1) * 1000)
   const remainingPages = await Promise.all(remainingOffsets.map((offset) => loadTransactionPage(workspaceId, { limit: 1000, offset })))
-  return [firstPage, ...remainingPages].flatMap((page) => page.transactions)
+  const transactions = [firstPage, ...remainingPages].flatMap((page) => page.transactions)
+  const uniqueTransactions = [...new Map(transactions.map((transaction) => [transaction.id, transaction])).values()]
+  if (uniqueTransactions.length === firstPage.total) return uniqueTransactions
+  if (retriesRemaining > 0) return loadAllTransactions(workspaceId, retriesRemaining - 1)
+  throw new Error(`Transaction history was incomplete: received ${uniqueTransactions.length} of ${firstPage.total} transactions.`)
 }
 
 const transactionCacheDatabase = 'next-expense-cache'
 const transactionCacheStore = 'transaction-history'
 const transactionCacheMaxAgeMs = 60 * 60 * 1000
-const transactionCacheVersion = 2
+// Version 3 invalidates caches that may contain only the newest transaction pages.
+const transactionCacheVersion = 3
 
 function openTransactionCache(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(null)
@@ -162,7 +167,7 @@ function openTransactionCache(): Promise<IDBDatabase | null> {
   })
 }
 
-type CachedTransactionHistory = { version: number; savedAt: number; revision: number; transactions: Transaction[] }
+type CachedTransactionHistory = { version: number; savedAt: number; revision: number; transactionCount: number; transactions: Transaction[] }
 
 async function readTransactionCache(workspaceId: string): Promise<CachedTransactionHistory | null> {
   const database = await openTransactionCache()
@@ -171,7 +176,7 @@ async function readTransactionCache(workspaceId: string): Promise<CachedTransact
     const request = database.transaction(transactionCacheStore, 'readonly').objectStore(transactionCacheStore).get(workspaceId)
     request.onsuccess = () => {
       const cached = request.result as Partial<CachedTransactionHistory> | undefined
-      resolve(cached?.version === transactionCacheVersion && cached.savedAt && typeof cached.revision === 'number' && Date.now() - cached.savedAt < transactionCacheMaxAgeMs && Array.isArray(cached.transactions)
+      resolve(cached?.version === transactionCacheVersion && cached.savedAt && typeof cached.revision === 'number' && cached.transactionCount === cached.transactions?.length && Date.now() - cached.savedAt < transactionCacheMaxAgeMs && Array.isArray(cached.transactions)
         ? cached as CachedTransactionHistory
         : null)
       database.close()
@@ -184,7 +189,7 @@ async function writeTransactionCache(workspaceId: string, revision: number, tran
   const database = await openTransactionCache()
   if (!database) return
   await new Promise<void>((resolve) => {
-    const request = database.transaction(transactionCacheStore, 'readwrite').objectStore(transactionCacheStore).put({ version: transactionCacheVersion, savedAt: Date.now(), revision, transactions }, workspaceId)
+    const request = database.transaction(transactionCacheStore, 'readwrite').objectStore(transactionCacheStore).put({ version: transactionCacheVersion, savedAt: Date.now(), revision, transactionCount: transactions.length, transactions }, workspaceId)
     request.onsuccess = () => resolve()
     request.onerror = () => resolve()
   })
@@ -453,13 +458,17 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
   const storedYearlyGoals = workspace.yearly_spending_goals && typeof workspace.yearly_spending_goals === 'object' && !Array.isArray(workspace.yearly_spending_goals)
     ? workspace.yearly_spending_goals as Record<string, unknown>
     : {}
-  const yearlySpendingGoals: YearlySpendingGoal[] = Object.entries(storedYearlyGoals).flatMap(([yearKey, scopes]) => {
+  const yearlyFinancialPlans: YearlyFinancialPlan[] = Object.entries(storedYearlyGoals).flatMap(([yearKey, storedPlan]) => {
     const year = Number(yearKey)
-    if (!Number.isInteger(year) || !scopes || typeof scopes !== 'object' || Array.isArray(scopes)) return []
-    return (['Personal', 'Company', 'Combined'] as SpendingGoalScope[]).flatMap((scope) => {
-      const amountMinor = Number((scopes as Record<string, unknown>)[scope])
-      return Number.isSafeInteger(amountMinor) && amountMinor >= 0 ? [{ year, scope, amountMinor }] : []
-    })
+    if (!Number.isInteger(year) || !storedPlan || typeof storedPlan !== 'object' || Array.isArray(storedPlan)) return []
+    const values = storedPlan as Record<string, unknown>
+    const projectedIncomeMinor = Number(values.projectedIncomeMinor)
+    const projectedTaxesMinor = Number(values.projectedTaxesMinor)
+    const savingsGoalMinor = Number(values.savingsGoalMinor)
+    const companySpendingMinor = Number(values.companySpendingMinor)
+    return [projectedIncomeMinor, projectedTaxesMinor, savingsGoalMinor, companySpendingMinor].every((value) => Number.isSafeInteger(value) && value >= 0)
+      ? [{ year, projectedIncomeMinor, projectedTaxesMinor, savingsGoalMinor, companySpendingMinor }]
+      : []
   })
 
   return {
@@ -474,7 +483,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
       unusedPayeeIds,
       payeeMappings,
       budgets,
-      yearlySpendingGoals,
+      yearlyFinancialPlans,
       fxRates,
       transactions,
       bankImportCandidates,
@@ -1276,9 +1285,10 @@ export async function updateTaxRate(workspaceId: string, estimatedCompanyTaxRate
   if (error) throw error
 }
 
-export async function saveYearlySpendingGoals(workspaceId: string, goals: YearlySpendingGoal[]) {
-  const storedGoals = goals.reduce<Record<string, Partial<Record<SpendingGoalScope, number>>>>((years, goal) => {
-    years[String(goal.year)] = { ...years[String(goal.year)], [goal.scope]: goal.amountMinor }
+export async function saveYearlyFinancialPlans(workspaceId: string, plans: YearlyFinancialPlan[]) {
+  const storedGoals = plans.reduce<Record<string, Omit<YearlyFinancialPlan, 'year'>>>((years, plan) => {
+    const { year, ...storedPlan } = plan
+    years[String(year)] = storedPlan
     return years
   }, {})
   const { error } = await neon.from('workspaces').update({ yearly_spending_goals: storedGoals }).eq('id', workspaceId)
