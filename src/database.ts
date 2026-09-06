@@ -161,25 +161,29 @@ function openTransactionCache(): Promise<IDBDatabase | null> {
   })
 }
 
-async function readTransactionCache(workspaceId: string): Promise<Transaction[] | null> {
+type CachedTransactionHistory = { savedAt: number; revision: number; transactions: Transaction[] }
+
+async function readTransactionCache(workspaceId: string): Promise<CachedTransactionHistory | null> {
   const database = await openTransactionCache()
   if (!database) return null
   return new Promise((resolve) => {
     const request = database.transaction(transactionCacheStore, 'readonly').objectStore(transactionCacheStore).get(workspaceId)
     request.onsuccess = () => {
-      const cached = request.result as { savedAt?: number; transactions?: Transaction[] } | undefined
-      resolve(cached?.savedAt && Date.now() - cached.savedAt < transactionCacheMaxAgeMs && Array.isArray(cached.transactions) ? cached.transactions : null)
+      const cached = request.result as Partial<CachedTransactionHistory> | undefined
+      resolve(cached?.savedAt && typeof cached.revision === 'number' && Date.now() - cached.savedAt < transactionCacheMaxAgeMs && Array.isArray(cached.transactions)
+        ? cached as CachedTransactionHistory
+        : null)
       database.close()
     }
     request.onerror = () => { resolve(null); database.close() }
   })
 }
 
-async function writeTransactionCache(workspaceId: string, transactions: Transaction[]) {
+async function writeTransactionCache(workspaceId: string, revision: number, transactions: Transaction[]) {
   const database = await openTransactionCache()
   if (!database) return
   await new Promise<void>((resolve) => {
-    const request = database.transaction(transactionCacheStore, 'readwrite').objectStore(transactionCacheStore).put({ savedAt: Date.now(), transactions }, workspaceId)
+    const request = database.transaction(transactionCacheStore, 'readwrite').objectStore(transactionCacheStore).put({ savedAt: Date.now(), revision, transactions }, workspaceId)
     request.onsuccess = () => resolve()
     request.onerror = () => resolve()
   })
@@ -187,16 +191,20 @@ async function writeTransactionCache(workspaceId: string, transactions: Transact
 }
 
 export async function loadCachedAllTransactions(workspaceId: string, currentTransactions: Transaction[] = []) {
-  const [cached, countPage] = await Promise.all([
+  const [cached, revisionResult] = await Promise.all([
     readTransactionCache(workspaceId),
-    loadTransactionPage(workspaceId, { limit: 1 }),
+    neon.rpc('workspace_transaction_revision', { p_workspace_id: workspaceId }),
   ])
-  if (cached?.length === countPage.total) {
+  if (revisionResult.error) throw revisionResult.error
+  const revision = number(revisionResult.data)
+  if (cached?.revision === revision) {
     const currentMonths = new Set(currentTransactions.map((transaction) => transaction.date.slice(0, 7)))
-    return [...cached.filter((transaction) => !currentMonths.has(transaction.date.slice(0, 7))), ...currentTransactions]
+    return [...cached.transactions.filter((transaction) => !currentMonths.has(transaction.date.slice(0, 7))), ...currentTransactions]
   }
   const transactions = await loadAllTransactions(workspaceId)
-  void writeTransactionCache(workspaceId, transactions)
+  const refreshedRevision = await neon.rpc('workspace_transaction_revision', { p_workspace_id: workspaceId })
+  if (refreshedRevision.error) throw refreshedRevision.error
+  void writeTransactionCache(workspaceId, number(refreshedRevision.data), transactions)
   return transactions
 }
 
