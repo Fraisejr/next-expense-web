@@ -19,6 +19,8 @@ npm run build
 
 All monetary values are stored as integer minor units (cents). Decimal conversion happens only at input and display boundaries, avoiding floating-point rounding errors in balances and budget calculations.
 
+The home route combines a compact financial overview with monthly category planning. Its net-worth composition opens the account balance sheet, while its monthly profit-and-loss summary opens the detailed report. The former `/budgets` route remains compatible and shows the same combined view.
+
 ## Product data decisions
 
 - Split transactions are intentionally unsupported. Migration must ignore legacy split components, including stale split amounts or category references, whenever importing iOS data.

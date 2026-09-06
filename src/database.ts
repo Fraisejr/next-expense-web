@@ -1063,7 +1063,7 @@ export async function updateBalanceAdjustment(workspaceId: string, transactionId
   if (!data?.length) throw new Error('The balance adjustment could not be updated.')
 }
 
-export async function updateTransactionDetails(workspaceId: string, transactionId: string, payeeId: string, categoryId: string, memo: string) {
+export async function updateTransactionDetails(workspaceId: string, transactionId: string, date: string, payeeId: string, categoryId: string, memo: string) {
   const { data: existingRows, error: lookupError } = await neon.from('transactions')
     .select('transaction_type')
     .eq('workspace_id', workspaceId)
@@ -1075,8 +1075,9 @@ export async function updateTransactionDetails(workspaceId: string, transactionI
     throw new Error('The transaction could not be updated. Transfers and opening balances do not have categories.')
   }
 
+  const periodId = await ensurePeriod(workspaceId, date.slice(0, 7))
   const { data, error } = await neon.from('transactions')
-    .update({ payee_id: payeeId, category_id: categoryId, memo: memo.normalize('NFKC').trim() || null })
+    .update({ transaction_date: date, period_id: periodId, payee_id: payeeId, category_id: categoryId, memo: memo.normalize('NFKC').trim() || null })
     .eq('workspace_id', workspaceId)
     .eq('id', transactionId)
     .select('id')

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import {
   ArrowLeftRight, ArrowRight, Banknote, BriefcaseBusiness,
   BarChart3, BriefcaseMedical, CalendarDays, CarFront, ChevronDown, ChevronLeft, ChevronRight, CircleHelp,
-  ArrowDown, ArrowUp, Check, CreditCard, Download, Dumbbell, Eye, EyeOff, FileCheck2, GripVertical, HeartHandshake, House, Link2, LoaderCircle, LogOut, Menu, Pencil, Plane, Plus, ReceiptText, Search, Settings, Trash2, Upload,
+  ArrowDown, ArrowUp, Check, CreditCard, Download, Dumbbell, Eye, EyeOff, FileCheck2, GripVertical, HeartHandshake, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Pencil, Plane, Plus, ReceiptText, Search, Settings, Trash2, Upload,
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
@@ -11,7 +11,7 @@ import { neon } from './neon'
 import { convertMinor } from './currency'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
 
-type Page = 'transactions' | 'payees' | 'budgets' | 'reports' | 'accounts' | 'settings'
+type Page = 'overview' | 'transactions' | 'payees' | 'reports' | 'accounts' | 'settings'
 type Modal = 'transaction' | 'account' | 'edit-account' | 'balance-adjustment' | 'category' | 'edit-category' | 'category-groups' | 'bank' | null
 const BANK_LINK_STORAGE_KEY = 'next-expense-gocardless-link'
 const moneyFormatters = new Map<string, Intl.NumberFormat>()
@@ -31,6 +31,12 @@ function formatMoney(amountMinor: number, currency = 'EUR') {
     moneyFormatters.set(currency, formatter)
   }
   return formatter.format(amountMinor / 100)
+}
+
+function formatCompactMoney(amountMinor: number, currency = 'EUR') {
+  return new Intl.NumberFormat('en-IE', {
+    style: 'currency', currency, notation: 'compact', maximumFractionDigits: 1,
+  }).format(amountMinor / 100)
 }
 
 function parseMoneyToMinor(value: string, allowNegative = false) {
@@ -66,7 +72,7 @@ const categoryIcons = {
 }
 
 const navItems: { id: Page; label: string; icon: typeof House; path: string }[] = [
-  { id: 'budgets', label: 'Budget', icon: Target, path: '/' },
+  { id: 'overview', label: 'Overview', icon: LayoutDashboard, path: '/' },
   { id: 'transactions', label: 'Transactions', icon: ReceiptText, path: '/transactions' },
   { id: 'accounts', label: 'Accounts', icon: WalletCards, path: '/accounts' },
   { id: 'reports', label: 'Reports', icon: BarChart3, path: '/reports' },
@@ -264,15 +270,15 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   const categoryMatch = matchPath('/categories/:categoryId', location.pathname)
   const payeeMatch = matchPath('/payees/:payeeId', location.pathname)
   const page: Page = accountMatch ? 'accounts'
-    : categoryMatch ? 'budgets'
+    : categoryMatch ? 'overview'
       : payeeMatch ? 'payees'
       : location.pathname === '/transactions' ? 'transactions'
         : location.pathname === '/payees' ? 'payees'
-        : location.pathname === '/budgets' ? 'budgets'
+        : location.pathname === '/budgets' ? 'overview'
           : location.pathname === '/reports' || location.pathname === '/performance' ? 'reports'
             : location.pathname === '/accounts' ? 'accounts'
               : location.pathname === '/settings' ? 'settings'
-              : 'budgets'
+              : 'overview'
   const requestedMonth = fromMonthKey(new URLSearchParams(location.search).get('month'))
   const viewedMonth = requestedMonth ?? new Date()
   const selectedMonthKey = toMonthKey(viewedMonth)
@@ -369,9 +375,6 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   const taxesPaid = transactions
     .filter((t) => categoryGroup(t.categoryId) === 'tax')
     .reduce((sum, t) => sum + (t.type === 'expense' ? convertedTransactionAmount(t) : t.type === 'income' ? -convertedTransactionAmount(t) : 0), 0)
-  const capitalGains = transactions
-    .filter((t) => categoryGroup(t.categoryId) === 'capital_gain')
-    .reduce((sum, t) => sum + (t.type === 'income' ? convertedTransactionAmount(t) : t.type === 'expense' ? -convertedTransactionAmount(t) : 0), 0)
   const activeAccounts = data.accounts.filter((account) => !account.closed)
   const closedAccounts = data.accounts.filter((account) => account.closed)
   const totalBalance = activeAccounts.reduce((sum, account) => sum + convertCurrentBalance(account), 0)
@@ -392,20 +395,10 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   const companyIncome = companyCategories.filter((category) => category.reportGroup === 'income').reduce((sum, category) => sum + categorySpending(category.id), 0)
   const companyExpenses = companyCategories.filter((category) => category.reportGroup === 'expense').reduce((sum, category) => sum + categorySpending(category.id), 0)
   const estimatedCompanyTax = Math.max(0, Math.round((companyIncome - companyExpenses) * data.settings.estimatedCompanyTaxRateBps / 10_000))
-  const plannedForGroup = (group: ReportGroup) => data.categories.filter((category) => !category.hidden && category.reportGroup === group).reduce((sum, category) => sum + budgetForCategory(category.id), 0)
-  const plannedIncome = plannedForGroup('income')
-  const plannedExpenses = plannedForGroup('expense')
-  const plannedTaxes = plannedForGroup('tax')
-  const plannedCapitalGains = plannedForGroup('capital_gain')
-  const plannedCompanyIncome = companyCategories.filter((category) => !category.hidden && category.reportGroup === 'income').reduce((sum, category) => sum + budgetForCategory(category.id), 0)
-  const plannedCompanyExpenses = companyCategories.filter((category) => !category.hidden && category.reportGroup === 'expense').reduce((sum, category) => sum + budgetForCategory(category.id), 0)
-  const plannedCompanyTax = Math.max(0, Math.round((plannedCompanyIncome - plannedCompanyExpenses) * data.settings.estimatedCompanyTaxRateBps / 10_000))
-  const actualResult = income - expenses - taxesPaid - estimatedCompanyTax + capitalGains
-  const plannedResult = plannedIncome - plannedExpenses - plannedTaxes - plannedCompanyTax + plannedCapitalGains
   const selectedCategory = data.categories.find((category) => category.id === categoryMatch?.params.categoryId)
   const selectedAccount = data.accounts.find((account) => account.id === accountMatch?.params.accountId)
   const selectedPayee = data.payees.find((payee) => payee.id === payeeMatch?.params.payeeId)
-  const pageTitle = selectedAccount?.name ?? selectedCategory?.name ?? selectedPayee?.name ?? (page === 'settings' ? 'Settings' : navItems.find((item) => item.id === page)?.label) ?? 'Budget'
+  const pageTitle = selectedAccount?.name ?? selectedCategory?.name ?? selectedPayee?.name ?? (page === 'settings' ? 'Settings' : navItems.find((item) => item.id === page)?.label) ?? 'Overview'
   const accountsByBalanceSheetGroup = balanceSheetGroups.map((group) => ({ group, accounts: activeAccounts.filter((account) => accountBalanceSheetGroup(account) === group) }))
 
   function pathWithMonth(path: string, month = viewedMonth) {
@@ -729,16 +722,20 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
-  async function changeTransactionDetails(transactionId: string, payeeName: string, payeeId: string | undefined, categoryId: string, memo: string, rememberDefault: boolean, rememberMapping: boolean, mappingSource: string, matchingTransactionIds: string[]) {
+  async function changeTransactionDetails(transactionId: string, date: string, payeeName: string, payeeId: string | undefined, categoryId: string, memo: string, rememberDefault: boolean, rememberMapping: boolean, mappingSource: string, matchingTransactionIds: string[]) {
     try {
       setSyncError('')
       const selectedPayee = payeeId ? data.payees.find((payee) => payee.id === payeeId) : undefined
       const [payee] = selectedPayee ? [selectedPayee] : await ensurePayees(workspace.workspaceId, [payeeName])
       const createdPayee = !data.payees.some((item) => item.id === payee.id)
       const transaction = data.transactions.find((item) => item.id === transactionId)
-      await updateTransactionDetails(workspace.workspaceId, transactionId, payee.id, categoryId, memo)
+      await updateTransactionDetails(workspace.workspaceId, transactionId, date, payee.id, categoryId, memo)
       await updateTransactionCategories(workspace.workspaceId, matchingTransactionIds, categoryId)
       void clearTransactionCache(workspace.workspaceId)
+      if (transaction) {
+        monthCache.current.delete(transaction.date.slice(0, 7))
+        monthCache.current.delete(date.slice(0, 7))
+      }
       if (createdPayee && transaction) await updatePayeeDefaults(workspace.workspaceId, payee.id, categoryId, transaction.accountId)
       else if (rememberDefault) await updatePayeeDefaultCategory(workspace.workspaceId, payee.id, categoryId)
       if (rememberMapping && mappingSource.trim()) {
@@ -761,7 +758,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         payees: current.payees.some((item) => item.id === payee.id)
           ? current.payees.map((item) => item.id === payee.id ? payeeWithDefaults : item)
           : [...current.payees, payeeWithDefaults],
-        transactions: current.transactions.map((transaction) => transaction.id === transactionId ? { ...transaction, payeeId: payee.id, payee: payee.name, categoryId, note: memo.normalize('NFKC').trim() || undefined } : matchingTransactionIds.includes(transaction.id) ? { ...transaction, categoryId } : transaction),
+        transactions: current.transactions.map((transaction) => transaction.id === transactionId ? { ...transaction, date, payeeId: payee.id, payee: payee.name, categoryId, note: memo.normalize('NFKC').trim() || undefined } : matchingTransactionIds.includes(transaction.id) ? { ...transaction, categoryId } : transaction),
       }))
       setCategoryTarget(null)
     } catch (error) {
@@ -1099,7 +1096,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
 
         <nav className="sidebar-accounts" aria-label="Accounts">
           <a href={pathWithMonth('/accounts')} className={page === 'accounts' && !selectedAccount ? 'account-section-title active' : 'account-section-title'} onClick={(event) => useClientNavigation(event, () => goTo('/accounts'))}>
-            <span><WalletCards size={16} />Accounts</span><b>{formatMoney(totalBalance)}</b>
+            <span><WalletCards size={16} />Accounts</span><b>{formatMoney(totalBalance, workspace.defaultCurrency)}</b>
           </a>
           {accountsByBalanceSheetGroup.map(({ group, accounts }) => accounts.length > 0 && <SidebarAccountGroup key={group} label={group} accounts={accounts} open={openAccountGroups[group]} onToggle={() => setOpenAccountGroups((current) => ({ ...current, [group]: !current[group] }))} selectedAccountId={selectedAccount?.id} accountHref={(id) => pathWithMonth(`/accounts/${id}`)} onSelect={(id) => goTo(`/accounts/${id}`)} />)}
           {closedAccounts.length > 0 && <SidebarAccountGroup label="Closed accounts" accounts={closedAccounts} open={closedAccountsOpen} onToggle={() => setClosedAccountsOpen((current) => !current)} selectedAccountId={selectedAccount?.id} accountHref={(id) => pathWithMonth(`/accounts/${id}`)} onSelect={(id) => goTo(`/accounts/${id}`)} />}
@@ -1121,7 +1118,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         <header className="topbar">
           <div className="topbar-title">
             <button className="icon-button mobile-menu" aria-label="Open menu" onClick={() => setMobileNav(!mobileNav)}><Menu size={21} /></button>
-            <div><span className="eyebrow">{selectedAccount ? 'Accounts' : selectedCategory ? 'Categories' : selectedPayee ? 'Payees' : page === 'payees' ? 'Directory' : page === 'settings' ? workspace.workspaceName : 'Personal budget'}</span><h1>{pageTitle}</h1></div>
+            <div><span className="eyebrow">{selectedAccount ? 'Accounts' : selectedCategory ? 'Categories' : selectedPayee ? 'Payees' : page === 'payees' ? 'Directory' : page === 'settings' ? workspace.workspaceName : page === 'overview' ? 'At a glance' : 'Personal budget'}</span><h1>{pageTitle}</h1></div>
           </div>
           <div className="top-actions">
             {page !== 'payees' && page !== 'settings' && <div className="month-switcher">
@@ -1141,8 +1138,11 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         {page === 'payees' && !selectedPayee && (
           <PayeesPage payees={data.payees} unusedPayeeIds={data.unusedPayeeIds} mappings={data.payeeMappings} transactions={data.transactions} categories={data.categories} accounts={data.accounts} onSelectPayee={(id) => goTo(`/payees/${id}`)} onMapPayee={mapUnmatchedPayee} onCreatePayee={createPayeeFromUnmatched} onChangeDefaultCategory={changePayeeDefaultCategoryOnly} onDeleteUnusedPayee={removeUnusedPayee} onDeleteAllUnusedPayees={removeAllUnusedPayees} />
         )}
-        {page === 'budgets' && !selectedCategory && (
-          <BudgetsPage categories={data.categories} categoryGroups={data.categoryGroups} categorySpending={categorySpending} budgetForCategory={budgetForCategory} totalBalance={totalBalance} income={income} expenses={expenses} estimatedCompanyTax={estimatedCompanyTax} actualResult={actualResult} plannedIncome={plannedIncome} plannedExpenses={plannedExpenses} plannedCompanyTax={plannedCompanyTax} plannedResult={plannedResult} defaultCurrency={workspace.defaultCurrency} taxRateBps={data.settings.estimatedCompanyTaxRateBps} showHiddenActivityAlert={selectedMonthKey === toMonthKey(new Date())} onUpdateTaxRate={changeTaxRate} onAdd={() => setModal('category')} onManageGroups={() => setModal('category-groups')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onUnhideCategory={(id) => setCategoryHidden(id, false)} />
+        {page === 'overview' && !selectedCategory && (
+          <div className="page-content narrow-page overview-page">
+            <OverviewPage accounts={activeAccounts} defaultCurrency={workspace.defaultCurrency} totalBalance={totalBalance} convertBalance={convertCurrentBalance} income={income} expenses={expenses} tax={taxesPaid + estimatedCompanyTax} netIncome={income - expenses - taxesPaid - estimatedCompanyTax} month={viewedMonth} onOpenNetWorth={() => goTo('/accounts')} onOpenProfitAndLoss={() => goTo('/reports')} />
+            <BudgetsPage categories={data.categories} categoryGroups={data.categoryGroups} categorySpending={categorySpending} budgetForCategory={budgetForCategory} showHiddenActivityAlert={selectedMonthKey === toMonthKey(new Date())} onAdd={() => setModal('category')} onManageGroups={() => setModal('category-groups')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onUnhideCategory={(id) => setCategoryHidden(id, false)} />
+          </div>
         )}
         {page === 'reports' && (
           <ReportsPage data={data} viewedMonth={viewedMonth} defaultCurrency={workspace.defaultCurrency} onUpdateTaxRate={changeTaxRate} />
@@ -1181,7 +1181,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           ? <OpeningBalanceForm transaction={categoryTarget} onSubmit={(date, amountMinor) => changeOpeningBalance(categoryTarget.id, date, amountMinor)} />
           : categoryTarget.type === 'balance_adjustment'
             ? <BalanceAdjustmentForm account={data.accounts.find((account) => account.id === categoryTarget.accountId)!} transaction={categoryTarget} onSubmit={(date, balance, reason, memo) => saveBalanceAdjustment(data.accounts.find((account) => account.id === categoryTarget.accountId)!, date, balance, reason, memo, categoryTarget.id)} />
-          : <TransactionDetailsForm transaction={categoryTarget} transactions={data.transactions} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} onSubmit={(payeeName, payeeId, categoryId, memo, rememberDefault, rememberMapping, mappingSource, matchingTransactionIds) => changeTransactionDetails(categoryTarget.id, payeeName, payeeId, categoryId, memo, rememberDefault, rememberMapping, mappingSource, matchingTransactionIds)} />}
+          : <TransactionDetailsForm transaction={categoryTarget} transactions={data.transactions} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} onSubmit={(date, payeeName, payeeId, categoryId, memo, rememberDefault, rememberMapping, mappingSource, matchingTransactionIds) => changeTransactionDetails(categoryTarget.id, date, payeeName, payeeId, categoryId, memo, rememberDefault, rememberMapping, mappingSource, matchingTransactionIds)} />}
       </ModalShell>}
     </div>
   )
@@ -1951,14 +1951,68 @@ function HiddenCategoryBudgetRow({ category, spent, budget, onSelect, onUnhide }
   </div>
 }
 
-function BudgetSummaryItem({ label, actual, planned, currency, tone }: { label: string; actual: number; planned?: number; currency: string; tone?: string }) {
-  return <div className={`budget-summary-item ${tone ?? ''}`}><span>{label}</span><strong>{formatMoney(actual, currency)}</strong>{planned !== undefined && <small>Plan {formatMoney(planned, currency)}</small>}</div>
+type OverviewBalanceGroup = 'Personal' | 'Real estate' | 'Investments' | 'Company' | 'Pension'
+const overviewBalanceGroups: OverviewBalanceGroup[] = ['Personal', 'Real estate', 'Investments', 'Company', 'Pension']
+
+function overviewBalanceGroup(account: Account): OverviewBalanceGroup {
+  const group = accountBalanceSheetGroup(account)
+  if (group === 'Pension') return 'Pension'
+  if (group === 'Real estate') return 'Real estate'
+  if (group === 'Company') return 'Company'
+  return account.investment ? 'Investments' : 'Personal'
 }
 
-function BudgetsPage({ categories, categoryGroups, categorySpending, budgetForCategory, totalBalance, income, expenses, estimatedCompanyTax, actualResult, plannedIncome, plannedExpenses, plannedCompanyTax, plannedResult, defaultCurrency, taxRateBps, showHiddenActivityAlert, onUpdateTaxRate, onAdd, onManageGroups, onSelectCategory, onUnhideCategory }: {
+function OverviewPage({ accounts, defaultCurrency, totalBalance, convertBalance, income, expenses, tax, netIncome, month, onOpenNetWorth, onOpenProfitAndLoss }: {
+  accounts: Account[]
+  defaultCurrency: string
+  totalBalance: number
+  convertBalance: (account: Account) => number
+  income: number
+  expenses: number
+  tax: number
+  netIncome: number
+  month: Date
+  onOpenNetWorth: () => void
+  onOpenProfitAndLoss: () => void
+}) {
+  const groupBalances = overviewBalanceGroups.map((group) => ({
+    group,
+    balance: accounts.filter((account) => overviewBalanceGroup(account) === group).reduce((sum, account) => sum + convertBalance(account), 0),
+  }))
+  const positiveGroupTotal = groupBalances.reduce((sum, item) => sum + Math.max(0, item.balance), 0)
+  const positiveNetIncome = Math.max(0, netIncome)
+  const pnlAllocationTotal = Math.max(1, Math.max(0, expenses) + Math.max(0, tax) + positiveNetIncome)
+
+  return <section className="overview-summary">
+    <div className="overview-heading"><span className="eyebrow">At a glance</span><h2>Your finances</h2><p>Current net worth and activity for {monthName.format(month)}. Open either summary for the full detail.</p></div>
+    <div className="overview-summary-grid">
+      <button type="button" className="overview-summary-card" onClick={onOpenNetWorth}>
+        <div className="overview-card-heading"><span>Current net worth</span><WalletCards size={18} /></div>
+        <div className="overview-primary-value"><strong>{formatMoney(totalBalance, defaultCurrency)}</strong><small>{accounts.length} account{accounts.length === 1 ? '' : 's'}</small></div>
+        <div className="overview-stack" role="img" aria-label={`Net worth composition: ${groupBalances.map((item) => `${item.group} ${formatMoney(item.balance, defaultCurrency)}`).join(', ')}`}>
+          {groupBalances.map((item) => <i key={item.group} style={{ flexGrow: positiveGroupTotal ? Math.max(0, item.balance) / positiveGroupTotal : 1 }} />)}
+        </div>
+        <div className="overview-breakdown five-columns">{groupBalances.map((item) => <div key={item.group}><span>{item.group}</span><strong>{formatCompactMoney(item.balance, defaultCurrency)}</strong></div>)}</div>
+        <span className="overview-open">View balance sheet <ArrowRight size={15} /></span>
+      </button>
+
+      <button type="button" className="overview-summary-card" onClick={onOpenProfitAndLoss}>
+        <div className="overview-card-heading"><span>Profit &amp; loss · {new Intl.DateTimeFormat('en', { month: 'long' }).format(month)}</span><BarChart3 size={18} /></div>
+        <div className="overview-primary-value"><strong className={netIncome < 0 ? 'negative' : 'positive'}>{formatMoney(netIncome, defaultCurrency)}</strong><small>Net income</small></div>
+        <div className="overview-stack pnl-stack" role="img" aria-label={`Profit and loss composition: income ${formatMoney(income, defaultCurrency)}, expenses ${formatMoney(expenses, defaultCurrency)}, estimated and recorded tax ${formatMoney(tax, defaultCurrency)}, net income ${formatMoney(netIncome, defaultCurrency)}`}>
+          <i style={{ flexGrow: Math.max(0, expenses) / pnlAllocationTotal }} /><i style={{ flexGrow: Math.max(0, tax) / pnlAllocationTotal }} /><i style={{ flexGrow: positiveNetIncome / pnlAllocationTotal }} />
+        </div>
+        <div className="overview-breakdown four-columns"><div><span>Income</span><strong>{formatCompactMoney(income, defaultCurrency)}</strong></div><div><span>Expenses</span><strong className="negative">−{formatCompactMoney(Math.abs(expenses), defaultCurrency)}</strong></div><div><span>Tax</span><strong className="negative">−{formatCompactMoney(Math.abs(tax), defaultCurrency)}</strong></div><div><span>Net</span><strong className={netIncome < 0 ? 'negative' : 'positive'}>{formatCompactMoney(netIncome, defaultCurrency)}</strong></div></div>
+        <span className="overview-open">View report <ArrowRight size={15} /></span>
+      </button>
+    </div>
+  </section>
+}
+
+function BudgetsPage({ categories, categoryGroups, categorySpending, budgetForCategory, showHiddenActivityAlert, onAdd, onManageGroups, onSelectCategory, onUnhideCategory }: {
   categories: Category[]; categoryGroups: CategoryGroup[]; categorySpending: (id: string) => number; budgetForCategory: (id: string) => number
-  totalBalance: number; income: number; expenses: number; estimatedCompanyTax: number; actualResult: number; plannedIncome: number; plannedExpenses: number; plannedCompanyTax: number; plannedResult: number; defaultCurrency: string; taxRateBps: number; showHiddenActivityAlert: boolean
-  onUpdateTaxRate: (rateBps: number) => void; onAdd: () => void; onManageGroups: () => void; onSelectCategory: (id: string) => void; onUnhideCategory: (id: string) => Promise<void>
+  showHiddenActivityAlert: boolean
+  onAdd: () => void; onManageGroups: () => void; onSelectCategory: (id: string) => void; onUnhideCategory: (id: string) => Promise<void>
 }) {
   const [showHiddenOnly, setShowHiddenOnly] = useState(false)
   const visibleCategories = categories.filter((category) => !category.hidden)
@@ -1975,20 +2029,10 @@ function BudgetsPage({ categories, categoryGroups, categorySpending, budgetForCa
   }
   const section = (title: string, subtitle: string, rows: Category[]) => <section className="budget-section"><div className="budget-section-heading"><div><h3>{title}</h3><span>{subtitle}</span></div></div>{groupedRows(rows).map(({ group, rows: groupCategories }) => <div className="category-group-block" key={group.id}><div className="category-group-label">{group.name}</div><div className="category-list roomy">{groupCategories.map((category) => <CategoryRow key={category.id} category={category} spent={categorySpending(category.id)} budget={budgetForCategory(category.id)} onSelect={() => onSelectCategory(category.id)} />)}</div></div>)}</section>
   const hiddenSection = <section className="budget-section"><div className="budget-section-heading"><div><h3>Hidden categories</h3><span>Unhide categories you want to return to active planning and new transactions</span></div></div>{groupedRows(hiddenCategories).map(({ group, rows }) => <div className="category-group-block" key={group.id}><div className="category-group-label">{group.name}</div><div className="category-list roomy">{rows.map((category) => <HiddenCategoryBudgetRow key={category.id} category={category} spent={categorySpending(category.id)} budget={budgetForCategory(category.id)} onSelect={() => onSelectCategory(category.id)} onUnhide={() => onUnhideCategory(category.id)} />)}</div></div>)}</section>
-  return <div className="page-content narrow-page">
-    {!showHiddenOnly && <section className="panel budget-dashboard-summary">
-      <div className="budget-dashboard-heading"><div><span className="eyebrow">Personal + company</span><h2>Monthly position</h2><p>Internal transfers are excluded.</p></div><label className="budget-tax-rate"><span>Company tax estimate</span><div><input aria-label="Company tax planning rate" type="number" min="0" max="100" step="0.1" value={taxRateBps / 100} onChange={(event) => onUpdateTaxRate(Math.max(0, Math.round(Number(event.target.value) * 100)))} /><b>%</b></div></label></div>
-      <div className="budget-summary-grid">
-        <BudgetSummaryItem label="Provisional balance" actual={totalBalance} currency={defaultCurrency} />
-        <BudgetSummaryItem label="Income" actual={income} planned={plannedIncome} currency={defaultCurrency} tone="positive-summary" />
-        <BudgetSummaryItem label="Expenses" actual={expenses} planned={plannedExpenses} currency={defaultCurrency} />
-        <BudgetSummaryItem label="Estimated company tax" actual={estimatedCompanyTax} planned={plannedCompanyTax} currency={defaultCurrency} />
-        <BudgetSummaryItem label="Result" actual={actualResult} planned={plannedResult} currency={defaultCurrency} tone={actualResult < 0 ? 'negative-summary' : 'result-summary'} />
-      </div>
-    </section>}
+  return <section className="budget-planning">
     <HiddenCategoryActivityAlert categories={categories} categorySpending={categorySpending} onSelectCategory={onSelectCategory} prominent={showHiddenActivityAlert} />
     <div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>{showHiddenOnly ? 'Hidden categories' : 'Budget by category'}</h2></div><div className="budget-page-actions">{hiddenCategories.length > 0 && <button className="text-button" onClick={() => setShowHiddenOnly((current) => !current)}>{showHiddenOnly ? <EyeOff size={16} /> : <Eye size={16} />}{showHiddenOnly ? 'Show active categories' : `Show hidden only (${hiddenCategories.length})`}</button>}<button className="secondary-button" onClick={onManageGroups}><Settings size={16} />Manage groups</button><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button></div></div>{showHiddenOnly ? hiddenSection : <>{section('Planned income', 'Actual income compared with this month’s plan', incomeCategories)}{section('Expense budgets', 'Net spending compared with this month’s budget', expenseCategories)}{taxCategories.length > 0 && section('Tax plan', 'Recorded tax costs compared with this month’s plan', taxCategories)}{savingsCategories.length > 0 && section('Savings & investments', 'Historical monthly targets; they do not roll over or represent current account balances', savingsCategories)}</>}</div>
-  </div>
+  </section>
 }
 
 type ReportPeriod = 'month' | 'year'
@@ -2603,7 +2647,8 @@ function BankLinkForm({ account, workspaceId, onComplete }: { account: Account; 
   </form>
 }
 
-function TransactionDetailsForm({ transaction, transactions, categories, payees, mappings, accounts, onSubmit }: { transaction: Transaction; transactions: Transaction[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; accounts: Account[]; onSubmit: (payeeName: string, payeeId: string | undefined, categoryId: string, memo: string, rememberDefault: boolean, rememberMapping: boolean, mappingSource: string, matchingTransactionIds: string[]) => Promise<void> }) {
+function TransactionDetailsForm({ transaction, transactions, categories, payees, mappings, accounts, onSubmit }: { transaction: Transaction; transactions: Transaction[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; accounts: Account[]; onSubmit: (date: string, payeeName: string, payeeId: string | undefined, categoryId: string, memo: string, rememberDefault: boolean, rememberMapping: boolean, mappingSource: string, matchingTransactionIds: string[]) => Promise<void> }) {
+  const [date, setDate] = useState(transaction.date)
   const [categoryId, setCategoryId] = useState(transaction.categoryId ?? '')
   const [payeeQuery, setPayeeQuery] = useState(transaction.payee)
   const [memo, setMemo] = useState(transaction.note ?? '')
@@ -2626,7 +2671,7 @@ function TransactionDetailsForm({ transaction, transactions, categories, payees,
     ? selectedPayeeId !== transaction.payeeId
     : !transaction.payeeId || payeeQuery.trim().localeCompare(transaction.payee, undefined, { sensitivity: 'accent' }) !== 0
   const memoChanged = memo.normalize('NFKC').trim() !== (transaction.note ?? '').normalize('NFKC').trim()
-  const changed = payeeChanged || categoryId !== transaction.categoryId || memoChanged
+  const changed = date !== transaction.date || payeeChanged || categoryId !== transaction.categoryId || memoChanged
   // `payeeRaw` is the counterparty/description supplied by the bank. Older
   // imports can have that text only in `memo`, so retain it as a fallback.
   // Prefer the raw payee because a remittance memo can be a payment reference
@@ -2647,11 +2692,13 @@ function TransactionDetailsForm({ transaction, transactions, categories, payees,
   const selectedRelatedCount = selectableRelated.filter((item) => selectedRelatedIds.includes(item.id)).length
   const showRelatedTransactions = Boolean(categoryId && categoryId !== transaction.categoryId && relatedTransactions.length)
 
-  return <form className="form" onSubmit={async (event) => { event.preventDefault(); if (!categoryId || !payeeQuery.trim()) return; setSaving(true); try { await onSubmit(payeeQuery.trim(), selectedPayee?.id, categoryId, memo, rememberDefault, offerMapping && rememberMapping, bankMappingSource, selectedRelatedIds.filter((id) => selectableRelated.some((item) => item.id === id))) } finally { setSaving(false) } }}>
+  return <form className="form" onSubmit={async (event) => { event.preventDefault(); if (!date || !categoryId || !payeeQuery.trim()) return; setSaving(true); try { await onSubmit(date, payeeQuery.trim(), selectedPayee?.id, categoryId, memo, rememberDefault, offerMapping && rememberMapping, bankMappingSource, selectedRelatedIds.filter((id) => selectableRelated.some((item) => item.id === id))) } finally { setSaving(false) } }}>
     <div className="category-edit-transaction">
       <span className="transaction-icon"><ReceiptText size={18} /></span>
       <div><strong>{transaction.payee}</strong><span>{formatShortDate(transaction.date)} · {formatMoney(transaction.amountMinor, transaction.currency)}</span></div>
     </div>
+    <label><span>Date</span><input required type="date" max={todayInParis()} value={date} onChange={(event) => setDate(event.target.value)} /></label>
+    {transaction.source && transaction.source !== 'manual' && date !== transaction.date && <p className="form-help">This changes where the transaction appears in reports. Its bank identity and original imported timestamp remain unchanged.</p>}
     <label><span>Payee</span><div className="transaction-payee-picker"><Search size={16} /><input required value={payeeQuery} autoComplete="off" onFocus={() => setPickerOpen(true)} onBlur={() => setPickerOpen(false)} onChange={(event) => {
       const query = event.target.value
       const exact = payees.find((payee) => payee.name.localeCompare(query.trim(), undefined, { sensitivity: 'accent' }) === 0)
@@ -2691,7 +2738,7 @@ function TransactionDetailsForm({ transaction, transactions, categories, payees,
         </label>
       })}</div>
     </section>}
-    <button className="primary-button form-submit" disabled={!categoryId || !payeeQuery.trim() || (!changed && !rememberDefault) || saving}>{saving ? 'Saving…' : selectedRelatedCount ? `Save ${selectedRelatedCount + 1} transactions` : 'Save transaction'}<ArrowRight size={18} /></button>
+    <button className="primary-button form-submit" disabled={!date || !categoryId || !payeeQuery.trim() || (!changed && !rememberDefault) || saving}>{saving ? 'Saving…' : selectedRelatedCount ? `Save ${selectedRelatedCount + 1} transactions` : 'Save transaction'}<ArrowRight size={18} /></button>
   </form>
 }
 
