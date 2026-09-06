@@ -646,7 +646,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .report-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 .report-scope-label { color: #53675f; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .report-toolbar .segmented { width: 190px; }
-.report-toolbar .report-segmented { width: 300px; grid-template-columns: repeat(3, 1fr); }
+.report-toolbar .report-segmented { width: 270px; grid-template-columns: repeat(2, 1fr); }
 .report-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 18px; padding: 24px; color: #f7f8f4; background: var(--green); border-radius: 10px; }
 .report-hero h2 { margin-top: 6px; font-size: 28px; }
 .report-hero p { max-width: 520px; margin-top: 8px; color: #c5d3ce; font-size: 10px; }
@@ -703,6 +703,45 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .valuation-drilldown-empty { padding: 24px; color: var(--muted); background: #f5f5f0; border-radius: 8px; font-size: 10px; text-align: center; }
 .report-footnote { display: flex; align-items: flex-start; gap: 9px; margin-top: 14px; padding: 12px 14px; color: #737971; background: #ecece6; border-radius: 8px; }
 .report-footnote p { font-size: 10px; line-height: 1.55; }
+.net-worth-report { display: grid; gap: 16px; }
+.net-worth-report .report-toolbar { margin-bottom: 0; }
+.net-worth-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; padding: 25px; color: #f7f8f4; background: var(--green); border-radius: 10px; }
+.net-worth-hero h2 { margin-top: 6px; font-size: 29px; }
+.net-worth-hero p { max-width: 540px; margin-top: 8px; color: #c5d3ce; font-size: 10px; line-height: 1.55; }
+.net-worth-hero .eyebrow { color: #b8cac4; }
+.net-worth-total { flex: 0 0 auto; text-align: right; }
+.net-worth-total span, .net-worth-total strong, .net-worth-total small { display: block; }
+.net-worth-total span { color: #b8cac4; font-size: 8.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.net-worth-total strong { margin-top: 5px; font-family: 'DM Mono', monospace; font-size: clamp(24px, 3vw, 34px); font-weight: 500; letter-spacing: -.055em; }
+.net-worth-total small { margin-top: 5px; color: #d7e2de; font-size: 9px; font-weight: 700; }
+.net-worth-total small.positive { color: #bfe8d7 !important; }
+.net-worth-total small.negative { color: #ffd0bd !important; }
+.net-worth-breakdown, .net-worth-history { padding: 23px; }
+.net-worth-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.net-worth-section-heading h3 { margin-top: 4px; font-family: 'Newsreader', serif; font-size: 23px; }
+.net-worth-section-heading p { max-width: 690px; margin-top: 6px; color: var(--muted); font-size: 9.5px; line-height: 1.55; }
+.net-worth-breakdown-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; margin-top: 18px; }
+.net-worth-group { min-width: 0; overflow: hidden; border: 1px solid #dfe1da; border-radius: 9px; background: #f7f7f3; }
+.net-worth-group-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 13px; border-bottom: 1px solid #e1e3dc; }
+.net-worth-group-heading span { color: #5e675f; font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.net-worth-group-heading strong { font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500; }
+.net-worth-account-list > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 13px; border-bottom: 1px solid #e8e9e3; }
+.net-worth-account-list > div:last-child { border-bottom: 0; }
+.net-worth-account-list span { min-width: 0; display: flex; align-items: center; gap: 8px; overflow: hidden; color: #626860; font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.net-worth-account-list i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; }
+.net-worth-account-list strong { flex: 0 0 auto; font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 500; }
+.history-loading { display: flex; align-items: center; gap: 6px; color: #58736b; font-size: 9px; font-weight: 700; white-space: nowrap; }
+.history-loading svg { animation: spin .9s linear infinite; }
+.net-worth-chart-scroll { margin-top: 22px; overflow-x: auto; padding-bottom: 5px; scrollbar-width: thin; }
+.net-worth-chart { position: relative; height: 290px; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(58px, 1fr); gap: 8px; padding: 0 5px; }
+.net-worth-chart-column { position: relative; z-index: 1; min-width: 0; display: grid; grid-template-rows: 24px minmax(0, 1fr) 22px; gap: 6px; text-align: center; }
+.net-worth-chart-column > strong { overflow: hidden; color: #4e625b; font-family: 'DM Mono', monospace; font-size: 8.5px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.net-worth-chart-column > strong.negative { color: #a14e3b; }
+.net-worth-chart-column > span:last-child { color: #777d75; font-size: 8.5px; font-weight: 700; }
+.net-worth-bar-track { position: relative; min-height: 0; border-bottom: 1px solid transparent; background: repeating-linear-gradient(to bottom, transparent 0, transparent calc(25% - 1px), #e8e9e3 25%); }
+.net-worth-zero-axis { position: absolute; z-index: 0; left: -4px; right: -4px; height: 1px; background: #c7cbc3; pointer-events: none; }
+.net-worth-bar-track > i { position: absolute; left: 16%; right: 16%; min-height: 0; background: linear-gradient(180deg, #668f84, #315f55); border-radius: 5px 5px 2px 2px; box-shadow: 0 3px 8px rgba(40, 75, 66, .12); }
+.net-worth-bar-track > i.negative { background: linear-gradient(180deg, #c57a5c, #a5523b); border-radius: 2px 2px 5px 5px; }
 
 @keyframes fade { from { opacity: 0 } }
 @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.99) } }
@@ -824,6 +863,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .page-content { padding: 18px 16px 35px; }
   .overview-summary-grid { grid-template-columns: 1fr; }
   .valuation-summary-grid { grid-template-columns: 1fr; }
+  .net-worth-breakdown-grid { grid-template-columns: 1fr; }
   .settings-backup-grid { grid-template-columns: 1fr; }
   .fx-rate-add { grid-template-columns: 1fr 1fr; }
   .fx-rate-add label:nth-child(3) { grid-column: 1 / -1; }
@@ -943,4 +983,6 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .report-toolbar, .report-hero { align-items: stretch; flex-direction: column; }
   .report-toolbar .segmented, .report-toolbar .report-segmented { width: 100%; }
   .report-comparison { grid-template-columns: 1fr; }
+  .net-worth-hero { align-items: stretch; flex-direction: column; }
+  .net-worth-total { text-align: left; }
 }

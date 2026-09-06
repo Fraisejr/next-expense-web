@@ -12,6 +12,7 @@ import { convertMinor } from './currency'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
 
 type Page = 'overview' | 'transactions' | 'payees' | 'reports' | 'accounts' | 'settings'
+type ReportView = 'profit-loss' | 'net-worth'
 type Modal = 'transaction' | 'account' | 'edit-account' | 'balance-adjustment' | 'category' | 'edit-category' | 'category-groups' | 'bank' | null
 const BANK_LINK_STORAGE_KEY = 'next-expense-gocardless-link'
 const moneyFormatters = new Map<string, Intl.NumberFormat>()
@@ -277,13 +278,14 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       : location.pathname === '/transactions' ? 'transactions'
         : location.pathname === '/payees' ? 'payees'
         : location.pathname === '/budgets' ? 'overview'
-          : location.pathname === '/reports' || location.pathname === '/performance' ? 'reports'
+          : location.pathname === '/reports' || location.pathname === '/reports/net-worth' || location.pathname === '/performance' ? 'reports'
             : location.pathname === '/accounts' ? 'accounts'
               : location.pathname === '/settings' ? 'settings'
               : 'overview'
   const requestedMonth = fromMonthKey(new URLSearchParams(location.search).get('month'))
   const viewedMonth = requestedMonth ?? new Date()
   const selectedMonthKey = toMonthKey(viewedMonth)
+  const reportView: ReportView = location.pathname === '/reports/net-worth' ? 'net-worth' : 'profit-loss'
 
   if (!monthCache.current.size) monthCache.current.set(selectedMonthKey, workspace.data.transactions)
 
@@ -405,7 +407,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   const selectedCategory = data.categories.find((category) => category.id === categoryMatch?.params.categoryId)
   const selectedAccount = data.accounts.find((account) => account.id === accountMatch?.params.accountId)
   const selectedPayee = data.payees.find((payee) => payee.id === payeeMatch?.params.payeeId)
-  const pageTitle = selectedAccount?.name ?? selectedCategory?.name ?? selectedPayee?.name ?? (page === 'settings' ? 'Settings' : navItems.find((item) => item.id === page)?.label) ?? 'Overview'
+  const pageTitle = selectedAccount?.name ?? selectedCategory?.name ?? selectedPayee?.name ?? (page === 'settings' ? 'Settings' : page === 'reports' && reportView === 'net-worth' ? 'Net worth' : navItems.find((item) => item.id === page)?.label) ?? 'Overview'
   const accountsByBalanceSheetGroup = balanceSheetGroups.map((group) => ({ group, accounts: activeAccounts.filter((account) => accountBalanceSheetGroup(account) === group) }))
 
   function pathWithMonth(path: string, month = viewedMonth) {
@@ -1211,12 +1213,12 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         )}
         {page === 'overview' && !selectedCategory && (
           <div className="page-content narrow-page overview-page">
-            <OverviewPage accounts={activeAccounts} defaultCurrency={workspace.defaultCurrency} totalBalance={totalBalance} convertBalance={convertCurrentBalance} income={income} expenses={expenses} tax={taxesPaid + estimatedCompanyTax} netIncome={income - expenses - taxesPaid - estimatedCompanyTax} month={viewedMonth} onOpenNetWorth={() => goTo('/accounts')} onOpenProfitAndLoss={() => goTo('/reports')} />
+            <OverviewPage accounts={activeAccounts} defaultCurrency={workspace.defaultCurrency} totalBalance={totalBalance} convertBalance={convertCurrentBalance} income={income} expenses={expenses} tax={taxesPaid + estimatedCompanyTax} netIncome={income - expenses - taxesPaid - estimatedCompanyTax} month={viewedMonth} onOpenNetWorth={() => goTo('/reports/net-worth')} onOpenProfitAndLoss={() => goTo('/reports')} />
             <BudgetsPage categories={data.categories} categoryGroups={data.categoryGroups} categorySpending={categorySpending} budgetForCategory={budgetForCategory} showHiddenActivityAlert={selectedMonthKey === toMonthKey(new Date())} onAdd={() => setModal('category')} onManageGroups={() => setModal('category-groups')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onUnhideCategory={(id) => setCategoryHidden(id, false)} />
           </div>
         )}
         {page === 'reports' && (
-          <ReportsPage data={data} viewedMonth={viewedMonth} defaultCurrency={workspace.defaultCurrency} onUpdateTaxRate={changeTaxRate} onEditTransaction={setCategoryTarget} />
+          <ReportsPage data={data} viewedMonth={viewedMonth} defaultCurrency={workspace.defaultCurrency} view={reportView} historyLoading={historyLoading} onChangeView={(nextView) => goTo(nextView === 'net-worth' ? '/reports/net-worth' : '/reports')} onUpdateTaxRate={changeTaxRate} onEditTransaction={setCategoryTarget} />
         )}
         {page === 'accounts' && !selectedAccount && (
           <AccountsPage accounts={activeAccounts} pendingImportCounts={pendingImportCounts} totalBalance={totalBalance} defaultCurrency={workspace.defaultCurrency} convertBalance={convertCurrentBalance} onAdd={() => setModal('account')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onReorder={reorderAccounts} />
@@ -2127,9 +2129,19 @@ function BudgetsPage({ categories, categoryGroups, categorySpending, budgetForCa
 type ReportPeriod = 'month' | 'year'
 type ValuationGroup = 'investments' | 'real-estate' | 'other-assets'
 
-function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate, onEditTransaction }: { data: AppData; viewedMonth: Date; defaultCurrency: string; onUpdateTaxRate: (rateBps: number) => void; onEditTransaction: (transaction: Transaction) => void }) {
+function ReportsPage({ data, viewedMonth, defaultCurrency, view, historyLoading, onChangeView, onUpdateTaxRate, onEditTransaction }: { data: AppData; viewedMonth: Date; defaultCurrency: string; view: ReportView; historyLoading: boolean; onChangeView: (view: ReportView) => void; onUpdateTaxRate: (rateBps: number) => void; onEditTransaction: (transaction: Transaction) => void }) {
   const [period, setPeriod] = useState<ReportPeriod>('month')
   const [openValuationGroup, setOpenValuationGroup] = useState<ValuationGroup | null>(null)
+  const toolbar = <div className="report-toolbar">
+    <span className="report-scope-label">Personal + company</span>
+    <div className="segmented report-segmented" aria-label="Report view"><button className={view === 'profit-loss' ? 'active transfer' : ''} aria-pressed={view === 'profit-loss'} onClick={() => onChangeView('profit-loss')}>Profit &amp; loss</button><button className={view === 'net-worth' ? 'active transfer' : ''} aria-pressed={view === 'net-worth'} onClick={() => onChangeView('net-worth')}>Net worth</button></div>
+    <div className="segmented period-segmented" aria-label="Report period"><button className={period === 'month' ? 'active transfer' : ''} aria-pressed={period === 'month'} onClick={() => setPeriod('month')}>Monthly</button><button className={period === 'year' ? 'active transfer' : ''} aria-pressed={period === 'year'} onClick={() => setPeriod('year')}>Yearly</button></div>
+  </div>
+
+  if (view === 'net-worth') {
+    return <NetWorthReport data={data} viewedMonth={viewedMonth} defaultCurrency={defaultCurrency} period={period} historyLoading={historyLoading} toolbar={toolbar} />
+  }
+
   const monthKey = toMonthKey(viewedMonth)
   const yearKey = String(viewedMonth.getFullYear())
   const categoryById = new Map(data.categories.map((category) => [category.id, category]))
@@ -2191,10 +2203,7 @@ function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate, onEd
   const forecastOperatingResult = forecastIncome - forecastExpenses - plannedTaxes - forecastTax
 
   return <div className="page-content narrow-page report-page">
-    <div className="report-toolbar">
-      <span className="report-scope-label">Personal + company</span>
-      <div className="segmented"><button className={period === 'month' ? 'active transfer' : ''} onClick={() => setPeriod('month')}>Month</button><button className={period === 'year' ? 'active transfer' : ''} onClick={() => setPeriod('year')}>Year</button></div>
-    </div>
+    {toolbar}
     <section className="report-hero">
       <div><span className="eyebrow">Combined performance · {period === 'month' ? monthName.format(viewedMonth) : yearKey}</span><h2>Economic result</h2><p>Your personal and company activity in one P&amp;L. Internal transfers are excluded.</p></div>
       <label className="tax-rate-field"><span>Company tax planning rate</span><div><input type="number" min="0" max="100" step="0.1" value={data.settings.estimatedCompanyTaxRateBps / 100} onChange={(event) => onUpdateTaxRate(Math.max(0, Math.round(Number(event.target.value) * 100)))} /><b>%</b></div><small>Planning estimate only</small></label>
@@ -2220,6 +2229,116 @@ function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate, onEd
       })}</div> : <div className="valuation-drilldown-empty">No market or asset valuation adjustments in this period.</div>}
     </section>}
     <div className="report-footnote"><CircleHelp size={16} /><p>Company tax is estimated from tagged company income minus tagged company expenses. Transfers and all balance-sheet valuation changes are excluded from P&amp;L. Foreign-currency activity is converted to {defaultCurrency} using the latest saved rate from that month or earlier.</p></div>
+  </div>
+}
+
+type NetWorthPoint = { key: string; label: string; cutoff: string; value: number }
+
+function accountBalanceAt(account: Account, transactions: Transaction[], cutoff: string) {
+  return transactions.reduce((balance, transaction) => {
+    if (transaction.date > cutoff) return balance
+    if (transaction.accountId === account.id) {
+      if (transaction.type === 'income' || transaction.type === 'opening_balance' || transaction.type === 'balance_adjustment') balance += transaction.amountMinor
+      if (transaction.type === 'expense' || transaction.type === 'transfer') balance -= transaction.amountMinor
+    }
+    if (transaction.type === 'transfer' && transaction.toAccountId === account.id) {
+      balance += transaction.destinationAmountMinor || transaction.amountMinor
+    }
+    return balance
+  }, 0)
+}
+
+function endOfMonth(year: number, month: number) {
+  return new Date(Date.UTC(year, month + 1, 0)).toISOString().slice(0, 10)
+}
+
+function netWorthHistory(data: AppData, viewedMonth: Date, defaultCurrency: string, period: ReportPeriod): NetWorthPoint[] {
+  const accounts = data.accounts.filter((account) => !account.closed)
+  const pointValue = (cutoff: string) => accounts.reduce((total, account) => {
+    const balance = accountBalanceAt(account, data.transactions, cutoff)
+    return total + (convertMinor(balance, account.currency, defaultCurrency, cutoff, data.fxRates) ?? 0)
+  }, 0)
+
+  if (period === 'month') {
+    return Array.from({ length: 12 }, (_, index) => {
+      const date = new Date(viewedMonth.getFullYear(), viewedMonth.getMonth() - (11 - index), 1)
+      const cutoff = endOfMonth(date.getFullYear(), date.getMonth())
+      return {
+        key: toMonthKey(date),
+        label: new Intl.DateTimeFormat('en', { month: 'short' }).format(date),
+        cutoff,
+        value: pointValue(cutoff),
+      }
+    })
+  }
+
+  const selectedYear = viewedMonth.getFullYear()
+  const earliestYear = data.transactions.length
+    ? Math.min(...data.transactions.map((transaction) => Number(transaction.date.slice(0, 4))))
+    : selectedYear
+  const firstYear = Math.min(selectedYear, earliestYear)
+  return Array.from({ length: selectedYear - firstYear + 1 }, (_, index) => {
+    const year = firstYear + index
+    const cutoff = `${year}-12-31`
+    return { key: String(year), label: String(year), cutoff, value: pointValue(cutoff) }
+  })
+}
+
+function NetWorthReport({ data, viewedMonth, defaultCurrency, period, historyLoading, toolbar }: { data: AppData; viewedMonth: Date; defaultCurrency: string; period: ReportPeriod; historyLoading: boolean; toolbar: ReactNode }) {
+  const accounts = data.accounts.filter((account) => !account.closed)
+  const currentDate = todayInParis()
+  const currentBalance = (account: Account) => convertMinor(account.balanceMinor, account.currency, defaultCurrency, currentDate, data.fxRates) ?? 0
+  const totalBalance = accounts.reduce((sum, account) => sum + currentBalance(account), 0)
+  const groups = balanceSheetGroups.map((group) => {
+    const groupAccounts = accounts.filter((account) => accountBalanceSheetGroup(account) === group)
+    return { group, accounts: groupAccounts, total: groupAccounts.reduce((sum, account) => sum + currentBalance(account), 0) }
+  }).filter((group) => group.accounts.length > 0)
+  const points = netWorthHistory(data, viewedMonth, defaultCurrency, period)
+  const previousValue = points.at(-2)?.value
+  const periodChange = previousValue === undefined ? 0 : (points.at(-1)?.value ?? 0) - previousValue
+
+  return <div className="page-content narrow-page report-page net-worth-report">
+    {toolbar}
+    <section className="net-worth-hero">
+      <div><span className="eyebrow">Current balance sheet</span><h2>Net worth</h2><p>Everything you own across personal, company, property, and pension accounts, less any negative balances.</p></div>
+      <div className="net-worth-total"><span>Current net worth</span><strong>{formatMoney(totalBalance, defaultCurrency)}</strong><small className={periodChange < 0 ? 'negative' : periodChange > 0 ? 'positive' : ''}>{previousValue === undefined ? 'No previous period' : `Latest period ${periodChange >= 0 ? '+' : ''}${formatMoney(periodChange, defaultCurrency)}`}</small></div>
+    </section>
+
+    <section className="panel net-worth-history">
+      <div className="net-worth-section-heading"><div><span className="eyebrow">{period === 'month' ? 'Trailing 12 months' : 'Annual history'}</span><h3>Net worth over time</h3><p>{period === 'month' ? `Month-end balances through ${monthName.format(viewedMonth)}.` : `Year-end balances through ${viewedMonth.getFullYear()}.`} Transfers are counted once on each side and balance checkpoints are applied on their recorded dates.</p></div>{historyLoading && <span className="history-loading"><LoaderCircle size={14} />Loading full history</span>}</div>
+      <NetWorthBarChart points={points} currency={defaultCurrency} />
+    </section>
+
+    <section className="panel net-worth-breakdown">
+      <div className="net-worth-section-heading"><div><span className="eyebrow">Today</span><h3>Current net worth breakdown</h3><p>{accounts.length} active account{accounts.length === 1 ? '' : 's'}, converted to {defaultCurrency} at the latest saved exchange rates.</p></div></div>
+      <div className="net-worth-breakdown-grid">{groups.map((group) => <div className="net-worth-group" key={group.group}>
+        <div className="net-worth-group-heading"><span>{group.group}</span><strong className={group.total < 0 ? 'negative' : ''}>{formatMoney(group.total, defaultCurrency)}</strong></div>
+        <div className="net-worth-account-list">{group.accounts.map((account) => <div key={account.id}><span><i style={{ background: account.color }} />{account.name}</span><strong className={currentBalance(account) < 0 ? 'negative' : ''}>{formatMoney(currentBalance(account), defaultCurrency)}</strong></div>)}</div>
+      </div>)}</div>
+    </section>
+    <div className="report-footnote"><CircleHelp size={16} /><p>Historical balances are reconstructed from recorded transactions and dated valuation checkpoints. Foreign-currency balances use the latest exchange rate saved for each chart date.</p></div>
+  </div>
+}
+
+function NetWorthBarChart({ points, currency }: { points: NetWorthPoint[]; currency: string }) {
+  const values = points.map((point) => point.value)
+  const minimum = Math.min(0, ...values)
+  const maximum = Math.max(0, ...values)
+  const range = Math.max(1, maximum - minimum)
+  const zeroPosition = (-minimum / range) * 100
+
+  return <div className="net-worth-chart-scroll">
+    <div className="net-worth-chart" style={{ minWidth: `${Math.max(680, points.length * 72)}px` }} role="img" aria-label={`Net worth ${points.map((point) => `${point.label}: ${formatMoney(point.value, currency)}`).join(', ')}`}>
+      {points.map((point) => {
+        const height = Math.abs(point.value) / range * 100
+        const bottom = (Math.min(0, point.value) - minimum) / range * 100
+        return <div className="net-worth-chart-column" key={point.key} title={`${point.label}: ${formatMoney(point.value, currency)}`}>
+          <strong className={point.value < 0 ? 'negative' : ''}>{formatCompactMoney(point.value, currency)}</strong>
+          <div className="net-worth-bar-track"><span className="net-worth-zero-axis" style={{ bottom: `${zeroPosition}%` }} /><i className={point.value < 0 ? 'negative' : ''} style={{ bottom: `${bottom}%`, height: `${Math.max(point.value === 0 ? 0 : 1.5, height)}%` }} /></div>
+          <span>{point.label}</span>
+        </div>
+      })}
+    </div>
   </div>
 }
 
