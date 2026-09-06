@@ -6,7 +6,7 @@ import {
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, assignPayeeMapping, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteCategoryGroup, deletePayeeMapping, deleteUnusedCategory, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateCategoryName, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
+import { approveBankImportCandidate, assignPayeeMapping, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteAllUnusedPayees, deleteCategoryGroup, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateCategoryName, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Category, CategoryGroup, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
 
@@ -821,6 +821,36 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
+  async function removeUnusedPayee(payeeId: string) {
+    try {
+      setSyncError('')
+      await deleteUnusedPayee(workspace.workspaceId, payeeId)
+      setData((current) => ({
+        ...current,
+        payees: current.payees.filter((payee) => payee.id !== payeeId),
+        unusedPayeeIds: current.unusedPayeeIds.filter((id) => id !== payeeId),
+        payeeMappings: current.payeeMappings.filter((mapping) => mapping.payeeId !== payeeId),
+        bankImportCandidates: current.bankImportCandidates.map((candidate) => candidate.payeeId === payeeId ? { ...candidate, payeeId: undefined } : candidate),
+      }))
+    } catch (error) {
+      setSyncError(getErrorMessage(error, 'Could not delete the payee.'))
+      throw error
+    }
+  }
+
+  async function removeAllUnusedPayees() {
+    try {
+      setSyncError('')
+      const deletedIds = await deleteAllUnusedPayees(workspace.workspaceId, data.unusedPayeeIds)
+      const refreshed = await loadWorkspace()
+      setData(refreshed.data)
+      return deletedIds.length
+    } catch (error) {
+      setSyncError(getErrorMessage(error, 'Could not delete the unused payees.'))
+      throw error
+    }
+  }
+
   async function addPayeeMapping(payeeId: string, sourceName: string) {
     try {
       setSyncError('')
@@ -1030,7 +1060,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <TransactionsPage transactions={transactions} allTransactions={data.transactions} accounts={data.accounts} categories={data.categories} search={search} setSearch={setSearch} onEditCategory={setCategoryTarget} />
         )}
         {page === 'payees' && !selectedPayee && (
-          <PayeesPage payees={data.payees} mappings={data.payeeMappings} transactions={data.transactions} categories={data.categories} accounts={data.accounts} onSelectPayee={(id) => goTo(`/payees/${id}`)} onMapPayee={mapUnmatchedPayee} onCreatePayee={createPayeeFromUnmatched} onChangeDefaultCategory={changePayeeDefaultCategoryOnly} />
+          <PayeesPage payees={data.payees} unusedPayeeIds={data.unusedPayeeIds} mappings={data.payeeMappings} transactions={data.transactions} categories={data.categories} accounts={data.accounts} onSelectPayee={(id) => goTo(`/payees/${id}`)} onMapPayee={mapUnmatchedPayee} onCreatePayee={createPayeeFromUnmatched} onChangeDefaultCategory={changePayeeDefaultCategoryOnly} onDeleteUnusedPayee={removeUnusedPayee} onDeleteAllUnusedPayees={removeAllUnusedPayees} />
         )}
         {page === 'budgets' && !selectedCategory && (
           <BudgetsPage categories={data.categories} categoryGroups={data.categoryGroups} categorySpending={categorySpending} budgetForCategory={budgetForCategory} totalBalance={totalBalance} income={income} expenses={expenses} estimatedCompanyTax={estimatedCompanyTax} actualResult={actualResult} plannedIncome={plannedIncome} plannedExpenses={plannedExpenses} plannedCompanyTax={plannedCompanyTax} plannedResult={plannedResult} defaultCurrency={workspace.defaultCurrency} taxRateBps={data.settings.estimatedCompanyTaxRateBps} showHiddenActivityAlert={selectedMonthKey === toMonthKey(new Date())} onUpdateTaxRate={changeTaxRate} onAdd={() => setModal('category')} onManageGroups={() => setModal('category-groups')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onUnhideCategory={(id) => setCategoryHidden(id, false)} />
@@ -1397,8 +1427,9 @@ function TransactionsPage({ transactions, allTransactions, accounts, categories,
 
 type PayeeSort = 'transactions' | 'alphabetical'
 
-function PayeesPage({ payees, mappings, transactions, categories, accounts, onSelectPayee, onMapPayee, onCreatePayee, onChangeDefaultCategory }: {
+function PayeesPage({ payees, unusedPayeeIds, mappings, transactions, categories, accounts, onSelectPayee, onMapPayee, onCreatePayee, onChangeDefaultCategory, onDeleteUnusedPayee, onDeleteAllUnusedPayees }: {
   payees: Payee[]
+  unusedPayeeIds: string[]
   mappings: PayeeMapping[]
   transactions: Transaction[]
   categories: Category[]
@@ -1407,6 +1438,8 @@ function PayeesPage({ payees, mappings, transactions, categories, accounts, onSe
   onMapPayee: (sourceName: string, payeeId: string) => Promise<void>
   onCreatePayee: (sourceName: string, payeeName: string, categoryId: string, accountId: string) => Promise<void>
   onChangeDefaultCategory: (payeeId: string, categoryId: string) => Promise<void>
+  onDeleteUnusedPayee: (payeeId: string) => Promise<void>
+  onDeleteAllUnusedPayees: () => Promise<number>
 }) {
   const [mappingTargets, setMappingTargets] = useState<Record<string, string>>({})
   const [payeeQueries, setPayeeQueries] = useState<Record<string, string>>({})
@@ -1416,6 +1449,10 @@ function PayeesPage({ payees, mappings, transactions, categories, accounts, onSe
   const [mappingErrors, setMappingErrors] = useState<Record<string, string>>({})
   const [pending, setPending] = useState('')
   const [showHiddenDefaults, setShowHiddenDefaults] = useState(false)
+  const [showUnusedPayees, setShowUnusedPayees] = useState(false)
+  const [confirmingDeleteAll, setConfirmingDeleteAll] = useState(false)
+  const [deletingAll, setDeletingAll] = useState(false)
+  const [deleteAllError, setDeleteAllError] = useState('')
   const unmatched = useMemo(() => {
     const unmatchedByName = new Map<string, { sourceName: string; count: number; lastTransaction: string; categoryIds: string[]; accountIds: string[] }>()
     for (const transaction of transactions) {
@@ -1440,8 +1477,19 @@ function PayeesPage({ payees, mappings, transactions, categories, accounts, onSe
   const payeesWithHiddenDefaults = useMemo(() => alphabeticalPayees
     .map((payee) => ({ payee, hiddenCategory: hiddenCategoryById.get(payee.defaultCategoryId ?? '') }))
     .filter((item): item is { payee: Payee; hiddenCategory: Category } => Boolean(item.hiddenCategory)), [alphabeticalPayees, hiddenCategoryById])
+  const unusedPayeeIdSet = useMemo(() => new Set(unusedPayeeIds), [unusedPayeeIds])
+  const unusedPayees = useMemo(() => alphabeticalPayees.filter((payee) => unusedPayeeIdSet.has(payee.id)), [alphabeticalPayees, unusedPayeeIdSet])
 
   return <PayeeDirectory payees={payees} mappings={mappings} transactions={transactions} categories={categories} accounts={accounts} onSelectPayee={onSelectPayee}>
+      {unusedPayees.length > 0 && <section className={`unused-payees${showUnusedPayees ? ' open' : ''}`}>
+        <div className="unused-payees-heading"><div><span className="eyebrow">Unused payees</span><h3>{unusedPayees.length} payee{unusedPayees.length === 1 ? ' has' : 's have'} no transactions</h3></div><div className="unused-payees-heading-actions"><p>Would you like to delete {unusedPayees.length === 1 ? 'it' : 'them'}?</p><button type="button" className="secondary-button" aria-expanded={showUnusedPayees} aria-controls="unused-payees-list" onClick={() => setShowUnusedPayees((current) => !current)}>{showUnusedPayees ? 'Hide list' : 'Show list'}<ChevronDown size={15} /></button><button type="button" className="danger-button" onClick={() => { setConfirmingDeleteAll(true); setDeleteAllError('') }}>Delete all</button></div></div>
+        {confirmingDeleteAll && <div className="unused-payees-delete-all"><div><strong>Delete all {unusedPayees.length} unused payees?</strong><span>The database will check every transaction again before deleting them. Their alternative names will also be removed.</span></div><button type="button" className="secondary-button" disabled={deletingAll} onClick={() => setConfirmingDeleteAll(false)}>Cancel</button><button type="button" className="danger-button confirming" disabled={deletingAll} onClick={async () => {
+          setDeletingAll(true)
+          setDeleteAllError('')
+          try { await onDeleteAllUnusedPayees(); setConfirmingDeleteAll(false) } catch (cause) { setDeleteAllError(getErrorMessage(cause, 'Could not delete the unused payees.')) } finally { setDeletingAll(false) }
+        }}>{deletingAll ? 'Deleting…' : `Delete all ${unusedPayees.length}`}</button>{deleteAllError && <p className="unmatched-error" role="alert">{deleteAllError}</p>}</div>}
+        {showUnusedPayees && <div className="unused-payees-list" id="unused-payees-list">{unusedPayees.map((payee) => <UnusedPayeeRow key={payee.id} payee={payee} mappingCount={mappings.filter((mapping) => mapping.payeeId === payee.id).length} onDelete={onDeleteUnusedPayee} />)}</div>}
+      </section>}
       {payeesWithHiddenDefaults.length > 0 && <section className={`hidden-payee-defaults${showHiddenDefaults ? ' open' : ''}`}>
         <div className="hidden-payee-defaults-heading"><div><span className="eyebrow">Defaults need attention</span><h3>{payeesWithHiddenDefaults.length} payee{payeesWithHiddenDefaults.length === 1 ? '' : 's'} using hidden categories</h3></div><div className="hidden-payee-defaults-heading-actions"><p>Choose an active replacement so future bank imports can use the payee default.</p><button type="button" className="secondary-button" aria-expanded={showHiddenDefaults} aria-controls="hidden-payee-defaults-list" onClick={() => setShowHiddenDefaults((current) => !current)}>{showHiddenDefaults ? 'Hide' : 'Show'}<ChevronDown size={15} /></button></div></div>
         {showHiddenDefaults && <div className="hidden-payee-defaults-list" id="hidden-payee-defaults-list">{payeesWithHiddenDefaults.map(({ payee, hiddenCategory }) => <HiddenPayeeDefaultRow key={payee.id} payee={payee} hiddenCategory={hiddenCategory} categories={activeCategories} onSave={onChangeDefaultCategory} />)}</div>}
@@ -1502,6 +1550,22 @@ function PayeesPage({ payees, mappings, transactions, categories, accounts, onSe
         })}</div>
       </section>}
   </PayeeDirectory>
+}
+
+function UnusedPayeeRow({ payee, mappingCount, onDelete }: { payee: Payee; mappingCount: number; onDelete: (payeeId: string) => Promise<void> }) {
+  const [confirming, setConfirming] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [error, setError] = useState('')
+  return <div className="unused-payee-row">
+    <span className="payee-avatar">{payee.name.slice(0, 1).toLocaleUpperCase('en')}</span>
+    <div className="unused-payee-copy"><strong>{payee.name}</strong><span>{mappingCount} alternative name{mappingCount === 1 ? '' : 's'} will also be removed</span></div>
+    {confirming ? <div className="unused-payee-confirm"><span>Delete this payee?</span><button type="button" className="secondary-button" disabled={deleting} onClick={() => setConfirming(false)}>Cancel</button><button type="button" className="danger-button" disabled={deleting} onClick={async () => {
+      setDeleting(true)
+      setError('')
+      try { await onDelete(payee.id) } catch (cause) { setError(getErrorMessage(cause, 'Could not delete the payee.')); setDeleting(false) }
+    }}>{deleting ? 'Deleting…' : 'Delete'}</button></div> : <button type="button" className="danger-button" onClick={() => setConfirming(true)}><Trash2 size={14} />Delete</button>}
+    {error && <p className="unmatched-error" role="alert">{error}</p>}
+  </div>
 }
 
 function HiddenPayeeDefaultRow({ payee, hiddenCategory, categories, onSave }: { payee: Payee; hiddenCategory: Category; categories: Category[]; onSave: (payeeId: string, categoryId: string) => Promise<void> }) {

@@ -117,6 +117,7 @@ export type Transaction = {
   date: string
   payee: string
   payeeId?: string
+  debtorId?: string
   note?: string
   amountMinor: number
   destinationAmountMinor?: number
@@ -139,6 +140,7 @@ export type AppData = {
   categoryGroups: CategoryGroup[]
   categories: Category[]
   payees: Payee[]
+  unusedPayeeIds: string[]
   payeeMappings: PayeeMapping[]
   budgets: Budget[]
   transactions: Transaction[]

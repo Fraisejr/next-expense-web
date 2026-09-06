@@ -14,6 +14,12 @@ function number(value: unknown) {
   return Number(value ?? 0)
 }
 
+function databaseErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') return error.message
+  return fallback
+}
+
 export function normalizedPayeeName(value: string) {
   const decoded = value.replace(/&#(x[\da-f]+|\d+);/gi, (entity, code: string) => {
     const point = code.toLocaleLowerCase('en').startsWith('x') ? Number.parseInt(code.slice(1), 16) : Number.parseInt(code, 10)
@@ -191,7 +197,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
   const workspaceId = (memberships?.[0] as Row | undefined)?.workspace_id as string | undefined
   if (!workspaceId) throw new WorkspaceNotLinkedError()
 
-  const [workspaceResult, accountRows, categoryGroupRows, categoryRows, periodRows, budgetRows, payeeRows, mappingRows, transactionRows, connectionRows, candidateRows] = await Promise.all([
+  const [workspaceResult, accountRows, categoryGroupRows, categoryRows, periodRows, budgetRows, payeeRows, mappingRows, transactionRows, connectionRows, candidateRows, unusedPayeeResult] = await Promise.all([
     neon.from('workspaces').select('name,default_currency,estimated_company_tax_rate_bps').eq('id', workspaceId).limit(1),
     allRows('accounts', '*', 'sort_order'),
     allRows('category_groups', '*', 'sort_order'),
@@ -203,10 +209,15 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
     allRows('transactions'),
     allRows('bank_connections'),
     allRows('bank_import_candidates'),
+    neon.rpc('list_unused_payee_ids', { p_workspace_id: workspaceId }),
   ])
   if (workspaceResult.error) throw workspaceResult.error
 
   const payeeNames = new Map(payeeRows.map((row) => [row.id as string, row.name as string]))
+  const referencedPayeeIds = new Set(transactionRows.flatMap((row) => [row.payee_id, row.debtor_id].filter((id): id is string => typeof id === 'string')))
+  const unusedPayeeIds = unusedPayeeResult.error
+    ? payeeRows.filter((row) => !referencedPayeeIds.has(String(row.id))).map((row) => String(row.id))
+    : ((unusedPayeeResult.data ?? []) as unknown as Row[]).map((row) => String(row.payee_id))
   const periods = new Map(periodRows.map((row) => [row.id as string, `${row.year}-${String(row.month).padStart(2, '0')}`]))
   const transactions: Transaction[] = transactionRows.map((row) => ({
     id: row.id as string,
@@ -217,6 +228,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
         ? 'Balance adjustment'
         : payeeNames.get(row.payee_id as string) || row.payee_name || row.memo || 'Unknown payee') as string,
     payeeId: (row.payee_id as string | null) ?? undefined,
+    debtorId: (row.debtor_id as string | null) ?? undefined,
     note: (row.memo as string | null) ?? undefined,
     amountMinor: number(row.amount_minor),
     destinationAmountMinor: row.destination_amount_minor ? number(row.destination_amount_minor) : undefined,
@@ -351,6 +363,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
       categoryGroups,
       categories,
       payees,
+      unusedPayeeIds,
       payeeMappings,
       budgets,
       transactions,
@@ -573,6 +586,31 @@ export async function deleteUnusedCategory(workspaceId: string, categoryId: stri
     p_category_id: categoryId,
   })
   if (error) throw error
+}
+
+export async function deleteUnusedPayee(workspaceId: string, payeeId: string) {
+  const { error } = await neon.rpc('delete_unused_payee', {
+    p_workspace_id: workspaceId,
+    p_payee_id: payeeId,
+  })
+  if (error) throw error
+}
+
+export async function deleteAllUnusedPayees(workspaceId: string, unusedPayeeIds: string[]) {
+  const { data, error } = await neon.rpc('delete_all_unused_payees', {
+    p_workspace_id: workspaceId,
+  })
+  if (error) {
+    if (!unusedPayeeIds.length) return []
+    const fallback = await neon.from('payees')
+      .delete()
+      .eq('workspace_id', workspaceId)
+      .in('id', unusedPayeeIds)
+      .select('id')
+    if (fallback.error) throw new Error(databaseErrorMessage(fallback.error, 'Could not delete the unused payees.'))
+    return (fallback.data ?? []).map((row) => String(row.id))
+  }
+  return ((data ?? []) as unknown as Row[]).map((row) => String(row.payee_id))
 }
 
 async function resolvePayees(workspaceId: string, sourceNames: string[], createMissing: boolean): Promise<Array<Payee | undefined>> {

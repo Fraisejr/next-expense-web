@@ -10,6 +10,7 @@ const dateInMonth = (day: number) => {
 }
 
 export const seedData: AppData = {
+  unusedPayeeIds: [],
   accounts: [
     { id: 'checking', name: 'Everyday checking', type: 'Checking', balanceMinor: 384216, color: '#234e46', currency: 'EUR', scope: 'Personal', balanceSheetGroup: 'Personal', closed: false, autoSync: false },
     { id: 'savings', name: 'Rainy day', type: 'Savings', balanceMinor: 1248000, color: '#d68853', currency: 'EUR', scope: 'Personal', balanceSheetGroup: 'Personal', closed: false },
