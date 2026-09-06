@@ -1,6 +1,6 @@
 import { neon } from './neon'
 import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
-import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankImportCandidate, BankRateLimit, BankSyncDiagnostic, Budget, Category, CategoryGroup, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
+import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankImportCandidate, BankRateLimit, BankSyncDiagnostic, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
 
 type Row = Record<string, unknown>
 
@@ -305,13 +305,14 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
   const nextMonthDate = new Date(`${monthStart}T12:00:00Z`)
   nextMonthDate.setUTCMonth(nextMonthDate.getUTCMonth() + 1)
   const monthEnd = nextMonthDate.toISOString().slice(0, 10)
-  const [workspaceResult, accountRows, categoryGroupRows, categoryRows, periodRows, budgetRows, payeeRows, mappingRows, transactionPage, balanceResult, connectionRows, candidateRows, unusedPayeeResult] = await Promise.all([
+  const [workspaceResult, accountRows, categoryGroupRows, categoryRows, periodRows, budgetRows, fxRateRows, payeeRows, mappingRows, transactionPage, balanceResult, connectionRows, candidateRows, unusedPayeeResult] = await Promise.all([
     neon.from('workspaces').select('name,default_currency,estimated_company_tax_rate_bps').eq('id', workspaceId).limit(1),
     allRows('accounts', 'id,name,display_type,scope,balance_sheet_group,currency,color,sort_order,closed,investment,pension,auto_sync,bank_import_mode,provider_account_id,institution_id,country', 'sort_order'),
     allRows('category_groups', 'id,name,sort_order,show_categories', 'sort_order'),
     allRows('categories', 'id,name,sort_order,color,icon,report_group,category_group_id,hidden', 'sort_order'),
     allRows('periods', 'id,year,month,period_start_date', 'period_start_date'),
     allRows('budgets', 'id,period_id,category_id,scope,amount_minor'),
+    allRows('fx_rates', 'id,base_currency,quote_currency,rate_hundredths,rate_date', 'rate_date'),
     allRows('payees', 'id,name,sort_order,default_category_id,default_account_id', 'sort_order'),
     allRows('payee_mappings', 'id,source_name,payee_id,match_type'),
     loadTransactionPage(workspaceId, { startDate: monthStart, endDate: monthEnd }),
@@ -410,6 +411,13 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
       amountMinor: number(row.amount_minor),
     }] : []
   })
+  const fxRates: FxRate[] = fxRateRows.map((row) => ({
+    id: row.id as string,
+    baseCurrency: row.base_currency as string,
+    quoteCurrency: row.quote_currency as string,
+    rateHundredths: number(row.rate_hundredths),
+    date: row.rate_date as string,
+  }))
   const bankImportCandidates: BankImportCandidate[] = ((candidateRows.data ?? []) as unknown as Row[])
     .filter((row) => row.status === 'pending')
     .map((row) => ({
@@ -451,6 +459,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
       unusedPayeeIds,
       payeeMappings,
       budgets,
+      fxRates,
       transactions,
       bankImportCandidates,
       settings: { estimatedCompanyTaxRateBps: number(workspace.estimated_company_tax_rate_bps) },
@@ -922,6 +931,59 @@ export async function saveBudget(workspaceId: string, budget: Budget) {
     amount_minor: budget.amountMinor,
   })
   if (error) throw error
+}
+
+export async function saveFxRate(workspaceId: string, rate: FxRate) {
+  const monthKey = rate.date.slice(0, 7)
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(monthKey)) throw new Error('Choose a valid month.')
+  if (!/^[A-Z]{3}$/.test(rate.baseCurrency) || !/^[A-Z]{3}$/.test(rate.quoteCurrency) || rate.baseCurrency === rate.quoteCurrency) {
+    throw new Error('Choose two different currencies.')
+  }
+  if (!Number.isSafeInteger(rate.rateHundredths) || rate.rateHundredths <= 0) throw new Error('Enter a positive exchange rate.')
+
+  const periodId = await ensurePeriod(workspaceId, monthKey)
+  const duplicate = await neon.from('fx_rates')
+    .select('id')
+    .eq('workspace_id', workspaceId)
+    .eq('period_id', periodId)
+    .eq('base_currency', rate.baseCurrency)
+    .eq('quote_currency', rate.quoteCurrency)
+    .limit(1)
+  if (duplicate.error) throw duplicate.error
+  if (duplicate.data?.some((row) => String(row.id) !== rate.id)) {
+    throw new Error(`A ${rate.baseCurrency}/${rate.quoteCurrency} rate already exists for ${monthKey}.`)
+  }
+
+  const values = {
+    period_id: periodId,
+    base_currency: rate.baseCurrency,
+    quote_currency: rate.quoteCurrency,
+    rate_hundredths: rate.rateHundredths,
+    rate_date: `${monthKey}-01`,
+    source_start_at: `${monthKey}-01T12:00:00Z`,
+  }
+  const existing = await neon.from('fx_rates').select('id').eq('workspace_id', workspaceId).eq('id', rate.id).limit(1)
+  if (existing.error) throw existing.error
+  if (existing.data?.length) {
+    const { data, error } = await neon.from('fx_rates').update(values).eq('workspace_id', workspaceId).eq('id', rate.id).select('id')
+    if (error) throw error
+    if (!data?.length) throw new Error('The exchange rate could not be updated.')
+    return { ...rate, date: `${monthKey}-01` }
+  }
+
+  const { error } = await neon.from('fx_rates').insert({ id: rate.id, workspace_id: workspaceId, ...values })
+  if (error) throw error
+  return { ...rate, date: `${monthKey}-01` }
+}
+
+export async function deleteFxRate(workspaceId: string, rateId: string) {
+  const { data, error } = await neon.from('fx_rates')
+    .delete()
+    .eq('workspace_id', workspaceId)
+    .eq('id', rateId)
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The exchange rate could not be deleted.')
 }
 
 export async function createTransaction(workspaceId: string, transaction: Transaction) {

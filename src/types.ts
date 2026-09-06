@@ -112,6 +112,14 @@ export type Budget = {
   amountMinor: number
 }
 
+export type FxRate = {
+  id: string
+  baseCurrency: string
+  quoteCurrency: string
+  rateHundredths: number
+  date: string
+}
+
 export type Transaction = {
   id: string
   date: string
@@ -143,6 +151,7 @@ export type AppData = {
   unusedPayeeIds: string[]
   payeeMappings: PayeeMapping[]
   budgets: Budget[]
+  fxRates: FxRate[]
   transactions: Transaction[]
   bankImportCandidates: BankImportCandidate[]
   settings: {

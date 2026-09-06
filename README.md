@@ -23,7 +23,8 @@ All monetary values are stored as integer minor units (cents). Decimal conversio
 
 - Split transactions are intentionally unsupported. Migration must ignore legacy split components, including stale split amounts or category references, whenever importing iOS data.
 - Multiple currencies are supported. Transactions and accounts retain their original currency instead of being coerced to EUR.
-- Historical exchange rates are supported and must be preserved during migration for cross-currency balances, transfers, and reporting.
+- Historical exchange rates are supported and must be preserved during migration for cross-currency balances, transfers, and reporting. Combined reports use the latest saved rate from the relevant month or earlier, while current balances use the latest saved rate available today.
+- Exchange rates can be added, edited, and removed from Settings. Rates retain the legacy two-decimal format and are entered as quote currency per one unit of the workspace reporting currency.
 - Recurring transaction generation is intentionally unsupported. Legacy recurrence metadata may be retained for audit purposes, but future-dated generated transactions are excluded from imports and rejected by the database.
 - Every new income or expense transaction must have a category; new transfers must not have one. Historical transaction records remain untouched.
 - Legacy savings and investment categories remain visible for historical activity and monthly targets. Their plans do not roll into later months and are not savings balances; current saved value comes from the balances of the accounts holding the money.

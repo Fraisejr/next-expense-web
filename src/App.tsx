@@ -6,9 +6,10 @@ import {
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteAllUnusedPayees, deleteCategoryGroup, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateCategoryName, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
+import { approveBankImportCandidate, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteAllUnusedPayees, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateCategoryName, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
-import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Category, CategoryGroup, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
+import { convertMinor } from './currency'
+import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
 
 type Page = 'transactions' | 'payees' | 'budgets' | 'reports' | 'accounts' | 'settings'
 type Modal = 'transaction' | 'account' | 'edit-account' | 'balance-adjustment' | 'category' | 'edit-category' | 'category-groups' | 'bank' | null
@@ -357,32 +358,30 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     [data.transactions, viewedMonth],
   )
   const categoryGroup = (categoryId?: string) => data.categories.find((category) => category.id === categoryId)?.reportGroup
+  const convertedTransactionAmount = (transaction: Transaction) => convertMinor(transaction.amountMinor, transaction.currency, workspace.defaultCurrency, transaction.date, data.fxRates) ?? 0
+  const convertCurrentBalance = (account: Account) => convertMinor(account.balanceMinor, account.currency, workspace.defaultCurrency, todayInParis(), data.fxRates) ?? 0
   const income = transactions
-    .filter((t) => t.currency === workspace.defaultCurrency)
     .filter((t) => categoryGroup(t.categoryId) === 'income')
-    .reduce((sum, t) => sum + (t.type === 'income' ? t.amountMinor : t.type === 'expense' ? -t.amountMinor : 0), 0)
+    .reduce((sum, t) => sum + (t.type === 'income' ? convertedTransactionAmount(t) : t.type === 'expense' ? -convertedTransactionAmount(t) : 0), 0)
   const expenses = transactions
-    .filter((t) => t.currency === workspace.defaultCurrency)
     .filter((t) => categoryGroup(t.categoryId) === 'expense')
-    .reduce((sum, t) => sum + (t.type === 'expense' ? t.amountMinor : t.type === 'income' ? -t.amountMinor : 0), 0)
+    .reduce((sum, t) => sum + (t.type === 'expense' ? convertedTransactionAmount(t) : t.type === 'income' ? -convertedTransactionAmount(t) : 0), 0)
   const taxesPaid = transactions
-    .filter((t) => t.currency === workspace.defaultCurrency)
     .filter((t) => categoryGroup(t.categoryId) === 'tax')
-    .reduce((sum, t) => sum + (t.type === 'expense' ? t.amountMinor : t.type === 'income' ? -t.amountMinor : 0), 0)
+    .reduce((sum, t) => sum + (t.type === 'expense' ? convertedTransactionAmount(t) : t.type === 'income' ? -convertedTransactionAmount(t) : 0), 0)
   const capitalGains = transactions
-    .filter((t) => t.currency === workspace.defaultCurrency)
     .filter((t) => categoryGroup(t.categoryId) === 'capital_gain')
-    .reduce((sum, t) => sum + (t.type === 'income' ? t.amountMinor : t.type === 'expense' ? -t.amountMinor : 0), 0)
+    .reduce((sum, t) => sum + (t.type === 'income' ? convertedTransactionAmount(t) : t.type === 'expense' ? -convertedTransactionAmount(t) : 0), 0)
   const activeAccounts = data.accounts.filter((account) => !account.closed)
   const closedAccounts = data.accounts.filter((account) => account.closed)
-  const totalBalance = activeAccounts.filter((account) => account.currency === workspace.defaultCurrency).reduce((sum, account) => sum + account.balanceMinor, 0)
+  const totalBalance = activeAccounts.reduce((sum, account) => sum + convertCurrentBalance(account), 0)
   const categorySpending = (id: string) => {
     const group = categoryGroup(id)
     return transactions
-      .filter((t) => t.categoryId === id && t.type !== 'transfer' && t.currency === workspace.defaultCurrency)
+      .filter((t) => t.categoryId === id && t.type !== 'transfer')
       .reduce((sum, t) => {
         const direction = t.type === 'income' ? 1 : -1
-        return sum + (group === 'income' || group === 'capital_gain' ? direction : -direction) * t.amountMinor
+        return sum + (group === 'income' || group === 'capital_gain' ? direction : -direction) * convertedTransactionAmount(t)
       }, 0)
   }
   const budgetForCategory = (categoryId: string) => data.budgets
@@ -429,6 +428,20 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     historyLoadedRef.current = false
     setHistoryLoaded(false)
     return refreshed
+  }
+
+  async function saveExchangeRate(rate: FxRate) {
+    const saved = await saveFxRate(workspace.workspaceId, rate)
+    setData((current) => ({
+      ...current,
+      fxRates: [...current.fxRates.filter((item) => item.id !== saved.id), saved]
+        .sort((left, right) => left.date.localeCompare(right.date)),
+    }))
+  }
+
+  async function removeExchangeRate(rateId: string) {
+    await deleteFxRate(workspace.workspaceId, rateId)
+    setData((current) => ({ ...current, fxRates: current.fxRates.filter((rate) => rate.id !== rateId) }))
   }
 
   function selectMonth(month: string) {
@@ -1135,10 +1148,10 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <ReportsPage data={data} viewedMonth={viewedMonth} defaultCurrency={workspace.defaultCurrency} onUpdateTaxRate={changeTaxRate} />
         )}
         {page === 'accounts' && !selectedAccount && (
-          <AccountsPage accounts={activeAccounts} totalBalance={totalBalance} defaultCurrency={workspace.defaultCurrency} onAdd={() => setModal('account')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onReorder={reorderAccounts} />
+          <AccountsPage accounts={activeAccounts} totalBalance={totalBalance} defaultCurrency={workspace.defaultCurrency} convertBalance={convertCurrentBalance} onAdd={() => setModal('account')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onReorder={reorderAccounts} />
         )}
         {page === 'settings' && (
-          <SettingsPage workspaceId={workspace.workspaceId} workspaceName={workspace.workspaceName} />
+          <SettingsPage workspaceId={workspace.workspaceId} workspaceName={workspace.workspaceName} defaultCurrency={workspace.defaultCurrency} accounts={data.accounts} fxRates={data.fxRates} onSaveFxRate={saveExchangeRate} onDeleteFxRate={removeExchangeRate} />
         )}
         {selectedAccount && (
           <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
@@ -1290,7 +1303,15 @@ function downloadWorkspaceBackup(backup: WorkspaceBackup, prefix?: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
-function SettingsPage({ workspaceId, workspaceName }: { workspaceId: string; workspaceName: string }) {
+function SettingsPage({ workspaceId, workspaceName, defaultCurrency, accounts, fxRates, onSaveFxRate, onDeleteFxRate }: {
+  workspaceId: string
+  workspaceName: string
+  defaultCurrency: string
+  accounts: Account[]
+  fxRates: FxRate[]
+  onSaveFxRate: (rate: FxRate) => Promise<void>
+  onDeleteFxRate: (rateId: string) => Promise<void>
+}) {
   const [exporting, setExporting] = useState(false)
   const [restoring, setRestoring] = useState(false)
   const [backup, setBackup] = useState<WorkspaceBackup | null>(null)
@@ -1299,6 +1320,61 @@ function SettingsPage({ workspaceId, workspaceName }: { workspaceId: string; wor
   const [confirmed, setConfirmed] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+  const [rateMonth, setRateMonth] = useState(toMonthKey(new Date()))
+  const availableCurrencies = [...new Set([
+    ...accounts.map((account) => account.currency),
+    ...fxRates.flatMap((rate) => [rate.baseCurrency, rate.quoteCurrency]),
+  ])].filter((currency) => currency !== defaultCurrency).sort()
+  const [rateCurrency, setRateCurrency] = useState(availableCurrencies[0] ?? 'USD')
+  const [rateValue, setRateValue] = useState('')
+  const [savingRateId, setSavingRateId] = useState('')
+  const [confirmingDeleteRateId, setConfirmingDeleteRateId] = useState('')
+
+  async function saveRate(rate: FxRate) {
+    setSavingRateId(rate.id)
+    setError('')
+    setNotice('')
+    try {
+      await onSaveFxRate(rate)
+      setNotice('Exchange rate saved. Combined balances and reports have been updated.')
+    } catch (cause) {
+      setError(getErrorMessage(cause, 'Could not save the exchange rate.'))
+      throw cause
+    } finally {
+      setSavingRateId('')
+    }
+  }
+
+  async function addRate(event: FormEvent) {
+    event.preventDefault()
+    const parsed = Number(rateValue.trim().replace(',', '.'))
+    const rateHundredths = Math.round(parsed * 100)
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(rateMonth) || !Number.isFinite(parsed) || rateHundredths <= 0) {
+      setError('Choose a month and enter a positive exchange rate.')
+      return
+    }
+    try {
+      await saveRate({ id: uid(), baseCurrency: defaultCurrency, quoteCurrency: rateCurrency, rateHundredths, date: `${rateMonth}-01` })
+      setRateValue('')
+    } catch {
+      // saveRate has already exposed the database error.
+    }
+  }
+
+  async function removeRate(rateId: string) {
+    setSavingRateId(rateId)
+    setError('')
+    setNotice('')
+    try {
+      await onDeleteFxRate(rateId)
+      setConfirmingDeleteRateId('')
+      setNotice('Exchange rate deleted.')
+    } catch (cause) {
+      setError(getErrorMessage(cause, 'Could not delete the exchange rate.'))
+    } finally {
+      setSavingRateId('')
+    }
+  }
 
   async function exportBackup() {
     setExporting(true)
@@ -1370,6 +1446,37 @@ function SettingsPage({ workspaceId, workspaceName }: { workspaceId: string; wor
       <p>Save a complete copy of {workspaceName} to this computer. The file contains your financial data, so keep it somewhere private.</p>
     </section>
 
+    <section className="panel fx-settings">
+      <div className="fx-settings-heading">
+        <div className="settings-card-icon"><ArrowLeftRight size={21} /></div>
+        <div><span className="eyebrow">Reporting currency · {defaultCurrency}</span><h2>Exchange rates</h2><p>A saved rate remains in effect until a newer one is entered. Rates use the format “1 {defaultCurrency} equals foreign currency”.</p></div>
+      </div>
+
+      <form className="fx-rate-add" onSubmit={(event) => void addRate(event)}>
+        <label><span>Month</span><input required type="month" value={rateMonth} onChange={(event) => setRateMonth(event.target.value)} /></label>
+        <label><span>Currency</span><select value={rateCurrency} onChange={(event) => setRateCurrency(event.target.value)}>{availableCurrencies.map((currency) => <option key={currency}>{currency}</option>)}</select></label>
+        <label><span>1 {defaultCurrency} equals</span><div className="fx-rate-value"><input required min="0.01" step="0.01" inputMode="decimal" type="number" value={rateValue} onChange={(event) => setRateValue(event.target.value)} placeholder="0.00" /><b>{rateCurrency}</b></div></label>
+        <button className="primary-button" disabled={Boolean(savingRateId)}><Plus size={17} />Add rate</button>
+      </form>
+
+      <div className="fx-rate-table">
+        <div className="fx-rate-table-header"><span>Month</span><span>Pair</span><span>Rate</span><span /></div>
+        {[...fxRates].sort((left, right) => right.date.localeCompare(left.date) || left.quoteCurrency.localeCompare(right.quoteCurrency)).map((rate) => (
+          <ExchangeRateRow
+            key={rate.id}
+            rate={rate}
+            saving={savingRateId === rate.id}
+            confirmingDelete={confirmingDeleteRateId === rate.id}
+            onSave={async (nextRate) => { try { await saveRate(nextRate) } catch { /* Error is displayed by SettingsPage. */ } }}
+            onAskDelete={() => setConfirmingDeleteRateId(rate.id)}
+            onCancelDelete={() => setConfirmingDeleteRateId('')}
+            onDelete={() => void removeRate(rate.id)}
+          />
+        ))}
+      </div>
+      {fxRates.length === 0 && <p className="fx-rate-empty">No exchange rates have been saved yet.</p>}
+    </section>
+
     <div className="settings-backup-grid">
       <section className="panel settings-card">
         <div className="settings-card-icon"><Download size={21} /></div>
@@ -1407,6 +1514,42 @@ function SettingsPage({ workspaceId, workspaceName }: { workspaceId: string; wor
     {notice && <div className="settings-notice" role="status">{notice}</div>}
     {error && <div className="settings-error" role="alert">{error}</div>}
   </div>
+}
+
+function ExchangeRateRow({ rate, saving, confirmingDelete, onSave, onAskDelete, onCancelDelete, onDelete }: {
+  rate: FxRate
+  saving: boolean
+  confirmingDelete: boolean
+  onSave: (rate: FxRate) => Promise<void>
+  onAskDelete: () => void
+  onCancelDelete: () => void
+  onDelete: () => void
+}) {
+  const [month, setMonth] = useState(rate.date.slice(0, 7))
+  const [value, setValue] = useState((rate.rateHundredths / 100).toFixed(2))
+  const parsedHundredths = Math.round(Number(value.trim().replace(',', '.')) * 100)
+  const changed = month !== rate.date.slice(0, 7) || parsedHundredths !== rate.rateHundredths
+
+  useEffect(() => {
+    setMonth(rate.date.slice(0, 7))
+    setValue((rate.rateHundredths / 100).toFixed(2))
+  }, [rate.date, rate.rateHundredths])
+
+  return <form className="fx-rate-row" onSubmit={(event) => {
+    event.preventDefault()
+    if (!Number.isSafeInteger(parsedHundredths) || parsedHundredths <= 0) return
+    void onSave({ ...rate, date: `${month}-01`, rateHundredths: parsedHundredths })
+  }}>
+    <input aria-label={`Month for ${rate.baseCurrency}/${rate.quoteCurrency}`} required type="month" value={month} onChange={(event) => setMonth(event.target.value)} disabled={saving} />
+    <strong>{rate.baseCurrency}/{rate.quoteCurrency}</strong>
+    <div className="fx-rate-value"><input aria-label={`${rate.baseCurrency}/${rate.quoteCurrency} rate`} required min="0.01" step="0.01" inputMode="decimal" type="number" value={value} onChange={(event) => setValue(event.target.value)} disabled={saving} /><b>{rate.quoteCurrency}</b></div>
+    <div className="fx-rate-actions">
+      {confirmingDelete ? <><button type="button" className="fx-cancel-delete" onClick={onCancelDelete} disabled={saving}>Cancel</button><button type="button" className="fx-confirm-delete" onClick={onDelete} disabled={saving}>{saving ? 'Deleting…' : 'Delete'}</button></> : <>
+        <button type="submit" className="secondary-button" disabled={!changed || saving}>{saving ? 'Saving…' : 'Save'}</button>
+        <button type="button" className="icon-button" aria-label={`Delete ${rate.baseCurrency}/${rate.quoteCurrency} rate for ${month}`} onClick={onAskDelete} disabled={saving}><Trash2 size={15} /></button>
+      </>}
+    </div>
+  </form>
 }
 
 function CategoryRow({ category, spent, budget, onSelect }: { category: Category; spent: number; budget: number; onSelect: () => void }) {
@@ -1861,7 +2004,7 @@ function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate }: { 
     return Boolean(categoryGroupId && companyCategoryGroupIds.has(categoryGroupId))
   }
   const inPeriod = (date: string) => period === 'month' ? date.startsWith(monthKey) : date.startsWith(yearKey)
-  const reportTransactions = data.transactions.filter((transaction) => transaction.currency === defaultCurrency && inPeriod(transaction.date) && (transaction.type === 'expense' || transaction.type === 'income'))
+  const reportTransactions = data.transactions.filter((transaction) => inPeriod(transaction.date) && (transaction.type === 'expense' || transaction.type === 'income'))
   const companyTransactions = reportTransactions.filter((transaction) => isCompanyCategory(transaction.categoryId))
   const budgetInPeriod = (month: string) => period === 'month' ? month === monthKey : month.startsWith(yearKey)
   const reportBudgets = data.budgets.filter((budget) => budgetInPeriod(budget.month))
@@ -1871,7 +2014,8 @@ function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate }: { 
     .filter((transaction) => categoryById.get(transaction.categoryId ?? '')?.reportGroup === group)
     .reduce((sum, transaction) => {
       const direction = transaction.type === 'income' ? 1 : -1
-      return sum + (group === 'income' || group === 'capital_gain' ? direction : -direction) * transaction.amountMinor
+      const amount = convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, data.fxRates) ?? 0
+      return sum + (group === 'income' || group === 'capital_gain' ? direction : -direction) * amount
     }, 0)
   const totalBudgetsForGroup = (budgets: AppData['budgets'], group: ReportGroup) => budgets
     .filter((budget) => categoryById.get(budget.categoryId)?.reportGroup === group)
@@ -1883,8 +2027,8 @@ function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate }: { 
   const recordedTaxes = totalTransactionsForGroup(reportTransactions, 'tax')
   const capitalGains = totalTransactionsForGroup(reportTransactions, 'capital_gain')
   const unrealizedValuations = data.transactions
-    .filter((transaction) => transaction.currency === defaultCurrency && inPeriod(transaction.date) && transaction.type === 'balance_adjustment' && (transaction.adjustmentReason === 'market_valuation' || transaction.adjustmentReason === 'asset_valuation'))
-    .reduce((sum, transaction) => sum + transaction.amountMinor, 0)
+    .filter((transaction) => inPeriod(transaction.date) && transaction.type === 'balance_adjustment' && (transaction.adjustmentReason === 'market_valuation' || transaction.adjustmentReason === 'asset_valuation'))
+    .reduce((sum, transaction) => sum + (convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, data.fxRates) ?? 0), 0)
   const companyActualProfit = totalTransactionsForGroup(companyTransactions, 'income') - totalTransactionsForGroup(companyTransactions, 'expense')
   const companyTaxEstimate = estimatedTax(companyActualProfit)
   const actualExcludingGains = actualIncome - actualExpenses - recordedTaxes - companyTaxEstimate
@@ -1907,19 +2051,19 @@ function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate }: { 
       <label className="tax-rate-field"><span>Company tax planning rate</span><div><input type="number" min="0" max="100" step="0.1" value={data.settings.estimatedCompanyTaxRateBps / 100} onChange={(event) => onUpdateTaxRate(Math.max(0, Math.round(Number(event.target.value) * 100)))} /><b>%</b></div><small>Planning estimate only</small></label>
     </section>
     <div className="report-comparison">
-      <ReportColumn title="Forecast" subtitle="From monthly budgets" income={forecastIncome} expenses={forecastExpenses} tax={forecastTax} otherTax={plannedTaxes} otherTaxLabel="Other planned taxes" resultExcluding={forecastExcludingGains} capitalGains={0} unrealizedValuations={0} resultIncluding={forecastExcludingGains} />
-      <ReportColumn title="Actual" subtitle="From recorded activity" income={actualIncome} expenses={actualExpenses} tax={companyTaxEstimate} otherTax={recordedTaxes} otherTaxLabel="Other recorded taxes" resultExcluding={actualExcludingGains} capitalGains={capitalGains} unrealizedValuations={unrealizedValuations} resultIncluding={actualIncludingGains} />
+      <ReportColumn title="Forecast" subtitle="From monthly budgets" currency={defaultCurrency} income={forecastIncome} expenses={forecastExpenses} tax={forecastTax} otherTax={plannedTaxes} otherTaxLabel="Other planned taxes" resultExcluding={forecastExcludingGains} capitalGains={0} unrealizedValuations={0} resultIncluding={forecastExcludingGains} />
+      <ReportColumn title="Actual" subtitle="From recorded activity" currency={defaultCurrency} income={actualIncome} expenses={actualExpenses} tax={companyTaxEstimate} otherTax={recordedTaxes} otherTaxLabel="Other recorded taxes" resultExcluding={actualExcludingGains} capitalGains={capitalGains} unrealizedValuations={unrealizedValuations} resultIncluding={actualIncludingGains} />
     </div>
-    <div className="report-footnote"><CircleHelp size={16} /><p>Company tax is estimated from tagged company income minus tagged company expenses. Transfers are excluded. Reports currently use {defaultCurrency}; original currencies and historical exchange rates remain preserved for converted reporting.</p></div>
+    <div className="report-footnote"><CircleHelp size={16} /><p>Company tax is estimated from tagged company income minus tagged company expenses. Transfers are excluded. Foreign-currency activity is converted to {defaultCurrency} using the latest saved rate from that month or earlier.</p></div>
   </div>
 }
 
-function ReportColumn({ title, subtitle, income, expenses, tax, otherTax, otherTaxLabel, resultExcluding, capitalGains, unrealizedValuations, resultIncluding }: { title: string; subtitle: string; income: number; expenses: number; tax: number; otherTax: number; otherTaxLabel: string; resultExcluding: number; capitalGains: number; unrealizedValuations: number; resultIncluding: number }) {
-  const row = (label: string, value: number, tone?: string) => <div className={`report-row ${tone ?? ''}`}><span>{label}</span><strong>{formatMoney(value)}</strong></div>
+function ReportColumn({ title, subtitle, currency, income, expenses, tax, otherTax, otherTaxLabel, resultExcluding, capitalGains, unrealizedValuations, resultIncluding }: { title: string; subtitle: string; currency: string; income: number; expenses: number; tax: number; otherTax: number; otherTaxLabel: string; resultExcluding: number; capitalGains: number; unrealizedValuations: number; resultIncluding: number }) {
+  const row = (label: string, value: number, tone?: string) => <div className={`report-row ${tone ?? ''}`}><span>{label}</span><strong>{formatMoney(value, currency)}</strong></div>
   return <section className="panel report-column"><div className="report-column-heading"><div><span className="eyebrow">{subtitle}</span><h3>{title}</h3></div></div>{row('Income', income, 'income-row')}{row('Expenses', -expenses)}{row('Calculated company tax', -tax)}{otherTax !== 0 && row(otherTaxLabel, -otherTax)}<div className="report-divider" />{row('Operating result', resultExcluding, 'result-row')}{row('Capital gains / losses', capitalGains)}{row('Unrealized valuation changes', unrealizedValuations)}{row('Result including gains', resultIncluding, 'result-row final-result')}</section>
 }
 
-function AccountsPage({ accounts, totalBalance, defaultCurrency, onAdd, onSelectAccount, onReorder }: { accounts: Account[]; totalBalance: number; defaultCurrency: string; onAdd: () => void; onSelectAccount: (id: string) => void; onReorder: (accountIds: string[]) => Promise<boolean> }) {
+function AccountsPage({ accounts, totalBalance, defaultCurrency, convertBalance, onAdd, onSelectAccount, onReorder }: { accounts: Account[]; totalBalance: number; defaultCurrency: string; convertBalance: (account: Account) => number; onAdd: () => void; onSelectAccount: (id: string) => void; onReorder: (accountIds: string[]) => Promise<boolean> }) {
   const [reordering, setReordering] = useState(false)
   const [orderedIds, setOrderedIds] = useState(() => accounts.map((account) => account.id))
   const [draggedId, setDraggedId] = useState('')
@@ -2009,7 +2153,7 @@ function AccountsPage({ accounts, totalBalance, defaultCurrency, onAdd, onSelect
       ))}
     </div> : <div className="balance-sheet-groups">
       {groupedAccounts.map(({ group, accounts: rows }) => {
-        const groupBalance = rows.filter((account) => account.currency === defaultCurrency).reduce((sum, account) => sum + account.balanceMinor, 0)
+        const groupBalance = rows.reduce((sum, account) => sum + convertBalance(account), 0)
         return <section className="balance-sheet-group" key={group}>
           <div className="balance-sheet-group-heading"><div><span className="eyebrow">Balance sheet</span><h2>{group}</h2></div><strong>{formatMoney(groupBalance, defaultCurrency)}</strong></div>
           <div className="account-card-grid">{rows.map((account) => <button type="button" className="large-account-card" key={account.id} onClick={() => onSelectAccount(account.id)} aria-label={`View ${account.name} transactions`}><div className="large-account-top"><span style={{ background: account.color }}><Banknote size={20} /></span><small>{accountBalanceSheetGroup(account)} · {account.type}</small></div><h3>{account.name}</h3><strong>{formatMoney(account.balanceMinor, account.currency)}</strong><p>Provisional balance · {account.currency}</p></button>)}</div>
