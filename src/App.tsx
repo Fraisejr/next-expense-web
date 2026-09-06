@@ -34,6 +34,16 @@ function formatMoney(amountMinor: number, currency = 'EUR') {
   return formatter.format(amountMinor / 100)
 }
 
+function formatWholeMoney(amountMinor: number, currency = 'EUR') {
+  return new Intl.NumberFormat('en-IE', {
+    style: 'currency', currency, maximumFractionDigits: 0,
+  }).format(amountMinor / 100)
+}
+
+function roundToWholeEuroMinor(amountMinor: number) {
+  return Math.round(amountMinor / 100) * 100
+}
+
 function formatCompactMoney(amountMinor: number, currency = 'EUR') {
   return new Intl.NumberFormat('en-IE', {
     style: 'currency', currency, notation: 'compact', maximumFractionDigits: 1,
@@ -48,6 +58,21 @@ function parseMoneyToMinor(value: string, allowNegative = false) {
   const [whole, fraction = ''] = unsigned.split('.')
   const amountMinor = (Number(whole) * 100 + Number(fraction.padEnd(2, '0'))) * (negative ? -1 : 1)
   return Number.isSafeInteger(amountMinor) ? amountMinor : null
+}
+
+function parsePercentageToBps(value: string) {
+  const normalized = value.trim().replace(',', '.')
+  if (!/^\d+(\.\d{0,2})?$/.test(normalized)) return null
+  const rateBps = Math.round(Number(normalized) * 100)
+  return Number.isSafeInteger(rateBps) && rateBps >= 0 && rateBps <= 10_000 ? rateBps : null
+}
+
+function parseOptionalMoneyToMinor(value: string) {
+  return value.trim() === '' ? 0 : parseMoneyToMinor(value)
+}
+
+function parseOptionalPercentageToBps(value: string) {
+  return value.trim() === '' ? 0 : parsePercentageToBps(value)
 }
 
 const categoryIcons = {
@@ -2102,11 +2127,17 @@ function annualSpendingMetrics(data: AppData, scope: SpendingGoalScope, defaultC
 
 function YearlySpendingPlan({ data, defaultCurrency, historyLoading, onSavePlan }: { data: AppData; defaultCurrency: string; historyLoading: boolean; onSavePlan: (plan: YearlyFinancialPlan) => Promise<void> }) {
   const [scope, setScope] = useState<SpendingGoalScope>('Combined')
-  const [projectedIncomeInput, setProjectedIncomeInput] = useState('')
-  const [projectedTaxesInput, setProjectedTaxesInput] = useState('')
+  const [projectedCompanyIncomeInput, setProjectedCompanyIncomeInput] = useState('')
+  const [monthlySalaryInput, setMonthlySalaryInput] = useState('')
+  const [monthlySalaryTaxInput, setMonthlySalaryTaxInput] = useState('')
+  const [monthlySocialSecurityInput, setMonthlySocialSecurityInput] = useState('')
+  const [estimatedDividendInput, setEstimatedDividendInput] = useState('')
+  const [corporateTaxRateInput, setCorporateTaxRateInput] = useState('')
+  const [dividendTaxRateInput, setDividendTaxRateInput] = useState('')
   const [savingsGoalInput, setSavingsGoalInput] = useState('')
   const [personalSpendingInput, setPersonalSpendingInput] = useState('')
   const [companySpendingInput, setCompanySpendingInput] = useState('')
+  const [planComment, setPlanComment] = useState('')
   const [editingPlan, setEditingPlan] = useState(false)
   const [comparisonOpen, setComparisonOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -2119,10 +2150,20 @@ function YearlySpendingPlan({ data, defaultCurrency, historyLoading, onSavePlan 
   const previous = metrics.filter((metric) => metric.year < currentYear && (metric.income !== 0 || metric.expenses !== 0 || metric.taxes !== 0)).slice(-3)
   const comparison = [...previous, current]
   const plan = data.yearlyFinancialPlans.find((item) => item.year === currentYear)
-  const totalSpendingGoal = plan ? Math.max(0, plan.projectedIncomeMinor - plan.projectedTaxesMinor - plan.savingsGoalMinor) : 0
-  const personalSpendingGoal = Math.max(0, totalSpendingGoal - (plan?.companySpendingMinor ?? 0))
-  const goalAmount = scope === 'Company' ? plan?.companySpendingMinor ?? 0 : scope === 'Personal' ? personalSpendingGoal : totalSpendingGoal
-  const goalLabel = scope === 'Combined' ? 'Total spending goal' : `${scope} spending goal`
+  const annualSalary = (plan?.monthlySalaryMinor ?? 0) * 12
+  const annualSalaryTax = (plan?.monthlySalaryTaxMinor ?? 0) * 12
+  const annualSocialSecurity = (plan?.monthlySocialSecurityMinor ?? 0) * 12
+  const taxableCorporateIncome = plan ? Math.max(0, plan.projectedCompanyIncomeMinor - plan.companySpendingMinor - annualSalary - annualSalaryTax - annualSocialSecurity) : 0
+  const estimatedCorporateTax = plan ? Math.round(taxableCorporateIncome * plan.corporateTaxRateBps / 10_000) : 0
+  const estimatedDividendTax = plan ? Math.round(plan.estimatedDividendMinor * plan.dividendTaxRateBps / 10_000) : 0
+  const totalProjectedTaxes = plan ? plan.legacyProjectedTaxesMinor ?? annualSalaryTax + annualSocialSecurity + estimatedCorporateTax + estimatedDividendTax : 0
+  const calculatedSpendingLimit = plan ? roundToWholeEuroMinor(Math.max(0, plan.projectedCompanyIncomeMinor - totalProjectedTaxes - plan.savingsGoalMinor)) : 0
+  const personalSpendingGoal = plan?.personalSpendingMinor ?? 0
+  const combinedSpendingGoal = personalSpendingGoal + (plan?.companySpendingMinor ?? 0)
+  const goalAmount = scope === 'Company' ? plan?.companySpendingMinor ?? 0 : scope === 'Personal' ? personalSpendingGoal : combinedSpendingGoal
+  const goalLabel = scope === 'Combined' ? 'Combined spending goal' : `${scope} spending goal`
+  const goalContext = scope === 'Combined' ? 'Personal + company budgets' : 'Saved annual budget'
+  const savedGoalVariance = roundToWholeEuroMinor(combinedSpendingGoal) - calculatedSpendingLimit
   const progress = goalAmount > 0 ? current.expenses / goalAmount * 100 : 0
   const currentDate = new Date(`${today}T12:00:00Z`)
   const startOfYear = new Date(Date.UTC(currentYear, 0, 1))
@@ -2132,38 +2173,54 @@ function YearlySpendingPlan({ data, defaultCurrency, historyLoading, onSavePlan 
   const expectedSpend = goalAmount * elapsedFraction
   const paceDifference = current.expenses - expectedSpend
   const comparisonMaximum = Math.max(1, ...comparison.flatMap((metric) => [metric.income, metric.expenses, metric.taxes, Math.abs(metric.income - metric.expenses - metric.taxes)]))
-  const draftProjectedIncome = parseMoneyToMinor(projectedIncomeInput)
-  const draftProjectedTaxes = parseMoneyToMinor(projectedTaxesInput)
+  const draftProjectedCompanyIncome = parseMoneyToMinor(projectedCompanyIncomeInput)
+  const draftMonthlySalary = parseOptionalMoneyToMinor(monthlySalaryInput)
+  const draftMonthlySalaryTax = parseOptionalMoneyToMinor(monthlySalaryTaxInput)
+  const draftMonthlySocialSecurity = parseOptionalMoneyToMinor(monthlySocialSecurityInput)
+  const draftEstimatedDividend = parseOptionalMoneyToMinor(estimatedDividendInput)
+  const draftCorporateTaxRate = parseOptionalPercentageToBps(corporateTaxRateInput)
+  const draftDividendTaxRate = parseOptionalPercentageToBps(dividendTaxRateInput)
   const draftSavingsGoal = parseMoneyToMinor(savingsGoalInput)
   const draftPersonalSpending = parseMoneyToMinor(personalSpendingInput)
   const draftCompanySpending = parseMoneyToMinor(companySpendingInput)
-  const draftSpendingGoal = Math.max(0, (draftProjectedIncome ?? 0) - (draftProjectedTaxes ?? 0) - (draftSavingsGoal ?? 0))
+  const draftAnnualSalary = (draftMonthlySalary ?? 0) * 12
+  const draftAnnualSalaryTax = (draftMonthlySalaryTax ?? 0) * 12
+  const draftAnnualSocialSecurity = (draftMonthlySocialSecurity ?? 0) * 12
+  const draftTaxableCorporateIncome = Math.max(0, (draftProjectedCompanyIncome ?? 0) - (draftCompanySpending ?? 0) - draftAnnualSalary - draftAnnualSalaryTax - draftAnnualSocialSecurity)
+  const draftCorporateTax = Math.round(draftTaxableCorporateIncome * (draftCorporateTaxRate ?? 0) / 10_000)
+  const draftDividendTax = Math.round((draftEstimatedDividend ?? 0) * (draftDividendTaxRate ?? 0) / 10_000)
+  const draftTotalTaxes = draftAnnualSalaryTax + draftAnnualSocialSecurity + draftCorporateTax + draftDividendTax
+  const draftSpendingGoal = roundToWholeEuroMinor(Math.max(0, (draftProjectedCompanyIncome ?? 0) - draftTotalTaxes - (draftSavingsGoal ?? 0)))
+  const draftMaximumPersonalSpending = Math.max(0, draftSpendingGoal - (draftCompanySpending ?? 0))
   const draftAllocatedSpending = (draftPersonalSpending ?? 0) + (draftCompanySpending ?? 0)
-  const draftAllocationDifference = draftSpendingGoal - draftAllocatedSpending
+  const draftAllocationVariance = roundToWholeEuroMinor(draftAllocatedSpending) - draftSpendingGoal
   const moneyInput = (amountMinor: number) => (amountMinor / 100).toFixed(2)
 
   const resetPlanInputs = useCallback(() => {
-    setProjectedIncomeInput(plan ? moneyInput(plan.projectedIncomeMinor) : '')
-    setProjectedTaxesInput(plan ? moneyInput(plan.projectedTaxesMinor) : '')
+    setProjectedCompanyIncomeInput(plan ? moneyInput(plan.projectedCompanyIncomeMinor) : '')
+    const hasDetailedTaxes = plan && plan.legacyProjectedTaxesMinor === undefined
+    setMonthlySalaryInput(hasDetailedTaxes ? moneyInput(plan?.monthlySalaryMinor ?? 0) : '')
+    setMonthlySalaryTaxInput(hasDetailedTaxes ? moneyInput(plan?.monthlySalaryTaxMinor ?? 0) : '')
+    setMonthlySocialSecurityInput(hasDetailedTaxes ? moneyInput(plan?.monthlySocialSecurityMinor ?? 0) : '')
+    setEstimatedDividendInput(hasDetailedTaxes ? moneyInput(plan?.estimatedDividendMinor ?? 0) : '')
+    setCorporateTaxRateInput(hasDetailedTaxes ? ((plan?.corporateTaxRateBps ?? 0) / 100).toFixed(2) : '')
+    setDividendTaxRateInput(hasDetailedTaxes ? ((plan?.dividendTaxRateBps ?? 0) / 100).toFixed(2) : '')
     setSavingsGoalInput(plan ? moneyInput(plan.savingsGoalMinor) : '')
     setCompanySpendingInput(plan ? moneyInput(plan.companySpendingMinor) : '')
-    setPersonalSpendingInput(plan ? moneyInput(personalSpendingGoal) : '')
+    setPersonalSpendingInput(plan ? moneyInput(plan.personalSpendingMinor) : '')
+    setPlanComment(plan?.comment ?? '')
     setSaveError('')
-  }, [personalSpendingGoal, plan])
+  }, [plan])
 
   useEffect(() => { resetPlanInputs() }, [resetPlanInputs])
 
   const savePlan = async () => {
-    if ([draftProjectedIncome, draftProjectedTaxes, draftSavingsGoal, draftPersonalSpending, draftCompanySpending].some((value) => value === null)) {
+    if ([draftProjectedCompanyIncome, draftMonthlySalary, draftMonthlySalaryTax, draftMonthlySocialSecurity, draftEstimatedDividend, draftCorporateTaxRate, draftDividendTaxRate, draftSavingsGoal, draftPersonalSpending, draftCompanySpending].some((value) => value === null)) {
       setSaveError('Enter valid non-negative amounts with no more than two decimal places.')
       return
     }
     if (draftSpendingGoal <= 0) {
-      setSaveError('Projected income must be greater than projected taxes plus the savings goal.')
-      return
-    }
-    if (draftAllocationDifference !== 0) {
-      setSaveError(`Personal and company spending must add up to ${formatMoney(draftSpendingGoal, defaultCurrency)}.`)
+      setSaveError('Projected company income must be greater than estimated total taxes plus the savings goal.')
       return
     }
     setSaving(true)
@@ -2171,10 +2228,17 @@ function YearlySpendingPlan({ data, defaultCurrency, historyLoading, onSavePlan 
     try {
       await onSavePlan({
         year: currentYear,
-        projectedIncomeMinor: draftProjectedIncome!,
-        projectedTaxesMinor: draftProjectedTaxes!,
+        projectedCompanyIncomeMinor: draftProjectedCompanyIncome!,
+        monthlySalaryMinor: draftMonthlySalary!,
+        monthlySalaryTaxMinor: draftMonthlySalaryTax!,
+        monthlySocialSecurityMinor: draftMonthlySocialSecurity!,
+        estimatedDividendMinor: draftEstimatedDividend!,
+        corporateTaxRateBps: draftCorporateTaxRate!,
+        dividendTaxRateBps: draftDividendTaxRate!,
         savingsGoalMinor: draftSavingsGoal!,
+        personalSpendingMinor: draftPersonalSpending!,
         companySpendingMinor: draftCompanySpending!,
+        comment: planComment.trim(),
       })
       setEditingPlan(false)
     } catch (cause) {
@@ -2186,29 +2250,50 @@ function YearlySpendingPlan({ data, defaultCurrency, historyLoading, onSavePlan 
 
   return <section className="panel yearly-spending-plan">
     <div className="yearly-spending-heading">
-      <div><span className="eyebrow">Yearly spending · {currentYear}</span><h2>Expenses so far this year</h2><p>Your spending ceiling is projected income minus total projected taxes and your savings goal.</p></div>
+      <div><span className="eyebrow">Yearly spending · {currentYear}</span><h2>Expenses so far this year</h2><p>Your spending ceiling is projected company income minus estimated total taxes and your savings goal.</p></div>
       <div className="segmented three-way yearly-scope" aria-label="Spending scope">{(['Personal', 'Company', 'Combined'] as SpendingGoalScope[]).map((item) => <button type="button" key={item} className={scope === item ? 'active transfer' : ''} aria-pressed={scope === item} onClick={() => setScope(item)}>{item}</button>)}</div>
     </div>
     {historyLoading && <div className="yearly-history-loading"><LoaderCircle size={14} />Loading complete history for an accurate year-to-date comparison…</div>}
     <div className="yearly-spending-summary">
-      <div className="yearly-spent-value"><span>Spent year to date</span><strong>{formatMoney(current.expenses, defaultCurrency)}</strong><small>{goalAmount > 0 ? `${Math.round(progress)}% of ${formatMoney(goalAmount, defaultCurrency)} goal` : 'Set up this year’s financial plan'}</small><small className="taxes-excluded">Taxes tracked separately · {formatMoney(current.taxes, defaultCurrency)} posted</small></div>
+      <div className="yearly-spent-value"><span>Spent year to date</span><strong>{formatMoney(current.expenses, defaultCurrency)}</strong><small>{goalAmount > 0 ? `${Math.round(progress)}% of ${formatMoney(goalAmount, defaultCurrency)} goal` : 'Set up this year’s financial plan'}</small><small className="taxes-excluded">{formatMoney(totalProjectedTaxes, defaultCurrency)} projected taxes · {formatMoney(current.taxes, defaultCurrency)} posted</small></div>
       <div className="yearly-progress">
         <div className="yearly-progress-track" role="img" aria-label={goalAmount > 0 ? `${Math.round(progress)}% of the goal spent; on-plan spending is ${Math.round(paceProgress)}% by today` : 'Set up the yearly financial plan to see spending pace'}><span className={progress > 100 ? 'over' : ''} style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} />{goalAmount > 0 && <i className="yearly-pace-marker" style={{ left: `${Math.min(100, paceProgress)}%` }} />}</div>
         {goalAmount > 0 && <div className="yearly-progress-legend"><span><i />Spent {Math.round(progress)}%</span><span><i />On-plan today {Math.round(paceProgress)}%</span></div>}
-        <div className="yearly-remaining"><span>{progress > 100 ? 'Over spending goal' : 'Remaining this year'}</span><strong className={progress > 100 ? 'negative' : ''}>{goalAmount > 0 ? formatMoney(progress > 100 ? current.expenses - goalAmount : goalAmount - current.expenses, defaultCurrency) : '—'}</strong>{goalAmount > 0 && <small className={paceDifference > 0 ? 'over-pace' : 'under-pace'}>{formatMoney(Math.abs(paceDifference), defaultCurrency)} {paceDifference > 0 ? 'over' : 'under'} today’s spending pace</small>}</div>
+        <div className="yearly-remaining"><span>{progress > 100 ? 'Over spending goal' : 'Remaining this year'}</span><strong className={progress > 100 ? 'negative' : ''}>{goalAmount > 0 ? formatMoney(progress > 100 ? current.expenses - goalAmount : goalAmount - current.expenses, defaultCurrency) : '—'}</strong>{goalAmount > 0 && <small className={paceDifference > 0 ? 'over-pace' : 'under-pace'}>{paceDifference === 0 ? 'On year-to-date target' : `${formatMoney(Math.abs(paceDifference), defaultCurrency)} ${paceDifference > 0 ? 'above' : 'below'} year-to-date target`}</small>}</div>
       </div>
-      <div className="yearly-goal-display"><span>{goalLabel}<em>After total taxes &amp; savings</em></span><div><strong>{goalAmount > 0 ? formatMoney(goalAmount, defaultCurrency) : 'Not set'}</strong><button type="button" className="icon-button yearly-goal-edit" aria-label="Edit yearly financial plan" title="Edit plan" onClick={() => setEditingPlan(true)}><Pencil size={13} /></button></div></div>
+      <div className="yearly-goal-display">
+        <span>{goalLabel}<em>{goalContext}</em></span>
+        <div className="yearly-goal-primary"><strong>{goalAmount > 0 ? formatMoney(goalAmount, defaultCurrency) : 'Not set'}</strong><button type="button" className="icon-button yearly-goal-edit" aria-label="Edit yearly financial plan" title="Edit plan" onClick={() => setEditingPlan(true)}><Pencil size={13} /></button></div>
+        {plan && scope === 'Combined' && <small className={`yearly-saved-goal-variance ${savedGoalVariance > 0 ? 'over' : savedGoalVariance < 0 ? 'under' : ''}`}>{savedGoalVariance === 0 ? 'Matches the calculated spending limit' : `${formatWholeMoney(Math.abs(savedGoalVariance), defaultCurrency)} ${savedGoalVariance > 0 ? 'above' : 'below'} the calculated limit`}</small>}
+        <div className="yearly-savings-goal"><span>Savings goal</span><strong>{plan ? formatMoney(plan.savingsGoalMinor, defaultCurrency) : 'Not set'}</strong></div>
+      </div>
+      {plan?.comment && <p className="yearly-plan-comment">{plan.comment}</p>}
     </div>
     {editingPlan && <div className="yearly-plan-editor">
       <div className="yearly-plan-editor-heading"><div><span className="eyebrow">Financial plan · {currentYear}</span><h3>Set the year’s limits</h3></div><button type="button" className="icon-button" aria-label="Close financial plan editor" onClick={() => { resetPlanInputs(); setEditingPlan(false) }}><X size={15} /></button></div>
       <div className="yearly-plan-inputs">
-        <label><span>Projected income</span><div><b>{defaultCurrency}</b><input autoFocus type="number" min="0" step="0.01" value={projectedIncomeInput} onChange={(event) => setProjectedIncomeInput(event.target.value)} /></div><small>Full-year income, including income already received.</small></label>
-        <label><span>Projected total taxes</span><div><b>{defaultCurrency}</b><input type="number" min="0" step="0.01" value={projectedTaxesInput} onChange={(event) => setProjectedTaxesInput(event.target.value)} /></div><small>Includes {formatMoney(postedTaxes, defaultCurrency)} already posted across personal and company; it is deducted only once.</small></label>
+        <label><span>Projected company income</span><div><b>{defaultCurrency}</b><input autoFocus type="number" min="0" step="0.01" value={projectedCompanyIncomeInput} onChange={(event) => setProjectedCompanyIncomeInput(event.target.value)} /></div><small>Full-year company revenue, including income already received.</small></label>
         <label><span>Savings goal</span><div><b>{defaultCurrency}</b><input type="number" min="0" step="0.01" value={savingsGoalInput} onChange={(event) => setSavingsGoalInput(event.target.value)} /></div><small>What you want left after spending and total taxes.</small></label>
+        <label><span>Estimated dividend</span><div><b>{defaultCurrency}</b><input type="number" min="0" step="0.01" placeholder="0" value={estimatedDividendInput} onChange={(event) => setEstimatedDividendInput(event.target.value)} /></div><small>Optional; blank is treated as zero.</small></label>
       </div>
-      <div className="yearly-plan-equation"><span>Projected income</span><b>−</b><span>Total projected taxes</span><b>−</b><span>Savings goal</span><b>=</b><strong>{formatMoney(draftSpendingGoal, defaultCurrency)} spending goal</strong></div>
-      <div className="yearly-plan-allocation"><div><span className="eyebrow">Allocate spending</span><h4>Personal and company spending</h4><p>These two amounts must equal the calculated spending goal.</p></div><label><span>Personal</span><div><b>{defaultCurrency}</b><input type="number" min="0" step="0.01" value={personalSpendingInput} onChange={(event) => setPersonalSpendingInput(event.target.value)} /></div></label><label><span>Company</span><div><b>{defaultCurrency}</b><input type="number" min="0" step="0.01" value={companySpendingInput} onChange={(event) => setCompanySpendingInput(event.target.value)} /></div></label></div>
-      {draftAllocationDifference !== 0 && <p className={draftAllocationDifference > 0 ? 'yearly-plan-unallocated' : 'yearly-plan-unallocated over'}>{draftAllocationDifference > 0 ? `${formatMoney(draftAllocationDifference, defaultCurrency)} still to allocate` : `${formatMoney(Math.abs(draftAllocationDifference), defaultCurrency)} over-allocated`}</p>}
+      {plan?.legacyProjectedTaxesMinor !== undefined && <p className="yearly-plan-legacy-note">Add the tax details below to replace the previous {formatMoney(plan.legacyProjectedTaxesMinor, defaultCurrency)} total-tax estimate.</p>}
+      <div className="yearly-tax-inputs">
+        <label><span>Monthly salary</span><div><b>{defaultCurrency}</b><input type="number" min="0" step="0.01" placeholder="0" value={monthlySalaryInput} onChange={(event) => setMonthlySalaryInput(event.target.value)} /></div><small>Deducted from taxable corporate profit.</small></label>
+        <label><span>Monthly salary tax</span><div><b>{defaultCurrency}</b><input type="number" min="0" step="0.01" placeholder="0" value={monthlySalaryTaxInput} onChange={(event) => setMonthlySalaryTaxInput(event.target.value)} /></div><small>Annualized and deducted from corporate profit.</small></label>
+        <label><span>Monthly social security</span><div><b>{defaultCurrency}</b><input type="number" min="0" step="0.01" placeholder="0" value={monthlySocialSecurityInput} onChange={(event) => setMonthlySocialSecurityInput(event.target.value)} /></div><small>Annualized and deducted from corporate profit.</small></label>
+        <label className="rate"><span>Corporate tax rate</span><div><input type="number" min="0" max="100" step="0.01" placeholder="0" value={corporateTaxRateInput} onChange={(event) => setCorporateTaxRateInput(event.target.value)} /><b>%</b></div><small>Applied to estimated net corporate income.</small></label>
+        <label className="rate"><span>Average dividend tax</span><div><input type="number" min="0" max="100" step="0.01" placeholder="0" value={dividendTaxRateInput} onChange={(event) => setDividendTaxRateInput(event.target.value)} /><b>%</b></div><small>Flat planning rate; progressive bands are ignored.</small></label>
+      </div>
+      <div className="yearly-plan-allocation"><div><span className="eyebrow">Spending budgets</span><h4>Company and personal spending</h4><p>Company expenses determine taxable profit; personal spending can then be set against the remaining limit.</p></div><label><span>Company expenses</span><div><b>{defaultCurrency}</b><input type="number" min="0" step="0.01" value={companySpendingInput} onChange={(event) => setCompanySpendingInput(event.target.value)} /></div><small>Used in the corporate-tax calculation.</small></label><label><span>Personal spending</span><div><b>{defaultCurrency}</b><input type="number" min="0" step="0.01" value={personalSpendingInput} onChange={(event) => setPersonalSpendingInput(event.target.value)} /></div><small>Maximum to match savings goal: <strong>{formatWholeMoney(draftMaximumPersonalSpending, defaultCurrency)}</strong></small></label></div>
+      <div className="yearly-tax-calculation">
+        <div><span>Estimated net corporate income</span><strong>{formatMoney(draftTaxableCorporateIncome, defaultCurrency)}</strong><small>Company income − company expenses − annual salary, salary tax, and social security</small></div>
+        <div><span>Corporate tax</span><strong>{formatMoney(draftCorporateTax, defaultCurrency)}</strong><small>{corporateTaxRateInput || '0'}% of estimated net income</small></div>
+        <div><span>Dividend tax</span><strong>{formatMoney(draftDividendTax, defaultCurrency)}</strong><small>{dividendTaxRateInput || '0'}% of the estimated dividend</small></div>
+        <div className="total"><span>Estimated total taxes</span><strong>{formatMoney(draftTotalTaxes, defaultCurrency)}</strong><small>Includes annual salary tax and social security; {formatMoney(postedTaxes, defaultCurrency)} already posted is not deducted again.</small></div>
+      </div>
+      <div className="yearly-plan-equation"><span>Projected company income</span><b>−</b><span>Estimated total taxes</span><b>−</b><span>Savings goal</span><b>=</b><strong>{formatWholeMoney(draftSpendingGoal, defaultCurrency)} calculated spending limit</strong></div>
+      <label className="yearly-plan-comment-input"><span>Comment <em>Optional · 280 characters</em></span><textarea rows={3} maxLength={280} value={planComment} onChange={(event) => setPlanComment(event.target.value)} placeholder="Add a short note about this year’s plan" /></label>
+      <p className={`yearly-plan-budget-variance ${draftAllocationVariance > 0 ? 'over' : draftAllocationVariance < 0 ? 'under' : 'on-goal'}`}>{draftAllocationVariance === 0 ? 'Combined budgets match the calculated spending limit' : `${formatWholeMoney(Math.abs(draftAllocationVariance), defaultCurrency)} ${draftAllocationVariance > 0 ? 'above' : 'below'} the calculated spending limit`}</p>
       {saveError && <p className="yearly-plan-error" role="alert">{saveError}</p>}
       <div className="yearly-plan-actions"><button type="button" className="secondary-button" disabled={saving} onClick={() => { resetPlanInputs(); setEditingPlan(false) }}>Cancel</button><button type="button" className="primary-button" disabled={saving} onClick={() => void savePlan()}>{saving ? 'Saving…' : 'Save financial plan'}</button></div>
     </div>}
@@ -2221,7 +2306,7 @@ function YearlySpendingPlan({ data, defaultCurrency, historyLoading, onSavePlan 
           <div className="yearly-comparison-bars"><div><span>Income</span><i><b style={{ width: `${Math.max(0, metric.income) / comparisonMaximum * 100}%` }} /></i><strong>{formatMoney(metric.income, defaultCurrency)}</strong></div><div className="expense"><span>Expenses</span><i><b style={{ width: `${Math.max(0, metric.expenses) / comparisonMaximum * 100}%` }} /></i><strong>{formatMoney(metric.expenses, defaultCurrency)}</strong></div><div className="tax"><span>Taxes</span><i><b style={{ width: `${Math.max(0, metric.taxes) / comparisonMaximum * 100}%` }} /></i><strong>{formatMoney(metric.taxes, defaultCurrency)}</strong></div><div className={`net-income ${netIncome < 0 ? 'negative-net' : ''}`}><span>Net income</span><i><b style={{ width: `${Math.abs(netIncome) / comparisonMaximum * 100}%` }} /></i><strong>{formatMoney(netIncome, defaultCurrency)}</strong></div></div>
         </div>
       })}</div>
-      {plan && <div className="yearly-suggestion"><Target size={16} /><p><strong>{formatMoney(plan.savingsGoalMinor, defaultCurrency)} savings goal from {formatMoney(plan.projectedIncomeMinor, defaultCurrency)} projected income</strong><span>{formatMoney(plan.projectedTaxesMinor, defaultCurrency)} total projected taxes · {formatMoney(personalSpendingGoal, defaultCurrency)} personal spending · {formatMoney(plan.companySpendingMinor, defaultCurrency)} company spending</span></p></div>}
+      {plan && <div className="yearly-suggestion"><Target size={16} /><p><strong>{formatMoney(plan.savingsGoalMinor, defaultCurrency)} savings goal from {formatMoney(plan.projectedCompanyIncomeMinor, defaultCurrency)} projected company income</strong><span>{formatMoney(totalProjectedTaxes, defaultCurrency)} estimated total taxes · {formatMoney(personalSpendingGoal, defaultCurrency)} personal spending · {formatMoney(plan.companySpendingMinor, defaultCurrency)} company spending</span></p></div>}
     </div>}
   </section>
 }

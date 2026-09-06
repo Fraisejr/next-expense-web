@@ -462,12 +462,31 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
     const year = Number(yearKey)
     if (!Number.isInteger(year) || !storedPlan || typeof storedPlan !== 'object' || Array.isArray(storedPlan)) return []
     const values = storedPlan as Record<string, unknown>
-    const projectedIncomeMinor = Number(values.projectedIncomeMinor)
-    const projectedTaxesMinor = Number(values.projectedTaxesMinor)
+    const projectedCompanyIncomeMinor = Number(values.projectedCompanyIncomeMinor ?? values.projectedIncomeMinor)
     const savingsGoalMinor = Number(values.savingsGoalMinor)
     const companySpendingMinor = Number(values.companySpendingMinor)
-    return [projectedIncomeMinor, projectedTaxesMinor, savingsGoalMinor, companySpendingMinor].every((value) => Number.isSafeInteger(value) && value >= 0)
-      ? [{ year, projectedIncomeMinor, projectedTaxesMinor, savingsGoalMinor, companySpendingMinor }]
+    const storedPersonalSpendingMinor = Number(values.personalSpendingMinor)
+    const comment = typeof values.comment === 'string' ? values.comment : ''
+    const detailedValues = ['monthlySalaryMinor', 'monthlySalaryTaxMinor', 'monthlySocialSecurityMinor', 'estimatedDividendMinor', 'corporateTaxRateBps', 'dividendTaxRateBps']
+      .map((key) => Number(values[key]))
+    const baseValues = [projectedCompanyIncomeMinor, savingsGoalMinor, companySpendingMinor]
+    if (!baseValues.every((value) => Number.isSafeInteger(value) && value >= 0)) return []
+    if (detailedValues.every((value) => Number.isSafeInteger(value) && value >= 0)) {
+      const [monthlySalaryMinor, monthlySalaryTaxMinor, monthlySocialSecurityMinor, estimatedDividendMinor, corporateTaxRateBps, dividendTaxRateBps] = detailedValues
+      if (corporateTaxRateBps > 10_000 || dividendTaxRateBps > 10_000) return []
+      const taxableCorporateIncome = Math.max(0, projectedCompanyIncomeMinor - companySpendingMinor - (monthlySalaryMinor + monthlySalaryTaxMinor + monthlySocialSecurityMinor) * 12)
+      const totalTaxes = monthlySalaryTaxMinor * 12 + monthlySocialSecurityMinor * 12
+        + Math.round(taxableCorporateIncome * corporateTaxRateBps / 10_000)
+        + Math.round(estimatedDividendMinor * dividendTaxRateBps / 10_000)
+      const derivedPersonalSpending = Math.max(0, projectedCompanyIncomeMinor - totalTaxes - savingsGoalMinor - companySpendingMinor)
+      const personalSpendingMinor = Number.isSafeInteger(storedPersonalSpendingMinor) && storedPersonalSpendingMinor >= 0 ? storedPersonalSpendingMinor : derivedPersonalSpending
+      return [{ year, projectedCompanyIncomeMinor, monthlySalaryMinor, monthlySalaryTaxMinor, monthlySocialSecurityMinor, estimatedDividendMinor, corporateTaxRateBps, dividendTaxRateBps, savingsGoalMinor, personalSpendingMinor, companySpendingMinor, comment }]
+    }
+    const legacyProjectedTaxesMinor = Number(values.projectedTaxesMinor)
+    const derivedPersonalSpending = Math.max(0, projectedCompanyIncomeMinor - legacyProjectedTaxesMinor - savingsGoalMinor - companySpendingMinor)
+    const personalSpendingMinor = Number.isSafeInteger(storedPersonalSpendingMinor) && storedPersonalSpendingMinor >= 0 ? storedPersonalSpendingMinor : derivedPersonalSpending
+    return Number.isSafeInteger(legacyProjectedTaxesMinor) && legacyProjectedTaxesMinor >= 0
+      ? [{ year, projectedCompanyIncomeMinor, monthlySalaryMinor: 0, monthlySalaryTaxMinor: 0, monthlySocialSecurityMinor: 0, estimatedDividendMinor: 0, corporateTaxRateBps: 0, dividendTaxRateBps: 0, savingsGoalMinor, personalSpendingMinor, companySpendingMinor, comment, legacyProjectedTaxesMinor }]
       : []
   })
 
@@ -1286,9 +1305,20 @@ export async function updateTaxRate(workspaceId: string, estimatedCompanyTaxRate
 }
 
 export async function saveYearlyFinancialPlans(workspaceId: string, plans: YearlyFinancialPlan[]) {
-  const storedGoals = plans.reduce<Record<string, Omit<YearlyFinancialPlan, 'year'>>>((years, plan) => {
-    const { year, ...storedPlan } = plan
-    years[String(year)] = storedPlan
+  const storedGoals = plans.reduce<Record<string, Omit<YearlyFinancialPlan, 'year' | 'legacyProjectedTaxesMinor'>>>((years, plan) => {
+    years[String(plan.year)] = {
+      projectedCompanyIncomeMinor: plan.projectedCompanyIncomeMinor,
+      monthlySalaryMinor: plan.monthlySalaryMinor,
+      monthlySalaryTaxMinor: plan.monthlySalaryTaxMinor,
+      monthlySocialSecurityMinor: plan.monthlySocialSecurityMinor,
+      estimatedDividendMinor: plan.estimatedDividendMinor,
+      corporateTaxRateBps: plan.corporateTaxRateBps,
+      dividendTaxRateBps: plan.dividendTaxRateBps,
+      savingsGoalMinor: plan.savingsGoalMinor,
+      personalSpendingMinor: plan.personalSpendingMinor,
+      companySpendingMinor: plan.companySpendingMinor,
+      comment: plan.comment,
+    }
     return years
   }, {})
   const { error } = await neon.from('workspaces').update({ yearly_spending_goals: storedGoals }).eq('id', workspaceId)

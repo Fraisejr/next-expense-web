@@ -137,27 +137,56 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .yearly-remaining > small.over-pace { color: #a64f3b; }
 .yearly-goal-display > span { display: flex; align-items: center; justify-content: flex-end; gap: 8px; color: var(--muted); font-size: 8.5px; font-weight: 800; }
 .yearly-goal-display > span em { color: #9a674f; font-size: 8px; font-style: normal; font-weight: 700; }
-.yearly-goal-display > div { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 8px; }
-.yearly-goal-display strong { font-family: 'DM Mono', monospace; font-size: 18px; font-weight: 500; }
+.yearly-goal-primary { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.yearly-goal-primary > strong { font-family: 'DM Mono', monospace; font-size: 18px; font-weight: 500; }
 .yearly-goal-edit { width: 27px; height: 27px; background: #fff; border: 1px solid #d6dad2; }
+.yearly-saved-goal-variance { display: block; margin-top: 5px; color: #68716b; font-size: 8px; font-weight: 700; text-align: right; }
+.yearly-saved-goal-variance.under { color: #4f786d; }
+.yearly-saved-goal-variance.over { color: #a14e3b; }
+.yearly-savings-goal { margin-top: 15px; padding-top: 12px; border-top: 1px solid #d9ddd5; text-align: right; }
+.yearly-savings-goal > span, .yearly-savings-goal > strong { display: block; }
+.yearly-savings-goal > span { color: #4f786d; font-size: 8px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.yearly-savings-goal > strong { margin-top: 4px; color: #274c43; font-family: 'DM Mono', monospace; font-size: 17px; font-weight: 600; letter-spacing: -.03em; }
+.yearly-plan-comment { grid-column: 1 / -1; width: 100%; margin-top: 3px; padding-top: 12px; color: #68716b; border-top: 1px solid #d9ddd5; font-size: 8.5px; line-height: 1.5; text-align: left; white-space: pre-line; }
 .yearly-plan-editor { margin-top: 14px; padding: 17px 18px; background: #fbfbf8; border: 1px solid #dfe2da; border-radius: 10px; }
 .yearly-plan-editor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }
 .yearly-plan-editor-heading h3 { margin-top: 3px; font-family: 'Newsreader', serif; font-size: 20px; }
 .yearly-plan-editor-heading > .icon-button { width: 28px; height: 28px; }
 .yearly-plan-inputs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; margin-top: 14px; }
-.yearly-plan-inputs label > span, .yearly-plan-allocation label > span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 8px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
-.yearly-plan-inputs label > div, .yearly-plan-allocation label > div { display: flex; height: 38px; overflow: hidden; background: #fff; border: 1px solid #d6dad2; border-radius: 7px; }
-.yearly-plan-inputs label b, .yearly-plan-allocation label b { display: grid; place-items: center; padding: 0 9px; color: #667068; background: #eceee8; border-right: 1px solid #d6dad2; font-family: 'DM Mono', monospace; font-size: 9px; }
-.yearly-plan-inputs input, .yearly-plan-allocation input { min-width: 0; width: 100%; padding: 0 10px; color: var(--ink); background: transparent; border: 0; outline: 0; font-size: 11px; }
-.yearly-plan-inputs small { display: block; margin-top: 5px; color: #7b827d; font-size: 8px; line-height: 1.4; }
+.yearly-tax-inputs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 15px; padding-top: 15px; border-top: 1px solid #e1e3dd; }
+.yearly-plan-inputs label > span, .yearly-tax-inputs label > span, .yearly-plan-allocation label > span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 8px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.yearly-plan-inputs label > div, .yearly-tax-inputs label > div, .yearly-plan-allocation label > div { display: flex; height: 38px; overflow: hidden; background: #fff; border: 1px solid #d6dad2; border-radius: 7px; }
+.yearly-plan-inputs label b, .yearly-tax-inputs label b, .yearly-plan-allocation label b { display: grid; place-items: center; padding: 0 9px; color: #667068; background: #eceee8; border-right: 1px solid #d6dad2; font-family: 'DM Mono', monospace; font-size: 9px; }
+.yearly-tax-inputs label.rate b { border-right: 0; border-left: 1px solid #d6dad2; }
+.yearly-plan-inputs input, .yearly-tax-inputs input, .yearly-plan-allocation input { min-width: 0; width: 100%; padding: 0 10px; color: var(--ink); background: transparent; border: 0; outline: 0; font-size: 11px; }
+.yearly-plan-inputs small, .yearly-tax-inputs small { display: block; margin-top: 5px; color: #7b827d; font-size: 8px; line-height: 1.4; }
+.yearly-plan-legacy-note { margin-top: 12px; padding: 8px 10px; color: #8a6840; background: #f7f1e7; border-radius: 6px; font-size: 8.5px; font-weight: 700; }
 .yearly-plan-equation { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 7px; margin-top: 15px; padding: 10px 12px; color: #69736d; background: #eef1ec; border-radius: 7px; font-size: 8.5px; }
 .yearly-plan-equation b { color: #946148; font-size: 12px; }
 .yearly-plan-equation strong { color: #274c43; font-family: 'DM Mono', monospace; font-size: 10px; }
 .yearly-plan-allocation { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(150px, .65fr) minmax(150px, .65fr); align-items: end; gap: 13px; margin-top: 15px; }
 .yearly-plan-allocation h4 { margin-top: 3px; font-family: 'Newsreader', serif; font-size: 17px; }
 .yearly-plan-allocation p { margin-top: 3px; color: var(--muted); font-size: 8px; }
-.yearly-plan-unallocated, .yearly-plan-error { margin-top: 9px; color: #8a6840; font-size: 8.5px; font-weight: 700; text-align: right; }
-.yearly-plan-unallocated.over, .yearly-plan-error { color: #a14e3b; }
+.yearly-plan-allocation label > small { display: block; margin-top: 5px; color: #7b827d; font-size: 8px; line-height: 1.4; }
+.yearly-plan-allocation label > small strong { color: #315f54; font-family: 'DM Mono', monospace; font-weight: 600; }
+.yearly-tax-calculation { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-top: 15px; overflow: hidden; background: #dfe3dc; border: 1px solid #dfe3dc; border-radius: 8px; }
+.yearly-tax-calculation > div { padding: 11px 12px; background: #f5f6f2; }
+.yearly-tax-calculation span, .yearly-tax-calculation strong, .yearly-tax-calculation small { display: block; }
+.yearly-tax-calculation span { color: var(--muted); font-size: 7.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.yearly-tax-calculation strong { margin-top: 4px; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 600; }
+.yearly-tax-calculation small { margin-top: 4px; color: #7a827d; font-size: 7.5px; line-height: 1.35; }
+.yearly-tax-calculation > div.total { background: #e9f0ec; }
+.yearly-tax-calculation > div.total strong { color: #315f54; }
+.yearly-plan-error { margin-top: 9px; color: #a14e3b; font-size: 8.5px; font-weight: 700; text-align: right; }
+.yearly-plan-budget-variance { margin-top: 10px; font-size: 9px; font-weight: 800; text-align: right; }
+.yearly-plan-budget-variance.under { color: #4f786d; }
+.yearly-plan-budget-variance.over { color: #a14e3b; }
+.yearly-plan-budget-variance.on-goal { color: #68716b; }
+.yearly-plan-comment-input { display: block; margin-top: 14px; }
+.yearly-plan-comment-input > span { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; color: var(--muted); font-size: 8px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.yearly-plan-comment-input > span em { color: #929992; font-size: 7.5px; font-style: normal; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.yearly-plan-comment-input textarea { width: 100%; min-height: 66px; padding: 9px 10px; resize: vertical; color: var(--ink); background: #fff; border: 1px solid #d6dad2; border-radius: 7px; outline: 0; font: inherit; font-size: 9px; line-height: 1.45; }
+.yearly-plan-comment-input textarea:focus { border-color: #7d9d93; box-shadow: 0 0 0 2px rgb(99 143 131 / 12%); }
 .yearly-plan-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 13px; }
 .yearly-plan-actions button { padding: 8px 12px; font-size: 9px; }
 .yearly-goal-editor label > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; color: var(--muted); font-size: 8.5px; font-weight: 800; }
@@ -1009,6 +1038,8 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .overview-summary-grid { grid-template-columns: 1fr; }
   .yearly-spending-summary { grid-template-columns: 1fr 1fr; }
   .yearly-goal-editor, .yearly-goal-display { grid-column: 1 / -1; }
+  .yearly-tax-inputs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .yearly-tax-calculation { grid-template-columns: 1fr 1fr; }
   .yearly-plan-allocation { grid-template-columns: 1fr 1fr; }
   .yearly-plan-allocation > div:first-child { grid-column: 1 / -1; }
   .valuation-summary-grid { grid-template-columns: 1fr; }
@@ -1121,7 +1152,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .yearly-scope { width: 100%; }
   .yearly-spending-summary { grid-template-columns: 1fr; padding: 14px; }
   .yearly-goal-editor, .yearly-goal-display { grid-column: auto; }
-  .yearly-plan-inputs, .yearly-plan-allocation { grid-template-columns: 1fr; }
+  .yearly-plan-inputs, .yearly-tax-inputs, .yearly-plan-allocation, .yearly-tax-calculation { grid-template-columns: 1fr; }
   .yearly-plan-allocation > div:first-child { grid-column: auto; }
   .yearly-plan-equation { justify-content: flex-start; }
   .yearly-comparison-row { grid-template-columns: 55px minmax(0, 1fr); gap: 8px; padding-inline: 10px; }

@@ -115,10 +115,18 @@ export type Budget = {
 
 export type YearlyFinancialPlan = {
   year: number
-  projectedIncomeMinor: number
-  projectedTaxesMinor: number
+  projectedCompanyIncomeMinor: number
+  monthlySalaryMinor: number
+  monthlySalaryTaxMinor: number
+  monthlySocialSecurityMinor: number
+  estimatedDividendMinor: number
+  corporateTaxRateBps: number
+  dividendTaxRateBps: number
   savingsGoalMinor: number
+  personalSpendingMinor: number
   companySpendingMinor: number
+  comment: string
+  legacyProjectedTaxesMinor?: number
 }
 
 export type FxRate = {
