@@ -187,8 +187,11 @@ async function writeTransactionCache(workspaceId: string, transactions: Transact
 }
 
 export async function loadCachedAllTransactions(workspaceId: string, currentTransactions: Transaction[] = []) {
-  const cached = await readTransactionCache(workspaceId)
-  if (cached) {
+  const [cached, countPage] = await Promise.all([
+    readTransactionCache(workspaceId),
+    loadTransactionPage(workspaceId, { limit: 1 }),
+  ])
+  if (cached?.length === countPage.total) {
     const currentMonths = new Set(currentTransactions.map((transaction) => transaction.date.slice(0, 7)))
     return [...cached.filter((transaction) => !currentMonths.has(transaction.date.slice(0, 7))), ...currentTransactions]
   }

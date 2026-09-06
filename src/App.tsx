@@ -255,6 +255,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   const [syncNotice, setSyncNotice] = useState<{ accountId: string; message: string } | null>(null)
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
+  const historyLoadedRef = useRef(false)
   const historyRequest = useRef<Promise<void> | null>(null)
   const monthCache = useRef(new Map<string, Transaction[]>())
 
@@ -278,11 +279,12 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   if (!monthCache.current.size) monthCache.current.set(selectedMonthKey, workspace.data.transactions)
 
   const ensureFullHistory = useCallback(async () => {
-    if (historyLoaded) return
+    if (historyLoadedRef.current) return
     if (historyRequest.current) return historyRequest.current
     setHistoryLoading(true)
     const request = loadCachedAllTransactions(workspace.workspaceId, data.transactions)
       .then((allTransactions) => {
+        historyLoadedRef.current = true
         setData((current) => ({ ...current, transactions: allTransactions }))
         setHistoryLoaded(true)
       })
@@ -290,7 +292,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       .finally(() => { setHistoryLoading(false); historyRequest.current = null })
     historyRequest.current = request
     return request
-  }, [data.transactions, historyLoaded, workspace.workspaceId])
+  }, [data.transactions, workspace.workspaceId])
 
   useEffect(() => {
     if (requestedMonth) return
@@ -316,7 +318,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       const nextMonth = new Date(`${monthStart}T12:00:00Z`)
       nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1)
       const { transactions: monthTransactions } = await loadTransactionPage(workspace.workspaceId, { startDate: monthStart, endDate: nextMonth.toISOString().slice(0, 10) })
-      if (cancelled) return
+      if (cancelled || historyLoadedRef.current) return
       monthCache.current.set(monthKey, monthTransactions)
       if (activate) setData((current) => ({ ...current, transactions: monthTransactions }))
     }
@@ -331,8 +333,8 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   }, [historyLoaded, selectedMonthKey, workspace.workspaceId])
 
   useEffect(() => {
-    if (page === 'payees' || page === 'reports' || Boolean(accountMatch || categoryMatch || payeeMatch || categoryTarget)) void ensureFullHistory()
-  }, [accountMatch, categoryMatch, categoryTarget, ensureFullHistory, page, payeeMatch])
+    if (page === 'payees' || page === 'reports' || Boolean(payeeMatch || categoryTarget)) void ensureFullHistory()
+  }, [categoryTarget, ensureFullHistory, page, payeeMatch])
 
   useEffect(() => {
     if (new URLSearchParams(location.search).get('bank_link') !== 'complete') return
@@ -424,6 +426,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     await clearTransactionCache(workspace.workspaceId)
     const refreshed = await loadWorkspace(selectedMonthKey)
     monthCache.current.set(selectedMonthKey, refreshed.data.transactions)
+    historyLoadedRef.current = false
     setHistoryLoaded(false)
     return refreshed
   }
@@ -1138,10 +1141,10 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <SettingsPage workspaceId={workspace.workspaceId} workspaceName={workspace.workspaceName} />
         )}
         {selectedAccount && (
-          <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
+          <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={ensureFullHistory} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
         )}
         {selectedCategory && (
-          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTransactions={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} onUpdateBudget={updateBudget} onUpdateGroup={changeCategoryGroup} onRename={() => setModal('edit-category')} onDelete={removeUnusedCategory} onSetHidden={setCategoryHidden} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
+          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTransactions={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={ensureFullHistory} onUpdateBudget={updateBudget} onUpdateGroup={changeCategoryGroup} onRename={() => setModal('edit-category')} onDelete={removeUnusedCategory} onSetHidden={setCategoryHidden} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
         )}
         {selectedPayee && (
           <PayeeDetailPage key={selectedPayee.id} payee={selectedPayee} payees={data.payees} mappings={data.payeeMappings.filter((mapping) => mapping.payeeId === selectedPayee.id)} transactions={data.transactions.filter((transaction) => transaction.payeeId === selectedPayee.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/payees')} onEditTransaction={setCategoryTarget} onRename={renamePayee} onUpdateDefaults={changePayeeDefaults} onAddMapping={addPayeeMapping} onUpdateMapping={changePayeeMapping} onRemoveMapping={removePayeeMapping} />
@@ -2020,7 +2023,7 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
   return <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}><div className="modal"><div className="modal-heading"><div><span className="eyebrow">Next Expense</span><h2>{title}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></div>{children}</div></div>
 }
 
-function AccountDetailPage({ account, transactions, allTransactions, candidates, categories, payees, mappings, accounts, onBack, onSelectAccount, onEditAccount, onAdjustBalance, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, onCreatePayee, onPromoteMapping, onUnhideCategory, onEditTransaction, reviewingCandidateId, syncing, syncNotice }: { account: Account; transactions: Transaction[]; allTransactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; accounts: Account[]; onBack: () => void; onSelectAccount: (id: string) => void; onEditAccount: () => void; onAdjustBalance: () => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string) => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void>; onEditTransaction: (transaction: Transaction) => void; reviewingCandidateId: string; syncing: boolean; syncNotice: string }) {
+function AccountDetailPage({ account, transactions, allTransactions, candidates, categories, payees, mappings, accounts, historyLoaded, historyLoading, onRequestHistory, onBack, onSelectAccount, onEditAccount, onAdjustBalance, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, onCreatePayee, onPromoteMapping, onUnhideCategory, onEditTransaction, reviewingCandidateId, syncing, syncNotice }: { account: Account; transactions: Transaction[]; allTransactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onBack: () => void; onSelectAccount: (id: string) => void; onEditAccount: () => void; onAdjustBalance: () => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string) => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void>; onEditTransaction: (transaction: Transaction) => void; reviewingCandidateId: string; syncing: boolean; syncNotice: string }) {
   return <div className="page-content narrow-page entity-page">
     <div className="entity-page-toolbar">
       <button className="entity-back" onClick={onBack}><ChevronLeft size={16} />All accounts</button>
@@ -2030,7 +2033,7 @@ function AccountDetailPage({ account, transactions, allTransactions, candidates,
       <div className="entity-heading"><div className="entity-heading-icon" style={{ background: account.color }}><CreditCard size={20} /></div><div><span className="eyebrow">{accountBalanceSheetGroup(account)} · {account.type}{account.providerAccountId ? ' · Bank connected' : ''}</span><h2>{account.name}</h2></div><div className="entity-heading-actions"><button className="secondary-button" onClick={onAdjustBalance}><RefreshCw size={16} />Adjust balance</button><button className="secondary-button" onClick={onEditAccount}><Pencil size={16} />Edit account</button>{account.providerAccountId && <button className="primary-button" disabled={syncing} onClick={onSyncBank}>{syncing ? <LoaderCircle className="spin-icon" size={16} /> : <RefreshCw size={16} />}{syncing ? 'Syncing…' : 'Sync now'}</button>}<button className="secondary-button" onClick={onLinkBank}><Link2 size={16} />{account.providerAccountId ? 'Reconnect' : 'Connect bank'}</button></div></div>
       {account.providerAccountId && <div className="bank-sync-status"><div><strong>{account.connectionStatus === 'active' ? 'Bank connection active' : 'Bank connected'}</strong><span>{account.lastSyncedAt ? `Last synced ${new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(account.lastSyncedAt))}` : 'Not synced yet'}</span>{account.lastSyncDiagnostic && !syncNotice && <span>{formatSyncDiagnostic(account.lastSyncDiagnostic)}</span>}</div><span>{syncNotice || formatRateLimits(account)}</span></div>}
       {account.providerAccountId && <BankImportReview account={account} candidates={candidates} categories={categories} payees={payees} mappings={mappings} reviewingCandidateId={reviewingCandidateId} onModeChange={onImportModeChange} onReview={onReviewCandidate} onCreatePayee={onCreatePayee} onPromoteMapping={onPromoteMapping} onUnhideCategory={onUnhideCategory} />}
-      <AccountDetail account={account} transactions={transactions} allTransactions={allTransactions} categories={categories} accounts={accounts} onEditTransaction={onEditTransaction} />
+      <AccountDetail account={account} transactions={transactions} allTransactions={allTransactions} categories={categories} accounts={accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={onRequestHistory} onEditTransaction={onEditTransaction} />
     </section>
   </div>
 }
@@ -2221,7 +2224,7 @@ function formatSyncDiagnostic(diagnostic: NonNullable<Account['lastSyncDiagnosti
   ].filter(Boolean).join(' · ')
 }
 
-function CategoryDetailPage({ category, spent, budget, transactions, allTransactions, categories, categoryGroups, accounts, onUpdateBudget, onUpdateGroup, onRename, onDelete, onSetHidden, onBack, onSelectCategory, onEditTransaction }: { category: Category; spent: number; budget: number; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; categoryGroups: CategoryGroup[]; accounts: Account[]; onUpdateBudget: (categoryId: string, amountMinor: number) => void; onUpdateGroup: (categoryId: string, categoryGroupId: string) => Promise<void>; onRename: () => void; onDelete: (categoryId: string) => Promise<void>; onSetHidden: (categoryId: string, hidden: boolean) => void; onBack: () => void; onSelectCategory: (id: string) => void; onEditTransaction: (transaction: Transaction) => void }) {
+function CategoryDetailPage({ category, spent, budget, transactions, allTransactions, categories, categoryGroups, accounts, historyLoaded, historyLoading, onRequestHistory, onUpdateBudget, onUpdateGroup, onRename, onDelete, onSetHidden, onBack, onSelectCategory, onEditTransaction }: { category: Category; spent: number; budget: number; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; categoryGroups: CategoryGroup[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onUpdateBudget: (categoryId: string, amountMinor: number) => void; onUpdateGroup: (categoryId: string, categoryGroupId: string) => Promise<void>; onRename: () => void; onDelete: (categoryId: string) => Promise<void>; onSetHidden: (categoryId: string, hidden: boolean) => void; onBack: () => void; onSelectCategory: (id: string) => void; onEditTransaction: (transaction: Transaction) => void }) {
   const Icon = categoryIcons[category.icon as keyof typeof categoryIcons] ?? Sparkles
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -2240,7 +2243,7 @@ function CategoryDetailPage({ category, spent, budget, transactions, allTransact
       {confirmingDelete && !deleting && <div className="category-delete-confirmation"><span>Deleting this category will also remove its budgets and clear it from payee defaults.</span><button type="button" onClick={() => setConfirmingDelete(false)}>Cancel</button></div>}
       {deleteError && <p className="auth-error" role="alert">{deleteError}</p>}
       <CategoryGroupAssignment key={`${category.id}-${category.categoryGroupId ?? 'none'}`} category={category} groups={categoryGroups} onSubmit={onUpdateGroup} />
-      <CategoryDetail key={`${category.id}-${budget}`} category={category} spent={spent} budget={budget} transactions={transactions} allTransactions={allTransactions} categories={categories} accounts={accounts} onUpdateBudget={onUpdateBudget} onEditTransaction={onEditTransaction} />
+      <CategoryDetail key={`${category.id}-${budget}`} category={category} spent={spent} budget={budget} transactions={transactions} allTransactions={allTransactions} categories={categories} accounts={accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={onRequestHistory} onUpdateBudget={onUpdateBudget} onEditTransaction={onEditTransaction} />
     </section>
   </div>
 }
@@ -2267,7 +2270,7 @@ function CategoryGroupAssignment({ category, groups, onSubmit }: { category: Cat
   </div>
 }
 
-function CategoryDetail({ category, spent, budget, transactions, allTransactions, categories, accounts, onUpdateBudget, onEditTransaction }: { category: Category; spent: number; budget: number; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; accounts: Account[]; onUpdateBudget: (categoryId: string, amountMinor: number) => void; onEditTransaction: (transaction: Transaction) => void }) {
+function CategoryDetail({ category, spent, budget, transactions, allTransactions, categories, accounts, historyLoaded, historyLoading, onRequestHistory, onUpdateBudget, onEditTransaction }: { category: Category; spent: number; budget: number; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onUpdateBudget: (categoryId: string, amountMinor: number) => void; onEditTransaction: (transaction: Transaction) => void }) {
   const [transactionPeriod, setTransactionPeriod] = useState<'month' | 'all'>('month')
   const [transactionPage, setTransactionPage] = useState(1)
   const sortedAllTransactions = useMemo(() => [...allTransactions].sort((left, right) => right.date.localeCompare(left.date)), [allTransactions])
@@ -2295,7 +2298,7 @@ function CategoryDetail({ category, spent, budget, transactions, allTransactions
       <label><span>Monthly plan</span><input type="number" min="0" step="0.01" value={budgetInput} onChange={(event) => setBudgetInput(event.target.value)} /></label>
       <button className="secondary-button" type="button" onClick={saveBudget}>Update budget</button>
     </div>
-    <div className="category-detail-heading account-transaction-heading"><span>{periodTransactions.length} transaction{periodTransactions.length === 1 ? '' : 's'} {transactionPeriod === 'all' ? 'across all dates' : 'in the selected month'}</span><div><div className="segmented account-transaction-period"><button type="button" className={transactionPeriod === 'month' ? 'active transfer' : ''} onClick={() => setTransactionPeriod('month')}>Selected month</button><button type="button" className={transactionPeriod === 'all' ? 'active transfer' : ''} onClick={() => setTransactionPeriod('all')}>All dates</button></div></div></div>
+    <div className="category-detail-heading account-transaction-heading"><span>{historyLoading && transactionPeriod === 'all' && !historyLoaded ? 'Loading transaction history…' : `${periodTransactions.length} transaction${periodTransactions.length === 1 ? '' : 's'} ${transactionPeriod === 'all' ? 'across all dates' : 'in the selected month'}`}</span><div><div className="segmented account-transaction-period"><button type="button" className={transactionPeriod === 'month' ? 'active transfer' : ''} onClick={() => setTransactionPeriod('month')}>Selected month</button><button type="button" className={transactionPeriod === 'all' ? 'active transfer' : ''} onClick={() => { setTransactionPeriod('all'); void onRequestHistory() }}>{historyLoading && !historyLoaded ? 'Loading…' : 'All dates'}</button></div></div></div>
     <div className="category-detail-list">
       {displayedTransactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} showAccount onEditCategory={() => onEditTransaction(transaction)} />)}
       {!periodTransactions.length && <div className="empty-state compact-empty"><ReceiptText size={24} /><h3>No transactions yet</h3></div>}
@@ -2306,7 +2309,7 @@ function CategoryDetail({ category, spent, budget, transactions, allTransactions
 
 const detailTransactionPageSize = 50
 
-function AccountDetail({ account, transactions, allTransactions, categories, accounts, onEditTransaction }: { account: Account; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; accounts: Account[]; onEditTransaction: (transaction: Transaction) => void }) {
+function AccountDetail({ account, transactions, allTransactions, categories, accounts, historyLoaded, historyLoading, onRequestHistory, onEditTransaction }: { account: Account; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onEditTransaction: (transaction: Transaction) => void }) {
   const [transactionPeriod, setTransactionPeriod] = useState<'month' | 'all'>('month')
   const [transactionPage, setTransactionPage] = useState(1)
   const sortedAllTransactions = useMemo(() => [...allTransactions].sort((left, right) => right.date.localeCompare(left.date)), [allTransactions])
@@ -2330,7 +2333,7 @@ function AccountDetail({ account, transactions, allTransactions, categories, acc
       <div><span>Money in</span><strong className="positive">{formatMoney(incoming, account.currency)}</strong></div>
       <div><span>Money out</span><strong>{formatMoney(outgoing, account.currency)}</strong></div>
     </div>
-    <div className="category-detail-heading account-transaction-heading"><span>{periodTransactions.length} transaction{periodTransactions.length === 1 ? '' : 's'} {transactionPeriod === 'all' ? 'across all dates' : 'in the selected month'}</span><div><b>{account.scope} · {account.type}</b><div className="segmented account-transaction-period"><button type="button" className={transactionPeriod === 'month' ? 'active transfer' : ''} onClick={() => setTransactionPeriod('month')}>Selected month</button><button type="button" className={transactionPeriod === 'all' ? 'active transfer' : ''} onClick={() => setTransactionPeriod('all')}>All dates</button></div></div></div>
+    <div className="category-detail-heading account-transaction-heading"><span>{historyLoading && transactionPeriod === 'all' && !historyLoaded ? 'Loading transaction history…' : `${periodTransactions.length} transaction${periodTransactions.length === 1 ? '' : 's'} ${transactionPeriod === 'all' ? 'across all dates' : 'in the selected month'}`}</span><div><b>{account.scope} · {account.type}</b><div className="segmented account-transaction-period"><button type="button" className={transactionPeriod === 'month' ? 'active transfer' : ''} onClick={() => setTransactionPeriod('month')}>Selected month</button><button type="button" className={transactionPeriod === 'all' ? 'active transfer' : ''} onClick={() => { setTransactionPeriod('all'); void onRequestHistory() }}>{historyLoading && !historyLoaded ? 'Loading…' : 'All dates'}</button></div></div></div>
     <div className="category-detail-list">
       {displayedTransactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} focusAccountId={account.id} onEditCategory={transaction.type === 'expense' || transaction.type === 'income' || transaction.type === 'opening_balance' || transaction.type === 'balance_adjustment' ? () => onEditTransaction(transaction) : undefined} />)}
       {!periodTransactions.length && <div className="empty-state compact-empty"><ReceiptText size={24} /><h3>No transactions yet</h3></div>}
