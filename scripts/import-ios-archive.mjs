@@ -200,11 +200,9 @@ const categories = archive.categories.map((category) => ({
   default_budget_minor: category.defaultBudgetMinor,
   report_group: category.type === 'Income'
     ? 'income'
-    : category.type === 'Investment'
-      ? 'capital_gain'
-      : /tax|irpf|cuota ss/i.test(category.name)
-        ? 'tax'
-        : 'expense',
+    : /tax|irpf|cuota ss/i.test(category.name)
+      ? 'tax'
+      : 'expense',
 }))
 
 const payees = archive.payees.map((payee) => ({

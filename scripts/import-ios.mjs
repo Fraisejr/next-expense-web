@@ -130,7 +130,6 @@ const incomeCategoryNames = new Set(['Salary', 'Other income', 'Uncategorised in
 const reportGroupFor = (name) => {
   if (incomeCategoryNames.has(name)) return 'income'
   if (/tax|irpf|cuota ss/i.test(name)) return 'tax'
-  if (/capital gain|investment appreciation|valuation gain/i.test(name)) return 'capital_gain'
   return 'expense'
 }
 

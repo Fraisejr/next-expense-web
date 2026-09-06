@@ -581,7 +581,7 @@ export async function updateBankImportCandidatePayee(workspaceId: string, candid
 }
 
 export async function createCategory(workspaceId: string, category: Category) {
-  const categoryType = category.reportGroup === 'income' ? 'Income' : category.reportGroup === 'capital_gain' ? 'Investment' : 'Expense'
+  const categoryType = category.reportGroup === 'income' ? 'Income' : 'Expense'
   const { error } = await neon.from('categories').insert({
     id: category.id,
     workspace_id: workspaceId,
@@ -664,14 +664,21 @@ export async function updateCategoryHidden(workspaceId: string, categoryId: stri
   if (error) throw error
 }
 
-export async function updateCategoryName(workspaceId: string, categoryId: string, name: string) {
+export async function updateCategoryDetails(workspaceId: string, categoryId: string, details: Pick<Category, 'name' | 'reportGroup' | 'icon' | 'color'>) {
+  const categoryType = details.reportGroup === 'income' ? 'Income' : 'Expense'
   const { data, error } = await neon.from('categories')
-    .update({ name: name.normalize('NFKC').trim() })
+    .update({
+      name: details.name.normalize('NFKC').trim(),
+      category_type: categoryType,
+      report_group: details.reportGroup,
+      icon: details.icon,
+      color: details.color,
+    })
     .eq('workspace_id', workspaceId)
     .eq('id', categoryId)
     .select('id')
   if (error) throw error
-  if (!data?.length) throw new Error('The category could not be renamed.')
+  if (!data?.length) throw new Error('The category could not be updated.')
 }
 
 export async function deleteUnusedCategory(workspaceId: string, categoryId: string) {

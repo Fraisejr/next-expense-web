@@ -6,7 +6,7 @@ import {
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteAllUnusedPayees, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateCategoryName, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
+import { approveBankImportCandidate, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteAllUnusedPayees, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDetails, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
 import { convertMinor } from './currency'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
@@ -384,7 +384,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       .filter((t) => t.categoryId === id && t.type !== 'transfer')
       .reduce((sum, t) => {
         const direction = t.type === 'income' ? 1 : -1
-        return sum + (group === 'income' || group === 'capital_gain' ? direction : -direction) * convertedTransactionAmount(t)
+        return sum + (group === 'income' ? direction : -direction) * convertedTransactionAmount(t)
       }, 0)
   }
   const budgetForCategory = (categoryId: string) => data.budgets
@@ -574,22 +574,23 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
-  async function renameCategory(categoryId: string, name: string) {
-    const normalizedName = name.normalize('NFKC').trim()
+  async function editCategory(categoryId: string, changes: Pick<Category, 'name' | 'reportGroup' | 'icon' | 'color'>) {
+    const normalizedName = changes.name.normalize('NFKC').trim()
     try {
       setSyncError('')
       if (!normalizedName) throw new Error('Enter a category name.')
       if (data.categories.some((category) => category.id !== categoryId && category.name.localeCompare(normalizedName, undefined, { sensitivity: 'accent' }) === 0)) {
         throw new Error(`A category named “${normalizedName}” already exists.`)
       }
-      await updateCategoryName(workspace.workspaceId, categoryId, normalizedName)
+      const normalizedChanges = { ...changes, name: normalizedName }
+      await updateCategoryDetails(workspace.workspaceId, categoryId, normalizedChanges)
       setData((current) => ({
         ...current,
-        categories: current.categories.map((category) => category.id === categoryId ? { ...category, name: normalizedName } : category),
+        categories: current.categories.map((category) => category.id === categoryId ? { ...category, ...normalizedChanges } : category),
       }))
       setModal(null)
     } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not rename the category.'))
+      setSyncError(getErrorMessage(error, 'Could not update the category.'))
       throw error
     }
   }
@@ -1145,7 +1146,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           </div>
         )}
         {page === 'reports' && (
-          <ReportsPage data={data} viewedMonth={viewedMonth} defaultCurrency={workspace.defaultCurrency} onUpdateTaxRate={changeTaxRate} />
+          <ReportsPage data={data} viewedMonth={viewedMonth} defaultCurrency={workspace.defaultCurrency} onUpdateTaxRate={changeTaxRate} onEditTransaction={setCategoryTarget} />
         )}
         {page === 'accounts' && !selectedAccount && (
           <AccountsPage accounts={activeAccounts} totalBalance={totalBalance} defaultCurrency={workspace.defaultCurrency} convertBalance={convertCurrentBalance} onAdd={() => setModal('account')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onReorder={reorderAccounts} />
@@ -1157,7 +1158,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
         )}
         {selectedCategory && (
-          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTransactions={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onUpdateBudget={updateBudget} onUpdateGroup={changeCategoryGroup} onRename={() => setModal('edit-category')} onDelete={removeUnusedCategory} onSetHidden={setCategoryHidden} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
+          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTransactions={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onUpdateBudget={updateBudget} onUpdateGroup={changeCategoryGroup} onEdit={() => setModal('edit-category')} onDelete={removeUnusedCategory} onSetHidden={setCategoryHidden} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
         )}
         {selectedPayee && (
           <PayeeDetailPage key={selectedPayee.id} payee={selectedPayee} payees={data.payees} mappings={data.payeeMappings.filter((mapping) => mapping.payeeId === selectedPayee.id)} transactions={data.transactions.filter((transaction) => transaction.payeeId === selectedPayee.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/payees')} onEditTransaction={setCategoryTarget} onRename={renamePayee} onUpdateDefaults={changePayeeDefaults} onAddMapping={addPayeeMapping} onUpdateMapping={changePayeeMapping} onRemoveMapping={removePayeeMapping} />
@@ -1165,13 +1166,13 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       </main>
 
       {modal && (
-        <ModalShell title={modal === 'transaction' ? 'Add transaction' : modal === 'account' ? 'Create account' : modal === 'edit-account' ? 'Edit account' : modal === 'balance-adjustment' ? 'Adjust balance' : modal === 'category' ? 'Create category' : modal === 'edit-category' ? 'Rename category' : modal === 'category-groups' ? 'Manage category groups' : `Connect ${bankTarget?.name ?? 'account'}`} onClose={() => { setModal(null); setAccountTarget(null) }}>
+        <ModalShell title={modal === 'transaction' ? 'Add transaction' : modal === 'account' ? 'Create account' : modal === 'edit-account' ? 'Edit account' : modal === 'balance-adjustment' ? 'Adjust balance' : modal === 'category' ? 'Create category' : modal === 'edit-category' ? 'Edit category' : modal === 'category-groups' ? 'Manage category groups' : `Connect ${bankTarget?.name ?? 'account'}`} onClose={() => { setModal(null); setAccountTarget(null) }}>
           {modal === 'transaction' && <TransactionForm accounts={activeAccounts} categories={data.categories.filter((category) => !category.hidden)} payees={data.payees} onSubmit={addTransaction} />}
           {modal === 'account' && <AccountForm onSubmit={addAccount} />}
           {modal === 'edit-account' && accountTarget && <AccountForm account={accountTarget} onSubmit={(changes) => editAccount({ ...accountTarget, ...changes })} />}
           {modal === 'balance-adjustment' && accountTarget && <BalanceAdjustmentForm account={accountTarget} onSubmit={(date, balance, reason, memo) => saveBalanceAdjustment(accountTarget, date, balance, reason, memo)} />}
           {modal === 'category' && <CategoryForm categoryGroups={data.categoryGroups} onSubmit={addCategory} />}
-          {modal === 'edit-category' && selectedCategory && <CategoryNameForm category={selectedCategory} categories={data.categories} onSubmit={renameCategory} />}
+          {modal === 'edit-category' && selectedCategory && <CategoryDetailsForm category={selectedCategory} categories={data.categories} onSubmit={editCategory} />}
           {modal === 'category-groups' && <CategoryGroupsForm groups={data.categoryGroups} categories={data.categories} onAdd={addCategoryGroup} onRename={renameCategoryGroup} onReorder={reorderCategoryGroups} onReorderCategories={reorderCategories} onRemove={removeCategoryGroup} />}
           {modal === 'bank' && bankTarget && <BankLinkForm account={bankTarget} workspaceId={workspace.workspaceId} onComplete={() => window.location.reload()} />}
         </ModalShell>
@@ -2020,7 +2021,6 @@ function BudgetsPage({ categories, categoryGroups, categorySpending, budgetForCa
   const incomeCategories = visibleCategories.filter((category) => category.reportGroup === 'income')
   const expenseCategories = visibleCategories.filter((category) => category.reportGroup === 'expense')
   const taxCategories = visibleCategories.filter((category) => category.reportGroup === 'tax')
-  const savingsCategories = visibleCategories.filter((category) => category.reportGroup === 'capital_gain')
   const groupedRows = (rows: Category[]) => {
     const byOrder = (left: Category, right: Category) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.name.localeCompare(right.name)
     const knownGroups = categoryGroups.map((group) => ({ group, rows: rows.filter((category) => category.categoryGroupId === group.id).sort(byOrder) })).filter((item) => item.rows.length > 0)
@@ -2031,14 +2031,15 @@ function BudgetsPage({ categories, categoryGroups, categorySpending, budgetForCa
   const hiddenSection = <section className="budget-section"><div className="budget-section-heading"><div><h3>Hidden categories</h3><span>Unhide categories you want to return to active planning and new transactions</span></div></div>{groupedRows(hiddenCategories).map(({ group, rows }) => <div className="category-group-block" key={group.id}><div className="category-group-label">{group.name}</div><div className="category-list roomy">{rows.map((category) => <HiddenCategoryBudgetRow key={category.id} category={category} spent={categorySpending(category.id)} budget={budgetForCategory(category.id)} onSelect={() => onSelectCategory(category.id)} onUnhide={() => onUnhideCategory(category.id)} />)}</div></div>)}</section>
   return <section className="budget-planning">
     <HiddenCategoryActivityAlert categories={categories} categorySpending={categorySpending} onSelectCategory={onSelectCategory} prominent={showHiddenActivityAlert} />
-    <div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>{showHiddenOnly ? 'Hidden categories' : 'Budget by category'}</h2></div><div className="budget-page-actions">{hiddenCategories.length > 0 && <button className="text-button" onClick={() => setShowHiddenOnly((current) => !current)}>{showHiddenOnly ? <EyeOff size={16} /> : <Eye size={16} />}{showHiddenOnly ? 'Show active categories' : `Show hidden only (${hiddenCategories.length})`}</button>}<button className="secondary-button" onClick={onManageGroups}><Settings size={16} />Manage groups</button><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button></div></div>{showHiddenOnly ? hiddenSection : <>{section('Planned income', 'Actual income compared with this month’s plan', incomeCategories)}{section('Expense budgets', 'Net spending compared with this month’s budget', expenseCategories)}{taxCategories.length > 0 && section('Tax plan', 'Recorded tax costs compared with this month’s plan', taxCategories)}{savingsCategories.length > 0 && section('Savings & investments', 'Historical monthly targets; they do not roll over or represent current account balances', savingsCategories)}</>}</div>
+    <div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>{showHiddenOnly ? 'Hidden categories' : 'Budget by category'}</h2></div><div className="budget-page-actions">{hiddenCategories.length > 0 && <button className="text-button" onClick={() => setShowHiddenOnly((current) => !current)}>{showHiddenOnly ? <EyeOff size={16} /> : <Eye size={16} />}{showHiddenOnly ? 'Show active categories' : `Show hidden only (${hiddenCategories.length})`}</button>}<button className="secondary-button" onClick={onManageGroups}><Settings size={16} />Manage groups</button><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button></div></div>{showHiddenOnly ? hiddenSection : <>{section('Planned income', 'Actual income compared with this month’s plan', incomeCategories)}{section('Expense budgets', 'Net spending compared with this month’s budget', expenseCategories)}{taxCategories.length > 0 && section('Tax plan', 'Recorded tax costs compared with this month’s plan', taxCategories)}</>}</div>
   </section>
 }
 
 type ReportPeriod = 'month' | 'year'
 
-function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate }: { data: AppData; viewedMonth: Date; defaultCurrency: string; onUpdateTaxRate: (rateBps: number) => void }) {
+function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate, onEditTransaction }: { data: AppData; viewedMonth: Date; defaultCurrency: string; onUpdateTaxRate: (rateBps: number) => void; onEditTransaction: (transaction: Transaction) => void }) {
   const [period, setPeriod] = useState<ReportPeriod>('month')
+  const [showValueChanges, setShowValueChanges] = useState(false)
   const monthKey = toMonthKey(viewedMonth)
   const yearKey = String(viewedMonth.getFullYear())
   const categoryById = new Map(data.categories.map((category) => [category.id, category]))
@@ -2059,7 +2060,7 @@ function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate }: { 
     .reduce((sum, transaction) => {
       const direction = transaction.type === 'income' ? 1 : -1
       const amount = convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, data.fxRates) ?? 0
-      return sum + (group === 'income' || group === 'capital_gain' ? direction : -direction) * amount
+      return sum + (group === 'income' ? direction : -direction) * amount
     }, 0)
   const totalBudgetsForGroup = (budgets: AppData['budgets'], group: ReportGroup) => budgets
     .filter((budget) => categoryById.get(budget.categoryId)?.reportGroup === group)
@@ -2069,21 +2070,21 @@ function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate }: { 
   const actualIncome = totalTransactionsForGroup(reportTransactions, 'income')
   const actualExpenses = totalTransactionsForGroup(reportTransactions, 'expense')
   const recordedTaxes = totalTransactionsForGroup(reportTransactions, 'tax')
-  const capitalGains = totalTransactionsForGroup(reportTransactions, 'capital_gain')
-  const unrealizedValuations = data.transactions
+  const valuationAdjustments = data.transactions
     .filter((transaction) => inPeriod(transaction.date) && transaction.type === 'balance_adjustment' && (transaction.adjustmentReason === 'market_valuation' || transaction.adjustmentReason === 'asset_valuation'))
-    .reduce((sum, transaction) => sum + (convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, data.fxRates) ?? 0), 0)
+    .sort((left, right) => right.date.localeCompare(left.date))
+  const valueChanges = valuationAdjustments.reduce((sum, transaction) => sum + (convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, data.fxRates) ?? 0), 0)
   const companyActualProfit = totalTransactionsForGroup(companyTransactions, 'income') - totalTransactionsForGroup(companyTransactions, 'expense')
   const companyTaxEstimate = estimatedTax(companyActualProfit)
-  const actualExcludingGains = actualIncome - actualExpenses - recordedTaxes - companyTaxEstimate
-  const actualIncludingGains = actualExcludingGains + capitalGains + unrealizedValuations
+  const actualOperatingResult = actualIncome - actualExpenses - recordedTaxes - companyTaxEstimate
+  const actualIncludingValueChanges = actualOperatingResult + valueChanges
 
   const forecastIncome = totalBudgetsForGroup(reportBudgets, 'income')
   const forecastExpenses = totalBudgetsForGroup(reportBudgets, 'expense')
   const plannedTaxes = totalBudgetsForGroup(reportBudgets, 'tax')
   const companyForecastProfit = totalBudgetsForGroup(companyBudgets, 'income') - totalBudgetsForGroup(companyBudgets, 'expense')
   const forecastTax = estimatedTax(companyForecastProfit)
-  const forecastExcludingGains = forecastIncome - forecastExpenses - plannedTaxes - forecastTax
+  const forecastOperatingResult = forecastIncome - forecastExpenses - plannedTaxes - forecastTax
 
   return <div className="page-content narrow-page report-page">
     <div className="report-toolbar">
@@ -2095,16 +2096,31 @@ function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate }: { 
       <label className="tax-rate-field"><span>Company tax planning rate</span><div><input type="number" min="0" max="100" step="0.1" value={data.settings.estimatedCompanyTaxRateBps / 100} onChange={(event) => onUpdateTaxRate(Math.max(0, Math.round(Number(event.target.value) * 100)))} /><b>%</b></div><small>Planning estimate only</small></label>
     </section>
     <div className="report-comparison">
-      <ReportColumn title="Forecast" subtitle="From monthly budgets" currency={defaultCurrency} income={forecastIncome} expenses={forecastExpenses} tax={forecastTax} otherTax={plannedTaxes} otherTaxLabel="Other planned taxes" resultExcluding={forecastExcludingGains} capitalGains={0} unrealizedValuations={0} resultIncluding={forecastExcludingGains} />
-      <ReportColumn title="Actual" subtitle="From recorded activity" currency={defaultCurrency} income={actualIncome} expenses={actualExpenses} tax={companyTaxEstimate} otherTax={recordedTaxes} otherTaxLabel="Other recorded taxes" resultExcluding={actualExcludingGains} capitalGains={capitalGains} unrealizedValuations={unrealizedValuations} resultIncluding={actualIncludingGains} />
+      <ReportColumn title="Forecast" subtitle="From monthly budgets" currency={defaultCurrency} income={forecastIncome} expenses={forecastExpenses} tax={forecastTax} otherTax={plannedTaxes} otherTaxLabel="Other planned taxes" operatingResult={forecastOperatingResult} valueChanges={0} resultIncludingValueChanges={forecastOperatingResult} />
+      <ReportColumn title="Actual" subtitle="From recorded activity" currency={defaultCurrency} income={actualIncome} expenses={actualExpenses} tax={companyTaxEstimate} otherTax={recordedTaxes} otherTaxLabel="Other recorded taxes" operatingResult={actualOperatingResult} valueChanges={valueChanges} resultIncludingValueChanges={actualIncludingValueChanges} valueChangeCount={valuationAdjustments.length} valueChangesExpanded={showValueChanges} onToggleValueChanges={() => setShowValueChanges((current) => !current)} />
     </div>
-    <div className="report-footnote"><CircleHelp size={16} /><p>Company tax is estimated from tagged company income minus tagged company expenses. Transfers are excluded. Foreign-currency activity is converted to {defaultCurrency} using the latest saved rate from that month or earlier.</p></div>
+    {showValueChanges && <section className="panel valuation-drilldown" id="valuation-drilldown">
+      <div className="valuation-drilldown-heading"><div><span className="eyebrow">Actual · {period === 'month' ? monthName.format(viewedMonth) : yearKey}</span><h3>Market and asset value changes</h3><p>{valuationAdjustments.length} adjustment{valuationAdjustments.length === 1 ? '' : 's'} contributing {formatMoney(valueChanges, defaultCurrency)}.</p></div><button type="button" className="icon-button" aria-label="Close value-change details" onClick={() => setShowValueChanges(false)}><X size={17} /></button></div>
+      {valuationAdjustments.length ? <div className="valuation-drilldown-list">{valuationAdjustments.map((transaction) => {
+        const account = data.accounts.find((item) => item.id === transaction.accountId)
+        const convertedAmount = convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, data.fxRates) ?? 0
+        return <button type="button" className="valuation-drilldown-row" key={transaction.id} onClick={() => onEditTransaction(transaction)}>
+          <span><strong>{account?.name ?? 'Unknown account'}</strong><small>{formatShortDate(transaction.date)} · {transaction.adjustmentReason ? balanceAdjustmentReasonLabels[transaction.adjustmentReason] : 'Valuation adjustment'}{transaction.note ? ` · ${transaction.note}` : ''}</small></span>
+          <span className="valuation-drilldown-amount"><strong className={convertedAmount < 0 ? 'negative' : 'positive'}>{formatMoney(convertedAmount, defaultCurrency)}</strong>{transaction.currency !== defaultCurrency && <small>{formatMoney(transaction.amountMinor, transaction.currency)}</small>}</span>
+          <Pencil size={14} />
+        </button>
+      })}</div> : <div className="valuation-drilldown-empty">No market or asset valuation adjustments in this period.</div>}
+    </section>}
+    <div className="report-footnote"><CircleHelp size={16} /><p>Company tax is estimated from tagged company income minus tagged company expenses. Transfers are excluded. Market and asset value changes come from account valuation adjustments. Foreign-currency activity is converted to {defaultCurrency} using the latest saved rate from that month or earlier.</p></div>
   </div>
 }
 
-function ReportColumn({ title, subtitle, currency, income, expenses, tax, otherTax, otherTaxLabel, resultExcluding, capitalGains, unrealizedValuations, resultIncluding }: { title: string; subtitle: string; currency: string; income: number; expenses: number; tax: number; otherTax: number; otherTaxLabel: string; resultExcluding: number; capitalGains: number; unrealizedValuations: number; resultIncluding: number }) {
+function ReportColumn({ title, subtitle, currency, income, expenses, tax, otherTax, otherTaxLabel, operatingResult, valueChanges, resultIncludingValueChanges, valueChangeCount, valueChangesExpanded, onToggleValueChanges }: { title: string; subtitle: string; currency: string; income: number; expenses: number; tax: number; otherTax: number; otherTaxLabel: string; operatingResult: number; valueChanges: number; resultIncludingValueChanges: number; valueChangeCount?: number; valueChangesExpanded?: boolean; onToggleValueChanges?: () => void }) {
   const row = (label: string, value: number, tone?: string) => <div className={`report-row ${tone ?? ''}`}><span>{label}</span><strong>{formatMoney(value, currency)}</strong></div>
-  return <section className="panel report-column"><div className="report-column-heading"><div><span className="eyebrow">{subtitle}</span><h3>{title}</h3></div></div>{row('Income', income, 'income-row')}{row('Expenses', -expenses)}{row('Calculated company tax', -tax)}{otherTax !== 0 && row(otherTaxLabel, -otherTax)}<div className="report-divider" />{row('Operating result', resultExcluding, 'result-row')}{row('Capital gains / losses', capitalGains)}{row('Unrealized valuation changes', unrealizedValuations)}{row('Result including gains', resultIncluding, 'result-row final-result')}</section>
+  const valueChangeRow = onToggleValueChanges
+    ? <button type="button" className="report-row report-row-drilldown" aria-expanded={valueChangesExpanded} aria-controls="valuation-drilldown" onClick={onToggleValueChanges}><span>Market and asset value changes<small>{valueChangeCount} adjustment{valueChangeCount === 1 ? '' : 's'}</small></span><strong>{formatMoney(valueChanges, currency)}<ChevronDown className={valueChangesExpanded ? 'expanded' : ''} size={15} /></strong></button>
+    : row('Market and asset value changes', valueChanges)
+  return <section className="panel report-column"><div className="report-column-heading"><div><span className="eyebrow">{subtitle}</span><h3>{title}</h3></div></div>{row('Income', income, 'income-row')}{row('Expenses', -expenses)}{row('Calculated company tax', -tax)}{otherTax !== 0 && row(otherTaxLabel, -otherTax)}<div className="report-divider" />{row('Operating result', operatingResult, 'result-row')}{valueChangeRow}{row('Result including value changes', resultIncludingValueChanges, 'result-row final-result')}</section>
 }
 
 function AccountsPage({ accounts, totalBalance, defaultCurrency, convertBalance, onAdd, onSelectAccount, onReorder }: { accounts: Account[]; totalBalance: number; defaultCurrency: string; convertBalance: (account: Account) => number; onAdd: () => void; onSelectAccount: (id: string) => void; onReorder: (accountIds: string[]) => Promise<boolean> }) {
@@ -2412,7 +2428,7 @@ function formatSyncDiagnostic(diagnostic: NonNullable<Account['lastSyncDiagnosti
   ].filter(Boolean).join(' · ')
 }
 
-function CategoryDetailPage({ category, spent, budget, transactions, allTransactions, categories, categoryGroups, accounts, historyLoaded, historyLoading, onRequestHistory, onUpdateBudget, onUpdateGroup, onRename, onDelete, onSetHidden, onBack, onSelectCategory, onEditTransaction }: { category: Category; spent: number; budget: number; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; categoryGroups: CategoryGroup[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onUpdateBudget: (categoryId: string, amountMinor: number) => void; onUpdateGroup: (categoryId: string, categoryGroupId: string) => Promise<void>; onRename: () => void; onDelete: (categoryId: string) => Promise<void>; onSetHidden: (categoryId: string, hidden: boolean) => void; onBack: () => void; onSelectCategory: (id: string) => void; onEditTransaction: (transaction: Transaction) => void }) {
+function CategoryDetailPage({ category, spent, budget, transactions, allTransactions, categories, categoryGroups, accounts, historyLoaded, historyLoading, onRequestHistory, onUpdateBudget, onUpdateGroup, onEdit, onDelete, onSetHidden, onBack, onSelectCategory, onEditTransaction }: { category: Category; spent: number; budget: number; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; categoryGroups: CategoryGroup[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onUpdateBudget: (categoryId: string, amountMinor: number) => void; onUpdateGroup: (categoryId: string, categoryGroupId: string) => Promise<void>; onEdit: () => void; onDelete: (categoryId: string) => Promise<void>; onSetHidden: (categoryId: string, hidden: boolean) => void; onBack: () => void; onSelectCategory: (id: string) => void; onEditTransaction: (transaction: Transaction) => void }) {
   const Icon = categoryIcons[category.icon as keyof typeof categoryIcons] ?? Sparkles
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -2423,7 +2439,7 @@ function CategoryDetailPage({ category, spent, budget, transactions, allTransact
       <label><span>Category</span><select value={category.id} onChange={(event) => onSelectCategory(event.target.value)}>{categories.map((option) => <option key={option.id} value={option.id}>{option.name}{option.hidden ? ' (hidden)' : ''}</option>)}</select></label>
     </div>
     <section className="panel entity-detail-panel">
-      <div className="entity-heading"><div className="entity-heading-icon" style={{ color: category.color, background: `${category.color}18` }}><Icon size={20} /></div><div><span className="eyebrow">{category.reportGroup.replace('_', ' ')}{category.hidden ? ' · Hidden' : ''}</span><h2>{category.name}</h2></div><div className="entity-heading-actions"><button className="secondary-button" type="button" onClick={onRename}><Pencil size={16} />Rename</button><button className="secondary-button" type="button" onClick={() => onSetHidden(category.id, !category.hidden)}>{category.hidden ? <Eye size={16} /> : <EyeOff size={16} />}{category.hidden ? 'Unhide category' : 'Hide category'}</button>{allTransactions.length === 0 && <button className={confirmingDelete ? 'danger-button confirming' : 'danger-button'} type="button" disabled={deleting} onClick={async () => {
+      <div className="entity-heading"><div className="entity-heading-icon" style={{ color: category.color, background: `${category.color}18` }}><Icon size={20} /></div><div><span className="eyebrow">{category.reportGroup.replace('_', ' ')}{category.hidden ? ' · Hidden' : ''}</span><h2>{category.name}</h2></div><div className="entity-heading-actions"><button className="secondary-button" type="button" onClick={onEdit}><Pencil size={16} />Edit</button><button className="secondary-button" type="button" onClick={() => onSetHidden(category.id, !category.hidden)}>{category.hidden ? <Eye size={16} /> : <EyeOff size={16} />}{category.hidden ? 'Unhide category' : 'Hide category'}</button>{allTransactions.length === 0 && <button className={confirmingDelete ? 'danger-button confirming' : 'danger-button'} type="button" disabled={deleting} onClick={async () => {
         if (!confirmingDelete) { setConfirmingDelete(true); setDeleteError(''); return }
         setDeleting(true)
         try { await onDelete(category.id) } catch (cause) { setDeleteError(getErrorMessage(cause, 'Could not delete the category.')); setDeleting(false); setConfirmingDelete(false) }
@@ -2805,8 +2821,8 @@ function TransactionForm({ accounts, categories, payees, onSubmit }: { accounts:
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? '')
   const [toAccountId, setToAccountId] = useState(accounts[1]?.id ?? '')
   const relevant = categories.filter((category) => type === 'income'
-    ? ['income', 'capital_gain', 'expense'].includes(category.reportGroup)
-    : ['expense', 'tax', 'capital_gain'].includes(category.reportGroup))
+    ? ['income', 'expense'].includes(category.reportGroup)
+    : ['expense', 'tax'].includes(category.reportGroup))
   const [categoryId, setCategoryId] = useState(categories.find(c => c.reportGroup === 'expense')?.id ?? '')
   function changeType(next: Transaction['type']) {
     setType(next)
@@ -2975,36 +2991,48 @@ function CategoryGroupManagerRow({ group, categoryCount, first, last, onRename, 
   </div>
 }
 
-function CategoryNameForm({ category, categories, onSubmit }: { category: Category; categories: Category[]; onSubmit: (categoryId: string, name: string) => Promise<void> }) {
+function CategoryDetailsForm({ category, categories, onSubmit }: { category: Category; categories: Category[]; onSubmit: (categoryId: string, changes: Pick<Category, 'name' | 'reportGroup' | 'icon' | 'color'>) => Promise<void> }) {
   const [name, setName] = useState(category.name)
+  const [reportGroup, setReportGroup] = useState<ReportGroup>(category.reportGroup)
+  const [icon, setIcon] = useState(category.icon in categoryIcons ? category.icon : 'sparkles')
+  const [color, setColor] = useState(category.color)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const normalizedName = name.normalize('NFKC').trim()
   const duplicate = categories.some((item) => item.id !== category.id && item.name.localeCompare(normalizedName, undefined, { sensitivity: 'accent' }) === 0)
-  const unchanged = normalizedName === category.name
+  const validColor = /^#[0-9a-f]{6}$/i.test(color)
+  const unchanged = normalizedName === category.name && reportGroup === category.reportGroup && icon === category.icon && color.toLocaleLowerCase('en') === category.color.toLocaleLowerCase('en')
+  const PreviewIcon = categoryIcons[icon as keyof typeof categoryIcons] ?? Sparkles
   return <form className="form" onSubmit={async (event) => {
     event.preventDefault()
-    if (!normalizedName || duplicate || unchanged) return
+    if (!normalizedName || duplicate || !validColor || unchanged) return
     setSaving(true)
     setError('')
     try {
-      await onSubmit(category.id, normalizedName)
+      await onSubmit(category.id, { name: normalizedName, reportGroup, icon, color })
     } catch (cause) {
-      setError(getErrorMessage(cause, 'Could not rename the category.'))
+      setError(getErrorMessage(cause, 'Could not update the category.'))
       setSaving(false)
     }
   }}>
     <label><span>Category name</span><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} /></label>
+    <label><span>Report group</span><select value={reportGroup} onChange={(event) => setReportGroup(event.target.value as ReportGroup)}><option value="income">Income</option><option value="expense">Expense</option><option value="tax">Tax</option></select></label>
+    <div className="category-appearance-row">
+      <div className="category-appearance-preview"><span style={{ color, background: `${color}18` }}><PreviewIcon size={22} /></span><div><small>Preview</small><strong>{normalizedName || 'Category'}</strong></div></div>
+      <label className="category-color-field"><span>Color</span><div><input type="color" value={validColor ? color : '#5d7d91'} onChange={(event) => setColor(event.target.value)} /><input aria-label="Category color hex value" value={color} onChange={(event) => setColor(event.target.value)} maxLength={7} /></div></label>
+    </div>
+    <fieldset className="category-icon-field"><legend>Icon</legend><div>{Object.entries(categoryIcons).map(([value, Icon]) => <button type="button" className={icon === value ? 'selected' : ''} key={value} title={value.replaceAll('-', ' ')} aria-label={`Use ${value.replaceAll('-', ' ')} icon`} aria-pressed={icon === value} onClick={() => setIcon(value)}><Icon size={18} /></button>)}</div></fieldset>
     {duplicate && <p className="auth-error" role="alert">A category named “{normalizedName}” already exists.</p>}
+    {!validColor && <p className="auth-error" role="alert">Enter a six-digit hex color such as #5d7d91.</p>}
     {error && <p className="auth-error" role="alert">{error}</p>}
-    <button className="primary-button form-submit" disabled={!normalizedName || duplicate || unchanged || saving}>{saving ? 'Saving…' : 'Save name'}<ArrowRight size={18} /></button>
+    <button className="primary-button form-submit" disabled={!normalizedName || duplicate || !validColor || unchanged || saving}>{saving ? 'Saving…' : 'Save category'}<ArrowRight size={18} /></button>
   </form>
 }
 
 function CategoryForm({ categoryGroups, onSubmit }: { categoryGroups: CategoryGroup[]; onSubmit: (c: Omit<Category, 'id'>, budgetMinor: number) => void }) {
   const [name, setName] = useState(''); const [budget, setBudget] = useState(''); const [reportGroup, setReportGroup] = useState<ReportGroup>('expense'); const [categoryGroupId, setCategoryGroupId] = useState(categoryGroups[0]?.id ?? '')
   function submit(e: FormEvent) { e.preventDefault(); const budgetMinor = parseMoneyToMinor(budget || '0'); if (!name || budgetMinor === null) return; onSubmit({ name, reportGroup, categoryGroupId: categoryGroupId || undefined, color: '#5d7d91', icon: reportGroup === 'income' ? 'briefcase' : 'sparkles', hidden: false }, budgetMinor) }
-  return <form className="form" onSubmit={submit}><label><span>Category name</span><input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Personal care" /></label><div className="form-grid"><label><span>Report group</span><select value={reportGroup} onChange={e => setReportGroup(e.target.value as ReportGroup)}><option value="income">Income</option><option value="expense">Expense</option><option value="tax">Tax</option><option value="capital_gain">Capital gain/loss</option></select></label><label><span>Category group</span><select value={categoryGroupId} onChange={e => setCategoryGroupId(e.target.value)}>{categoryGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label></div><label><span>Monthly plan</span><input type="number" min="0" step="0.01" value={budget} onChange={e => setBudget(e.target.value)} placeholder="0.00" /></label><button className="primary-button form-submit">Create category<ArrowRight size={18} /></button></form>
+  return <form className="form" onSubmit={submit}><label><span>Category name</span><input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Personal care" /></label><div className="form-grid"><label><span>Report group</span><select value={reportGroup} onChange={e => setReportGroup(e.target.value as ReportGroup)}><option value="income">Income</option><option value="expense">Expense</option><option value="tax">Tax</option></select></label><label><span>Category group</span><select value={categoryGroupId} onChange={e => setCategoryGroupId(e.target.value)}>{categoryGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label></div><label><span>Monthly plan</span><input type="number" min="0" step="0.01" value={budget} onChange={e => setBudget(e.target.value)} placeholder="0.00" /></label><button className="primary-button form-submit">Create category<ArrowRight size={18} /></button></form>
 }
 
 export default App
