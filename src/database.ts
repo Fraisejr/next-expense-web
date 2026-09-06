@@ -1,6 +1,6 @@
 import { neon } from './neon'
 import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
-import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankImportCandidate, BankRateLimit, BankSyncDiagnostic, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
+import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankImportCandidate, BankRateLimit, BankSyncDiagnostic, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, Transaction, YearlySpendingGoal } from './types'
 
 type Row = Record<string, unknown>
 
@@ -306,7 +306,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
   nextMonthDate.setUTCMonth(nextMonthDate.getUTCMonth() + 1)
   const monthEnd = nextMonthDate.toISOString().slice(0, 10)
   const [workspaceResult, accountRows, categoryGroupRows, categoryRows, periodRows, budgetRows, fxRateRows, payeeRows, mappingRows, transactionPage, balanceResult, connectionRows, candidateRows, unusedPayeeResult] = await Promise.all([
-    neon.from('workspaces').select('name,default_currency,estimated_company_tax_rate_bps').eq('id', workspaceId).limit(1),
+    neon.from('workspaces').select('name,default_currency,estimated_company_tax_rate_bps,yearly_spending_goals').eq('id', workspaceId).limit(1),
     allRows('accounts', 'id,name,display_type,scope,balance_sheet_group,currency,color,sort_order,closed,investment,pension,auto_sync,bank_import_mode,provider_account_id,institution_id,country', 'sort_order'),
     allRows('category_groups', 'id,name,sort_order,show_categories', 'sort_order'),
     allRows('categories', 'id,name,sort_order,color,icon,report_group,category_group_id,hidden', 'sort_order'),
@@ -447,6 +447,18 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
     throw new Error('The linked workspace could not be read.')
   }
 
+  const storedYearlyGoals = workspace.yearly_spending_goals && typeof workspace.yearly_spending_goals === 'object' && !Array.isArray(workspace.yearly_spending_goals)
+    ? workspace.yearly_spending_goals as Record<string, unknown>
+    : {}
+  const yearlySpendingGoals: YearlySpendingGoal[] = Object.entries(storedYearlyGoals).flatMap(([yearKey, scopes]) => {
+    const year = Number(yearKey)
+    if (!Number.isInteger(year) || !scopes || typeof scopes !== 'object' || Array.isArray(scopes)) return []
+    return (['Personal', 'Company', 'Combined'] as SpendingGoalScope[]).flatMap((scope) => {
+      const amountMinor = Number((scopes as Record<string, unknown>)[scope])
+      return Number.isSafeInteger(amountMinor) && amountMinor >= 0 ? [{ year, scope, amountMinor }] : []
+    })
+  })
+
   return {
     workspaceId,
     workspaceName: workspace.name as string,
@@ -459,6 +471,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
       unusedPayeeIds,
       payeeMappings,
       budgets,
+      yearlySpendingGoals,
       fxRates,
       transactions,
       bankImportCandidates,
@@ -1260,6 +1273,15 @@ export async function updateTaxRate(workspaceId: string, estimatedCompanyTaxRate
   if (error) throw error
 }
 
+export async function saveYearlySpendingGoals(workspaceId: string, goals: YearlySpendingGoal[]) {
+  const storedGoals = goals.reduce<Record<string, Partial<Record<SpendingGoalScope, number>>>>((years, goal) => {
+    years[String(goal.year)] = { ...years[String(goal.year)], [goal.scope]: goal.amountMinor }
+    return years
+  }, {})
+  const { error } = await neon.from('workspaces').update({ yearly_spending_goals: storedGoals }).eq('id', workspaceId)
+  if (error) throw error
+}
+
 export async function linkBankAccount(workspaceId: string, accountId: string, connection: {
   requisitionId: string
   providerAccountId: string
@@ -1408,18 +1430,19 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
     ?? (transaction.bankTransactionId ? candidateByBankId.get(transaction.bankTransactionId) : undefined)
 
   const matchingTransfer = (transaction: BankSyncPayload['transactions'][number]) => {
-    const counterpartyAccountId = aliasAccountIds.get(normalizedPayeeName(transaction.payee))
-    if (!counterpartyAccountId || transaction.currency !== account.currency) return undefined
+    const aliasAccountId = aliasAccountIds.get(normalizedPayeeName(transaction.payee))
+    const counterpartyAccountId = aliasAccountId && aliasAccountId !== account.id ? aliasAccountId : undefined
+    if (transaction.currency !== account.currency) return undefined
     const amountMinor = amountToMinor(transaction.amount, transaction.currency)
     const candidates = transferRows.filter((row) => {
       if (daysApart(row.transaction_date, transaction.date) > 3) return false
       if (transaction.type === 'income') {
         return row.destination_account_id === account.id
-          && row.account_id === counterpartyAccountId
+          && (!counterpartyAccountId || row.account_id === counterpartyAccountId)
           && number(row.destination_amount_minor || row.amount_minor) === amountMinor
       }
       return row.account_id === account.id
-        && row.destination_account_id === counterpartyAccountId
+        && (!counterpartyAccountId || row.destination_account_id === counterpartyAccountId)
         && number(row.amount_minor) === amountMinor
     })
     if (!candidates.length) return undefined

@@ -1,4 +1,5 @@
 export type AccountScope = 'Personal' | 'Company'
+export type SpendingGoalScope = AccountScope | 'Combined'
 export type BalanceSheetGroup = 'Personal' | 'Company' | 'Real estate' | 'Pension'
 export type ReportGroup = 'personal_income' | 'personal_expense' | 'personal_tax' | 'company_revenue' | 'company_expense' | 'company_tax'
 export type BalanceAdjustmentReason = 'market_valuation' | 'asset_valuation' | 'liability_adjustment' | 'reconciliation' | 'other'
@@ -112,6 +113,12 @@ export type Budget = {
   amountMinor: number
 }
 
+export type YearlySpendingGoal = {
+  year: number
+  scope: SpendingGoalScope
+  amountMinor: number
+}
+
 export type FxRate = {
   id: string
   baseCurrency: string
@@ -151,6 +158,7 @@ export type AppData = {
   unusedPayeeIds: string[]
   payeeMappings: PayeeMapping[]
   budgets: Budget[]
+  yearlySpendingGoals: YearlySpendingGoal[]
   fxRates: FxRate[]
   transactions: Transaction[]
   bankImportCandidates: BankImportCandidate[]

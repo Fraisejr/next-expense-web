@@ -6,10 +6,10 @@ import {
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteAllUnusedPayees, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDetails, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
+import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteAllUnusedPayees, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveYearlySpendingGoals, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDetails, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
 import { convertMinor } from './currency'
-import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
+import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, Transaction, YearlySpendingGoal } from './types'
 
 type Page = 'overview' | 'transactions' | 'payees' | 'reports' | 'accounts' | 'settings'
 type ReportView = 'profit-loss' | 'net-worth'
@@ -355,7 +355,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   }, [historyLoaded, selectedMonthKey, workspace.workspaceId])
 
   useEffect(() => {
-    if (page === 'payees' || page === 'reports' || Boolean(payeeMatch || categoryTarget)) void ensureFullHistory()
+    if (page === 'overview' || page === 'payees' || page === 'reports' || Boolean(payeeMatch || categoryTarget)) void ensureFullHistory()
   }, [categoryTarget, ensureFullHistory, page, payeeMatch])
 
   useEffect(() => {
@@ -1031,6 +1031,12 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
+  async function changeYearlySpendingGoal(goal: YearlySpendingGoal) {
+    const nextGoals = [...data.yearlySpendingGoals.filter((item) => item.year !== goal.year || item.scope !== goal.scope), goal]
+    await saveYearlySpendingGoals(workspace.workspaceId, nextGoals)
+    setData((current) => ({ ...current, yearlySpendingGoals: nextGoals }))
+  }
+
   async function changeBankImportMode(accountId: string, mode: 'review' | 'automatic') {
     try {
       setSyncError('')
@@ -1223,6 +1229,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         )}
         {page === 'overview' && !selectedCategory && (
           <div className="page-content narrow-page overview-page">
+            <YearlySpendingPlan data={data} defaultCurrency={workspace.defaultCurrency} historyLoading={historyLoading} onSaveGoal={changeYearlySpendingGoal} />
             <OverviewPage accounts={activeAccounts} defaultCurrency={workspace.defaultCurrency} totalBalance={totalBalance} convertBalance={convertCurrentBalance} personal={{ income: personalIncome, expenses: personalExpenses, tax: personalTaxesPaid, net: personalIncome - personalExpenses - personalTaxesPaid }} company={{ income: companyRevenue, expenses: companyExpenses, tax: companyTaxesPaid + estimatedCompanyTax, net: companyRevenue - companyExpenses - companyTaxesPaid - estimatedCompanyTax }} month={viewedMonth} onOpenNetWorth={() => goTo('/reports/net-worth')} onOpenProfitAndLoss={() => goTo('/reports')} />
             <BudgetsPage categories={data.categories} categoryGroups={data.categoryGroups} categorySpending={categorySpending} budgetForCategory={budgetForCategory} showHiddenActivityAlert={selectedMonthKey === toMonthKey(new Date())} onAdd={() => setModal('category')} onManageGroups={() => setModal('category-groups')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onUnhideCategory={(id) => setCategoryHidden(id, false)} />
           </div>
@@ -2066,6 +2073,99 @@ function overviewBalanceGroup(account: Account): OverviewBalanceGroup {
 
 type OverviewPnl = { income: number; expenses: number; tax: number; net: number }
 
+type AnnualSpendingMetric = { year: number; income: number; expenses: number }
+
+function annualSpendingMetrics(data: AppData, scope: SpendingGoalScope, defaultCurrency: string, throughDate: string) {
+  const categories = new Map(data.categories.map((category) => [category.id, category]))
+  const metrics = new Map<number, AnnualSpendingMetric>()
+  for (const transaction of data.transactions) {
+    if (transaction.date > throughDate || (transaction.type !== 'income' && transaction.type !== 'expense')) continue
+    const group = categories.get(transaction.categoryId ?? '')?.reportGroup
+    const categoryScope: AccountScope | null = group?.startsWith('personal_') ? 'Personal' : group?.startsWith('company_') ? 'Company' : null
+    if (!group || !categoryScope || (scope !== 'Combined' && scope !== categoryScope)) continue
+    const year = Number(transaction.date.slice(0, 4))
+    const metric = metrics.get(year) ?? { year, income: 0, expenses: 0 }
+    const amount = convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, data.fxRates) ?? 0
+    const direction = transaction.type === 'income' ? 1 : -1
+    if (isIncomeReportGroup(group)) metric.income += direction * amount
+    if (isExpenseReportGroup(group)) metric.expenses += -direction * amount
+    metrics.set(year, metric)
+  }
+  return [...metrics.values()].sort((left, right) => left.year - right.year)
+}
+
+function YearlySpendingPlan({ data, defaultCurrency, historyLoading, onSaveGoal }: { data: AppData; defaultCurrency: string; historyLoading: boolean; onSaveGoal: (goal: YearlySpendingGoal) => Promise<void> }) {
+  const [scope, setScope] = useState<SpendingGoalScope>('Combined')
+  const [goalInput, setGoalInput] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const today = todayInParis()
+  const currentYear = Number(today.slice(0, 4))
+  const metrics = annualSpendingMetrics(data, scope, defaultCurrency, today)
+  const current = metrics.find((metric) => metric.year === currentYear) ?? { year: currentYear, income: 0, expenses: 0 }
+  const previous = metrics.filter((metric) => metric.year < currentYear && (metric.income !== 0 || metric.expenses !== 0)).slice(-3)
+  const comparison = [...previous, current]
+  const goal = data.yearlySpendingGoals.find((item) => item.year === currentYear && item.scope === scope)
+  const goalAmount = goal?.amountMinor ?? 0
+  const progress = goalAmount > 0 ? current.expenses / goalAmount * 100 : 0
+  const currentDate = new Date(`${today}T12:00:00Z`)
+  const startOfYear = new Date(Date.UTC(currentYear, 0, 1))
+  const endOfYear = new Date(Date.UTC(currentYear + 1, 0, 1))
+  const elapsedFraction = Math.max(1 / 366, (currentDate.getTime() - startOfYear.getTime() + 86_400_000) / (endOfYear.getTime() - startOfYear.getTime()))
+  const annualizedExpenses = current.expenses / elapsedFraction
+  const annualizedIncome = current.income / elapsedFraction
+  const historicalExpenses = previous.length ? previous.reduce((sum, metric) => sum + metric.expenses, 0) / previous.length : 0
+  const historicalIncomeTotal = previous.reduce((sum, metric) => sum + metric.income, 0)
+  const historicalExpenseTotal = previous.reduce((sum, metric) => sum + metric.expenses, 0)
+  const currentSavingsRate = current.income > 0 ? (current.income - current.expenses) / current.income : 0
+  const savingsRate = Math.max(-.25, Math.min(.75, historicalIncomeTotal > 0 ? (historicalIncomeTotal - historicalExpenseTotal) / historicalIncomeTotal : currentSavingsRate))
+  const incomeAlignedExpenses = annualizedIncome > 0 ? annualizedIncome * (1 - savingsRate) : 0
+  const suggestionInputs = [annualizedExpenses, historicalExpenses, incomeAlignedExpenses].filter((value) => value > 0)
+  const suggestedGoal = Math.max(current.expenses, suggestionInputs.length ? Math.round((suggestionInputs.reduce((sum, value) => sum + value, 0) / suggestionInputs.length) / 10_000) * 10_000 : 0)
+  const comparisonMaximum = Math.max(1, ...comparison.flatMap((metric) => [metric.income, metric.expenses]))
+
+  useEffect(() => {
+    setGoalInput(goalAmount > 0 ? (goalAmount / 100).toFixed(0) : '')
+    setSaveError('')
+  }, [goalAmount, scope])
+
+  const saveGoal = async () => {
+    const amountMinor = parseMoneyToMinor(goalInput)
+    if (amountMinor === null || amountMinor <= 0) {
+      setSaveError('Enter a yearly goal greater than zero.')
+      return
+    }
+    setSaving(true)
+    setSaveError('')
+    try {
+      await onSaveGoal({ year: currentYear, scope, amountMinor })
+    } catch (cause) {
+      setSaveError(getErrorMessage(cause, 'Could not save the yearly goal.'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return <section className="panel yearly-spending-plan">
+    <div className="yearly-spending-heading">
+      <div><span className="eyebrow">Yearly spending · {currentYear}</span><h2>Expenses so far this year</h2><p>Compare this year with recent full years, then set a realistic annual ceiling.</p></div>
+      <div className="segmented three-way yearly-scope" aria-label="Spending scope">{(['Personal', 'Company', 'Combined'] as SpendingGoalScope[]).map((item) => <button type="button" key={item} className={scope === item ? 'active transfer' : ''} aria-pressed={scope === item} onClick={() => setScope(item)}>{item}</button>)}</div>
+    </div>
+    {historyLoading && <div className="yearly-history-loading"><LoaderCircle size={14} />Loading complete history for an accurate year-to-date comparison…</div>}
+    <div className="yearly-spending-summary">
+      <div className="yearly-spent-value"><span>Spent year to date</span><strong>{formatMoney(current.expenses, defaultCurrency)}</strong><small>{goalAmount > 0 ? `${Math.round(progress)}% of ${formatMoney(goalAmount, defaultCurrency)} goal` : 'No yearly goal set yet'}</small></div>
+      <div className="yearly-progress"><div className="yearly-progress-track"><span className={progress > 100 ? 'over' : ''} style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} /></div><div><span>{goalAmount > 0 ? formatMoney(Math.max(0, goalAmount - current.expenses), defaultCurrency) : '—'} remaining</span>{progress > 100 && <strong>{formatMoney(current.expenses - goalAmount, defaultCurrency)} over goal</strong>}</div></div>
+      <div className="yearly-goal-editor"><label><span>{scope} goal</span><div><b>{defaultCurrency}</b><input type="number" min="0.01" step="0.01" value={goalInput} onChange={(event) => setGoalInput(event.target.value)} placeholder="Set yearly goal" /></div></label><div><button type="button" className="text-button" disabled={!suggestedGoal} onClick={() => setGoalInput((suggestedGoal / 100).toFixed(0))}>Use {formatCompactMoney(suggestedGoal, defaultCurrency)} suggestion</button><button type="button" className="primary-button" disabled={saving} onClick={() => void saveGoal()}>{saving ? 'Saving…' : 'Save goal'}</button></div>{saveError && <p role="alert">{saveError}</p>}</div>
+    </div>
+    <div className="yearly-comparison-heading"><div><span className="eyebrow">Planning context</span><h3>Income and expenses by year</h3></div><p>Suggestion blends this year’s expense run rate, average prior spending, and projected income at your historical savings rate.</p></div>
+    <div className="yearly-comparison">{comparison.map((metric) => <div className="yearly-comparison-row" key={metric.year}>
+      <div className="yearly-comparison-year"><strong>{metric.year}</strong><span>{metric.year === currentYear ? 'So far' : 'Full year'}</span></div>
+      <div className="yearly-comparison-bars"><div><span>Income</span><i><b style={{ width: `${Math.max(0, metric.income) / comparisonMaximum * 100}%` }} /></i><strong>{formatMoney(metric.income, defaultCurrency)}</strong></div><div className="expense"><span>Expenses</span><i><b style={{ width: `${Math.max(0, metric.expenses) / comparisonMaximum * 100}%` }} /></i><strong>{formatMoney(metric.expenses, defaultCurrency)}</strong></div></div>
+    </div>)}</div>
+    <div className="yearly-suggestion"><Sparkles size={16} /><p><strong>Suggested {scope.toLocaleLowerCase('en')} goal: {formatMoney(suggestedGoal, defaultCurrency)}</strong><span>Current annual pace {formatMoney(annualizedExpenses, defaultCurrency)} · projected income {formatMoney(annualizedIncome, defaultCurrency)} · historical savings rate {new Intl.NumberFormat('en', { style: 'percent', maximumFractionDigits: 0 }).format(savingsRate)}</span></p></div>
+  </section>
+}
+
 function OverviewPage({ accounts, defaultCurrency, totalBalance, convertBalance, personal, company, month, onOpenNetWorth, onOpenProfitAndLoss }: {
   accounts: Account[]
   defaultCurrency: string
@@ -2592,7 +2692,7 @@ function AccountDetailPage({ account, transactions, allTransactions, candidates,
     <section className="panel entity-detail-panel">
       <div className="entity-heading"><div className="entity-heading-icon" style={{ background: account.color }}><CreditCard size={20} /></div><div><span className="eyebrow">{accountBalanceSheetGroup(account)} · {account.type}{account.providerAccountId ? ' · Bank connected' : ''}</span><div className="entity-heading-title"><h2>{account.name}</h2>{accountIsReconciled(account) && <AccountReconciledIndicator label />}</div></div><div className="entity-heading-actions"><button className="secondary-button" onClick={onAdjustBalance}><RefreshCw size={16} />Adjust balance</button><button className="secondary-button" onClick={onEditAccount}><Pencil size={16} />Edit account</button>{account.providerAccountId && <button className="primary-button" disabled={syncing} onClick={onSyncBank}>{syncing ? <LoaderCircle className="spin-icon" size={16} /> : <RefreshCw size={16} />}{syncing ? 'Syncing…' : 'Sync now'}</button>}<button className="secondary-button" onClick={onLinkBank}><Link2 size={16} />{account.providerAccountId ? 'Reconnect' : 'Connect bank'}</button></div></div>
       {account.providerAccountId && <div className="bank-sync-status"><div><strong>{account.connectionStatus === 'active' ? 'Bank connection active' : 'Bank connected'}</strong><span>{account.lastSyncedAt ? `Last synced ${new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(account.lastSyncedAt))}` : 'Not synced yet'}</span>{account.lastSyncDiagnostic && !syncNotice && <span>{formatSyncDiagnostic(account.lastSyncDiagnostic)}</span>}</div><span>{syncNotice || formatRateLimits(account)}</span></div>}
-      {account.providerAccountId && <BankImportReview account={account} accounts={accounts} candidates={candidates} categories={categories} payees={payees} mappings={mappings} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingPayees} onModeChange={onImportModeChange} onReview={onReviewCandidate} onPostTransfer={onPostTransfer} onRematchPayees={onRematchPayees} onCreatePayee={onCreatePayee} onPromoteMapping={onPromoteMapping} onAddAlternativeName={onAddAlternativeName} onUnhideCategory={onUnhideCategory} />}
+      {account.providerAccountId && <BankImportReview account={account} accounts={accounts} transactions={transactions} candidates={candidates} categories={categories} payees={payees} mappings={mappings} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingPayees} onModeChange={onImportModeChange} onReview={onReviewCandidate} onPostTransfer={onPostTransfer} onRematchPayees={onRematchPayees} onCreatePayee={onCreatePayee} onPromoteMapping={onPromoteMapping} onAddAlternativeName={onAddAlternativeName} onUnhideCategory={onUnhideCategory} />}
       <AccountDetail account={account} transactions={transactions} allTransactions={allTransactions} categories={categories} accounts={accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={onRequestHistory} onEditTransaction={onEditTransaction} />
     </section>
   </div>
@@ -2651,7 +2751,7 @@ function CategorySearchPicker({ ariaLabel, value, categories, allowEmpty = false
   </div>
 }
 
-function BankImportReview({ account, accounts, candidates, categories, payees, mappings, reviewingCandidateId, rematchingPayees, onModeChange, onReview, onPostTransfer, onRematchPayees, onCreatePayee, onPromoteMapping, onAddAlternativeName, onUnhideCategory }: { account: Account; accounts: Account[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; reviewingCandidateId: string; rematchingPayees: boolean; onModeChange: (mode: 'review' | 'automatic') => void; onReview: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string) => void; onPostTransfer: (candidateId: string, counterpartyAccountId: string) => Promise<void>; onRematchPayees: () => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onAddAlternativeName: (sourceName: string, payeeId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void> }) {
+function BankImportReview({ account, accounts, transactions, candidates, categories, payees, mappings, reviewingCandidateId, rematchingPayees, onModeChange, onReview, onPostTransfer, onRematchPayees, onCreatePayee, onPromoteMapping, onAddAlternativeName, onUnhideCategory }: { account: Account; accounts: Account[]; transactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; reviewingCandidateId: string; rematchingPayees: boolean; onModeChange: (mode: 'review' | 'automatic') => void; onReview: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string) => void; onPostTransfer: (candidateId: string, counterpartyAccountId: string) => Promise<void>; onRematchPayees: () => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onAddAlternativeName: (sourceName: string, payeeId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void> }) {
   const mode = account.bankImportMode ?? 'review'
   const [categoryAssignments, setCategoryAssignments] = useState<Record<string, string>>({})
   const [payeeAssignments, setPayeeAssignments] = useState<Record<string, string>>({})
@@ -2702,8 +2802,21 @@ function BankImportReview({ account, accounts, candidates, categories, payees, m
         const transferMode = transferCandidateId === candidate.id
         const eligibleTransferAccounts = accounts.filter((item) => item.id !== account.id && !item.closed && item.currency === candidate.currency)
         const transferAccountId = transferAccountAssignments[candidate.id] ?? eligibleTransferAccounts[0]?.id ?? ''
+        const possibleExistingTransfers = transactions.filter((transaction) => {
+          if (transaction.type !== 'transfer' || transaction.currency !== candidate.currency) return false
+          const daysApart = Math.abs(Date.parse(`${transaction.date}T12:00:00Z`) - Date.parse(`${candidate.date}T12:00:00Z`)) / 86_400_000
+          if (daysApart > 3) return false
+          return candidate.type === 'expense'
+            ? transaction.accountId === account.id && transaction.amountMinor === candidate.amountMinor
+            : transaction.toAccountId === account.id && (transaction.destinationAmountMinor ?? transaction.amountMinor) === candidate.amountMinor
+        })
+        const closestDistance = possibleExistingTransfers.length ? Math.min(...possibleExistingTransfers.map((transaction) => Math.abs(Date.parse(`${transaction.date}T12:00:00Z`) - Date.parse(`${candidate.date}T12:00:00Z`)))) : undefined
+        const closestExistingTransfers = closestDistance === undefined ? [] : possibleExistingTransfers.filter((transaction) => Math.abs(Date.parse(`${transaction.date}T12:00:00Z`) - Date.parse(`${candidate.date}T12:00:00Z`)) === closestDistance)
+        const existingTransfer = closestExistingTransfers.length === 1 ? closestExistingTransfers[0] : undefined
+        const existingTransferCounterpartyId = existingTransfer ? (candidate.type === 'expense' ? existingTransfer.toAccountId : existingTransfer.accountId) : undefined
+        const existingTransferCounterparty = accounts.find((item) => item.id === existingTransferCounterpartyId)
         return <div className="bank-review-row" key={candidate.id}>
-          <div className="bank-review-description"><strong>{selectedPayee?.name ?? candidate.payee}{candidate.posted ? null : <em className="pending-badge">Pending</em>}</strong><span>{formatShortDate(candidate.date)} · {selectedPayee ? `Bank: ${candidate.payee}` : 'Bank description'}{distinctNote ? ` · ${distinctNote}` : ''}</span><div className="bank-review-description-actions"><em className={selectedPayee ? 'payee-match-badge matched' : 'payee-match-badge'}>{selectedPayee ? 'Matched payee' : 'New payee on approval'}</em>{!transferMode && eligibleTransferAccounts.length > 0 && <button type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => setTransferCandidateId(candidate.id)}><ArrowLeftRight size={12} />Post as transfer</button>}</div></div>
+          <div className="bank-review-description"><strong>{selectedPayee?.name ?? candidate.payee}{candidate.posted ? null : <em className="pending-badge">Pending</em>}</strong><span>{formatShortDate(candidate.date)} · {selectedPayee ? `Bank: ${candidate.payee}` : 'Bank description'}{distinctNote ? ` · ${distinctNote}` : ''}</span><div className="bank-review-description-actions"><em className={selectedPayee ? 'payee-match-badge matched' : 'payee-match-badge'}>{selectedPayee ? 'Matched payee' : 'New payee on approval'}</em>{!transferMode && existingTransfer && existingTransferCounterpartyId && existingTransferCounterparty ? <button type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => void onPostTransfer(candidate.id, existingTransferCounterpartyId)}><ArrowLeftRight size={12} />Match existing transfer to {existingTransferCounterparty.name}</button> : !transferMode && eligibleTransferAccounts.length > 0 && <button type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => setTransferCandidateId(candidate.id)}><ArrowLeftRight size={12} />Post as transfer</button>}</div></div>
           <b className={candidate.type === 'income' ? 'positive' : ''}>{candidate.type === 'income' ? '+' : '−'}{formatMoney(candidate.amountMinor, candidate.currency)}</b>
           {transferMode ? <div className="bank-review-transfer-choice">
             <label><span>{candidate.type === 'expense' ? 'Transfer to account' : 'Transfer from account'}</span><select aria-label={`${candidate.type === 'expense' ? 'Destination' : 'Source'} account for ${candidate.payee}`} value={transferAccountId} onChange={(event) => setTransferAccountAssignments((current) => ({ ...current, [candidate.id]: event.target.value }))}>{eligibleTransferAccounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>

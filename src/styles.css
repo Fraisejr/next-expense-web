@@ -108,6 +108,52 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .page-content { max-width: 1420px; margin: 0 auto; padding: 28px 34px 45px; }
 .narrow-page { max-width: 1120px; }
 .overview-page { padding-top: 34px; }
+.yearly-spending-plan { margin-bottom: 24px; padding: 23px; }
+.yearly-spending-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.yearly-spending-heading h2 { margin-top: 4px; font-size: 25px; }
+.yearly-spending-heading p { margin-top: 7px; color: var(--muted); font-size: 10px; }
+.yearly-scope { width: 300px; flex: 0 0 auto; }
+.yearly-history-loading { display: flex; align-items: center; gap: 7px; margin-top: 15px; padding: 9px 11px; color: #536f66; background: #edf3ef; border-radius: 7px; font-size: 9px; font-weight: 700; }
+.yearly-history-loading svg { animation: spin .9s linear infinite; }
+.yearly-spending-summary { display: grid; grid-template-columns: minmax(180px, .8fr) minmax(220px, 1.15fr) minmax(250px, 1fr); align-items: center; gap: 22px; margin-top: 20px; padding: 18px; background: #f2f3ee; border: 1px solid #e0e2da; border-radius: 10px; }
+.yearly-spent-value span, .yearly-spent-value strong, .yearly-spent-value small { display: block; }
+.yearly-spent-value span { color: var(--muted); font-size: 8.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.yearly-spent-value strong { margin-top: 5px; font-family: 'DM Mono', monospace; font-size: clamp(22px, 2.5vw, 30px); font-weight: 500; letter-spacing: -.05em; }
+.yearly-spent-value small { margin-top: 4px; color: #657069; font-size: 9px; }
+.yearly-progress-track { height: 10px; overflow: hidden; background: #dfe3dc; border-radius: 6px; }
+.yearly-progress-track span { height: 100%; display: block; background: linear-gradient(90deg, #47776c, #75a093); border-radius: inherit; transition: width .25s ease; }
+.yearly-progress-track span.over { background: linear-gradient(90deg, #b45c41, #d38966); }
+.yearly-progress > div:last-child { display: flex; justify-content: space-between; gap: 10px; margin-top: 7px; color: var(--muted); font-size: 8.5px; }
+.yearly-progress > div:last-child strong { color: #a64f3b; }
+.yearly-goal-editor label > span { display: block; margin-bottom: 5px; color: var(--muted); font-size: 8.5px; font-weight: 800; }
+.yearly-goal-editor label > div { display: flex; height: 38px; overflow: hidden; background: #fff; border: 1px solid #d6dad2; border-radius: 7px; }
+.yearly-goal-editor label b { display: grid; place-items: center; padding: 0 9px; color: #667068; background: #eceee8; border-right: 1px solid #d6dad2; font-family: 'DM Mono', monospace; font-size: 9px; }
+.yearly-goal-editor input { min-width: 0; width: 100%; padding: 0 10px; color: var(--ink); background: transparent; border: 0; outline: 0; font-size: 11px; }
+.yearly-goal-editor > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+.yearly-goal-editor .text-button { padding: 0; font-size: 8.5px; text-align: left; }
+.yearly-goal-editor .primary-button { flex: 0 0 auto; padding: 8px 11px; font-size: 9px; }
+.yearly-goal-editor > p { margin-top: 6px; color: #a14e3b; font-size: 8.5px; }
+.yearly-comparison-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-top: 22px; padding-top: 19px; border-top: 1px solid var(--line); }
+.yearly-comparison-heading h3 { margin-top: 4px; font-family: 'Newsreader', serif; font-size: 20px; }
+.yearly-comparison-heading > p { max-width: 470px; color: var(--muted); font-size: 8.5px; line-height: 1.5; text-align: right; }
+.yearly-comparison { margin-top: 13px; border: 1px solid #e0e2da; border-radius: 9px; overflow: hidden; }
+.yearly-comparison-row { display: grid; grid-template-columns: 75px minmax(0, 1fr); align-items: center; gap: 14px; padding: 11px 14px; border-bottom: 1px solid #e7e8e2; }
+.yearly-comparison-row:last-child { border-bottom: 0; background: #f6f8f4; }
+.yearly-comparison-year strong, .yearly-comparison-year span { display: block; }
+.yearly-comparison-year strong { font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 600; }
+.yearly-comparison-year span { margin-top: 3px; color: var(--muted); font-size: 8px; }
+.yearly-comparison-bars { display: grid; gap: 7px; }
+.yearly-comparison-bars > div { display: grid; grid-template-columns: 54px minmax(80px, 1fr) 110px; align-items: center; gap: 9px; }
+.yearly-comparison-bars span { color: #657068; font-size: 8px; font-weight: 700; }
+.yearly-comparison-bars i { height: 6px; overflow: hidden; background: #e4e6e0; border-radius: 4px; }
+.yearly-comparison-bars i b { height: 100%; display: block; background: #5e8c7f; border-radius: inherit; }
+.yearly-comparison-bars .expense i b { background: #c57959; }
+.yearly-comparison-bars > div > strong { font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 500; text-align: right; }
+.yearly-suggestion { display: flex; align-items: flex-start; gap: 9px; margin-top: 13px; padding: 11px 13px; color: #3d6258; background: #eaf1ed; border-radius: 8px; }
+.yearly-suggestion svg { flex: 0 0 auto; margin-top: 1px; }
+.yearly-suggestion strong, .yearly-suggestion span { display: block; }
+.yearly-suggestion strong { font-size: 9.5px; }
+.yearly-suggestion span { margin-top: 3px; color: #6a766f; font-size: 8.5px; }
 .overview-summary { margin-bottom: 18px; }
 .overview-heading { margin-bottom: 17px; }
 .overview-heading h2 { margin-top: 4px; font-size: 27px; }
@@ -917,6 +963,8 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .top-actions .primary-button:not(.form-submit) { font-size: 0; gap: 0; }
   .page-content { padding: 18px 16px 35px; }
   .overview-summary-grid { grid-template-columns: 1fr; }
+  .yearly-spending-summary { grid-template-columns: 1fr 1fr; }
+  .yearly-goal-editor { grid-column: 1 / -1; }
   .valuation-summary-grid { grid-template-columns: 1fr; }
   .net-worth-breakdown-grid { grid-template-columns: 1fr; }
   .settings-backup-grid { grid-template-columns: 1fr; }
@@ -1023,6 +1071,14 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .panel { padding: 16px; }
   .category-appearance-row { grid-template-columns: 1fr; }
   .overview-summary-card { padding: 17px; }
+  .yearly-spending-heading, .yearly-comparison-heading { align-items: stretch; flex-direction: column; }
+  .yearly-scope { width: 100%; }
+  .yearly-spending-summary { grid-template-columns: 1fr; padding: 14px; }
+  .yearly-goal-editor { grid-column: auto; }
+  .yearly-comparison-heading > p { text-align: left; }
+  .yearly-comparison-row { grid-template-columns: 55px minmax(0, 1fr); gap: 8px; padding-inline: 10px; }
+  .yearly-comparison-bars > div { grid-template-columns: 47px minmax(50px, 1fr) 82px; gap: 6px; }
+  .yearly-comparison-bars > div > strong { font-size: 8px; }
   .overview-pnl-scopes { grid-template-columns: 1fr; }
   .overview-breakdown.five-columns, .overview-breakdown.four-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 10px; }
   .fx-rate-add { grid-template-columns: 1fr; padding: 12px; }
