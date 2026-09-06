@@ -326,12 +326,28 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
   if (balanceResult.error) throw balanceResult.error
   if (candidateRows.error) throw candidateRows.error
 
+  const workspace = (workspaceResult.data?.[0] as unknown as Row | undefined)
+  const balanceRows = (balanceResult.data ?? []) as unknown as Row[]
+  const incompleteBalanceSnapshot = balanceRows.length !== accountRows.length
+  if (!workspace || incompleteBalanceSnapshot) {
+    // Neon Auth can restore its browser session just before the Data API starts
+    // applying that session to every RLS-protected read. Empty RPC results do
+    // not carry an error, so reject any snapshot without one balance per account.
+    if (retriesRemaining > 0) {
+      const attempt = 4 - retriesRemaining
+      await new Promise((resolve) => setTimeout(resolve, 200 * (2 ** (attempt - 1))))
+      return loadWorkspaceWithRetries(retriesRemaining - 1, month)
+    }
+    if (!workspace) throw new Error('The linked workspace could not be read.')
+    throw new Error('The account balances could not be read completely.')
+  }
+
   const unusedPayeeIds = unusedPayeeResult.error
     ? []
     : ((unusedPayeeResult.data ?? []) as unknown as Row[]).map((row) => String(row.payee_id))
   const periods = new Map(periodRows.map((row) => [row.id as string, `${row.year}-${String(row.month).padStart(2, '0')}`]))
   const transactions = transactionPage.transactions
-  const accountBalances = new Map(((balanceResult.data ?? []) as unknown as Row[]).map((row) => [String(row.account_id), number(row.balance_minor)]))
+  const accountBalances = new Map(balanceRows.map((row) => [String(row.account_id), number(row.balance_minor)]))
   const connections = new Map(connectionRows
     .filter((row) => row.account_id && row.status === 'active')
     .map((row) => [row.account_id as string, row]))
@@ -434,20 +450,6 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
       note: (row.memo as string | null) ?? undefined,
       posted: Boolean(row.posted),
     }))
-  const workspace = (workspaceResult.data?.[0] as unknown as Row | undefined)
-  if (!workspace) {
-    // Neon Auth can restore its browser session just before the Data API starts
-    // applying that session to RLS-protected reads. A membership row without its
-    // referenced workspace cannot be a stable database state, so retry the whole
-    // snapshot instead of asking the user to do it manually.
-    if (retriesRemaining > 0) {
-      const attempt = 4 - retriesRemaining
-      await new Promise((resolve) => setTimeout(resolve, 200 * (2 ** (attempt - 1))))
-      return loadWorkspaceWithRetries(retriesRemaining - 1, month)
-    }
-    throw new Error('The linked workspace could not be read.')
-  }
-
   const storedYearlyGoals = workspace.yearly_spending_goals && typeof workspace.yearly_spending_goals === 'object' && !Array.isArray(workspace.yearly_spending_goals)
     ? workspace.yearly_spending_goals as Record<string, unknown>
     : {}
