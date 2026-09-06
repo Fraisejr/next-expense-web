@@ -6,7 +6,7 @@ import {
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteAllUnusedPayees, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDetails, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
+import { approveBankImportCandidate, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteAllUnusedPayees, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDetails, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
 import { convertMinor } from './currency'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
@@ -95,6 +95,7 @@ const balanceAdjustmentReasonLabels: Record<BalanceAdjustmentReason, string> = {
 function inferredBalanceAdjustmentReason(account: Account): BalanceAdjustmentReason {
   if (account.investment || account.pension || account.balanceSheetGroup === 'Pension') return 'market_valuation'
   if (account.balanceSheetGroup === 'Real estate') return /mortgage|loan|bolån/i.test(account.name) ? 'liability_adjustment' : 'asset_valuation'
+  if (/tesla|car|vehicle|auto|voiture|coche/i.test(account.name)) return 'asset_valuation'
   if (/mortgage|loan|bolån/i.test(account.name)) return 'liability_adjustment'
   if (account.type === 'Savings') return 'market_valuation'
   return 'reconciliation'
@@ -259,6 +260,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   const [categoryTarget, setCategoryTarget] = useState<Transaction | null>(null)
   const [syncingAccountId, setSyncingAccountId] = useState('')
   const [reviewingCandidateId, setReviewingCandidateId] = useState('')
+  const [rematchingAccountId, setRematchingAccountId] = useState('')
   const [syncNotice, setSyncNotice] = useState<{ accountId: string; message: string } | null>(null)
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
@@ -960,6 +962,19 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     await changePayeeMapping(mapping.id, mapping.sourceName, mapping.payeeId, 'starts_with')
   }
 
+  async function addPayeeAlternativeForReview(sourceName: string, payeeId: string, accountId: string) {
+    try {
+      setSyncError('')
+      await createPayeeMapping(workspace.workspaceId, sourceName, payeeId)
+      await rematchPendingBankImportPayees(workspace.workspaceId, accountId)
+      const refreshed = await reloadWorkspaceSnapshot()
+      setData(refreshed.data)
+    } catch (error) {
+      setSyncError(getErrorMessage(error, 'Could not add the alternative payee name.'))
+      throw error
+    }
+  }
+
   async function removePayeeMapping(mappingId: string) {
     try {
       setSyncError('')
@@ -1025,6 +1040,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
             const existingMapping = data.payeeMappings.find((mapping) => mapping.sourceName.normalize('NFKC').trim().toLocaleLowerCase('en') === normalizedDescription)
             if (existingMapping && existingMapping.payeeId !== resolvedPayeeId) await updatePayeeMapping(workspace.workspaceId, existingMapping.id, bankDescription, resolvedPayeeId, existingMapping.matchType)
             else if (!existingMapping) await createPayeeMapping(workspace.workspaceId, bankDescription, resolvedPayeeId)
+            if (defaultAccountId) await rematchPendingBankImportPayees(workspace.workspaceId, defaultAccountId)
           } catch (mappingError) {
             const refreshed = await reloadWorkspaceSnapshot()
             setData(refreshed.data)
@@ -1040,6 +1056,21 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       setSyncError(getErrorMessage(error, `Could not ${decision} the bank transaction.`))
     } finally {
       setReviewingCandidateId('')
+    }
+  }
+
+  async function rematchBankImportPayees(accountId: string) {
+    try {
+      setSyncError('')
+      setRematchingAccountId(accountId)
+      const matched = await rematchPendingBankImportPayees(workspace.workspaceId, accountId)
+      const refreshed = await reloadWorkspaceSnapshot()
+      setData(refreshed.data)
+      setSyncNotice({ accountId, message: matched ? `${matched} pending ${matched === 1 ? 'transaction now has' : 'transactions now have'} a matched payee.` : 'No additional payees matched.' })
+    } catch (error) {
+      setSyncError(getErrorMessage(error, 'Could not recheck pending payees.'))
+    } finally {
+      setRematchingAccountId('')
     }
   }
 
@@ -1155,7 +1186,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <SettingsPage workspaceId={workspace.workspaceId} workspaceName={workspace.workspaceName} defaultCurrency={workspace.defaultCurrency} accounts={data.accounts} fxRates={data.fxRates} onSaveFxRate={saveExchangeRate} onDeleteFxRate={removeExchangeRate} />
         )}
         {selectedAccount && (
-          <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
+          <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onRematchPayees={() => rematchBankImportPayees(selectedAccount.id)} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onAddAlternativeName={(sourceName, payeeId) => addPayeeAlternativeForReview(sourceName, payeeId, selectedAccount.id)} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingAccountId === selectedAccount.id} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
         )}
         {selectedCategory && (
           <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTransactions={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onUpdateBudget={updateBudget} onUpdateGroup={changeCategoryGroup} onEdit={() => setModal('edit-category')} onDelete={removeUnusedCategory} onSetHidden={setCategoryHidden} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
@@ -1253,6 +1284,10 @@ function AuthScreen() {
   </main>
 }
 
+function BankImportConnectedIcon() {
+  return <span className="bank-import-connected-icon" role="img" aria-label="Connected for bank import" title="Connected for bank import"><Link2 size={11} strokeWidth={2.4} /></span>
+}
+
 function SidebarAccountGroup({ label, accounts, open, onToggle, selectedAccountId, accountHref, onSelect }: { label: string; accounts: Account[]; open: boolean; onToggle: () => void; selectedAccountId?: string; accountHref: (id: string) => string; onSelect: (id: string) => void }) {
   const subtotal = accounts.reduce((sum, account) => sum + account.balanceMinor, 0)
   const currencies = [...new Set(accounts.map((account) => account.currency))]
@@ -1260,7 +1295,7 @@ function SidebarAccountGroup({ label, accounts, open, onToggle, selectedAccountI
     <button className="sidebar-account-group-title" onClick={onToggle} aria-expanded={open}>
       <span><ChevronDown size={12} className={open ? '' : 'collapsed'} />{label}</span><b>{currencies.length === 1 ? formatMoney(subtotal, currencies[0]) : `${accounts.length} accounts`}</b>
     </button>
-    {open && <div className="sidebar-account-list">{accounts.map((account) => <a key={account.id} href={accountHref(account.id)} className={selectedAccountId === account.id ? 'sidebar-account active' : 'sidebar-account'} onClick={(event) => useClientNavigation(event, () => onSelect(account.id))}><span><i style={{ background: account.color }} />{account.name}</span><b className={account.balanceMinor < 0 ? 'negative' : ''}>{formatMoney(account.balanceMinor, account.currency)}</b></a>)}</div>}
+    {open && <div className="sidebar-account-list">{accounts.map((account) => <a key={account.id} href={accountHref(account.id)} className={selectedAccountId === account.id ? 'sidebar-account active' : 'sidebar-account'} onClick={(event) => useClientNavigation(event, () => onSelect(account.id))}><span><i style={{ background: account.color }} /><span className="sidebar-account-name">{account.name}</span>{account.providerAccountId && <BankImportConnectedIcon />}</span><b className={account.balanceMinor < 0 ? 'negative' : ''}>{formatMoney(account.balanceMinor, account.currency)}</b></a>)}</div>}
   </div>
 }
 
@@ -2036,10 +2071,11 @@ function BudgetsPage({ categories, categoryGroups, categorySpending, budgetForCa
 }
 
 type ReportPeriod = 'month' | 'year'
+type ValuationGroup = 'investments' | 'real-estate' | 'other-assets'
 
 function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate, onEditTransaction }: { data: AppData; viewedMonth: Date; defaultCurrency: string; onUpdateTaxRate: (rateBps: number) => void; onEditTransaction: (transaction: Transaction) => void }) {
   const [period, setPeriod] = useState<ReportPeriod>('month')
-  const [showValueChanges, setShowValueChanges] = useState(false)
+  const [openValuationGroup, setOpenValuationGroup] = useState<ValuationGroup | null>(null)
   const monthKey = toMonthKey(viewedMonth)
   const yearKey = String(viewedMonth.getFullYear())
   const categoryById = new Map(data.categories.map((category) => [category.id, category]))
@@ -2073,11 +2109,25 @@ function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate, onEd
   const valuationAdjustments = data.transactions
     .filter((transaction) => inPeriod(transaction.date) && transaction.type === 'balance_adjustment' && (transaction.adjustmentReason === 'market_valuation' || transaction.adjustmentReason === 'asset_valuation'))
     .sort((left, right) => right.date.localeCompare(left.date))
-  const valueChanges = valuationAdjustments.reduce((sum, transaction) => sum + (convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, data.fxRates) ?? 0), 0)
+  const valuationGroupFor = (transaction: Transaction): ValuationGroup => {
+    const account = data.accounts.find((item) => item.id === transaction.accountId)
+    if (transaction.adjustmentReason === 'market_valuation') return 'investments'
+    if (account && accountBalanceSheetGroup(account) === 'Real estate') return 'real-estate'
+    return 'other-assets'
+  }
+  const valuationGroupDefinitions: { id: ValuationGroup; label: string; description: string }[] = [
+    { id: 'investments', label: 'Investment performance', description: 'Investment and pension accounts' },
+    { id: 'real-estate', label: 'Real estate value changes', description: 'Homes and other property' },
+    { id: 'other-assets', label: 'Other asset value changes', description: 'Vehicles and other personal or company assets' },
+  ]
+  const valuationGroups = valuationGroupDefinitions.map((group) => {
+    const groupTransactions = valuationAdjustments.filter((transaction) => valuationGroupFor(transaction) === group.id)
+    return { ...group, transactions: groupTransactions, total: groupTransactions.reduce((sum, transaction) => sum + (convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, data.fxRates) ?? 0), 0) }
+  })
+  const selectedValuationGroup = valuationGroups.find((group) => group.id === openValuationGroup)
   const companyActualProfit = totalTransactionsForGroup(companyTransactions, 'income') - totalTransactionsForGroup(companyTransactions, 'expense')
   const companyTaxEstimate = estimatedTax(companyActualProfit)
   const actualOperatingResult = actualIncome - actualExpenses - recordedTaxes - companyTaxEstimate
-  const actualIncludingValueChanges = actualOperatingResult + valueChanges
 
   const forecastIncome = totalBudgetsForGroup(reportBudgets, 'income')
   const forecastExpenses = totalBudgetsForGroup(reportBudgets, 'expense')
@@ -2096,12 +2146,16 @@ function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate, onEd
       <label className="tax-rate-field"><span>Company tax planning rate</span><div><input type="number" min="0" max="100" step="0.1" value={data.settings.estimatedCompanyTaxRateBps / 100} onChange={(event) => onUpdateTaxRate(Math.max(0, Math.round(Number(event.target.value) * 100)))} /><b>%</b></div><small>Planning estimate only</small></label>
     </section>
     <div className="report-comparison">
-      <ReportColumn title="Forecast" subtitle="From monthly budgets" currency={defaultCurrency} income={forecastIncome} expenses={forecastExpenses} tax={forecastTax} otherTax={plannedTaxes} otherTaxLabel="Other planned taxes" operatingResult={forecastOperatingResult} valueChanges={0} resultIncludingValueChanges={forecastOperatingResult} />
-      <ReportColumn title="Actual" subtitle="From recorded activity" currency={defaultCurrency} income={actualIncome} expenses={actualExpenses} tax={companyTaxEstimate} otherTax={recordedTaxes} otherTaxLabel="Other recorded taxes" operatingResult={actualOperatingResult} valueChanges={valueChanges} resultIncludingValueChanges={actualIncludingValueChanges} valueChangeCount={valuationAdjustments.length} valueChangesExpanded={showValueChanges} onToggleValueChanges={() => setShowValueChanges((current) => !current)} />
+      <ReportColumn title="Forecast" subtitle="From monthly budgets" currency={defaultCurrency} income={forecastIncome} expenses={forecastExpenses} tax={forecastTax} otherTax={plannedTaxes} otherTaxLabel="Other planned taxes" netIncome={forecastOperatingResult} />
+      <ReportColumn title="Actual" subtitle="From recorded activity" currency={defaultCurrency} income={actualIncome} expenses={actualExpenses} tax={companyTaxEstimate} otherTax={recordedTaxes} otherTaxLabel="Other recorded taxes" netIncome={actualOperatingResult} />
     </div>
-    {showValueChanges && <section className="panel valuation-drilldown" id="valuation-drilldown">
-      <div className="valuation-drilldown-heading"><div><span className="eyebrow">Actual · {period === 'month' ? monthName.format(viewedMonth) : yearKey}</span><h3>Market and asset value changes</h3><p>{valuationAdjustments.length} adjustment{valuationAdjustments.length === 1 ? '' : 's'} contributing {formatMoney(valueChanges, defaultCurrency)}.</p></div><button type="button" className="icon-button" aria-label="Close value-change details" onClick={() => setShowValueChanges(false)}><X size={17} /></button></div>
-      {valuationAdjustments.length ? <div className="valuation-drilldown-list">{valuationAdjustments.map((transaction) => {
+    <section className="panel valuation-summary">
+      <div className="valuation-summary-heading"><div><span className="eyebrow">Excluded from P&amp;L</span><h3>Balance-sheet performance</h3><p>Value changes are separated by asset type so they do not distort net income.</p></div></div>
+      <div className="valuation-summary-grid">{valuationGroups.map((group) => <button type="button" key={group.id} className={openValuationGroup === group.id ? 'valuation-summary-card selected' : 'valuation-summary-card'} aria-expanded={openValuationGroup === group.id} aria-controls="valuation-drilldown" onClick={() => setOpenValuationGroup((current) => current === group.id ? null : group.id)}><span><strong>{group.label}</strong><small>{group.description} · {group.transactions.length} adjustment{group.transactions.length === 1 ? '' : 's'}</small></span><span><strong className={group.total < 0 ? 'negative' : group.total > 0 ? 'positive' : ''}>{formatMoney(group.total, defaultCurrency)}</strong><ChevronDown className={openValuationGroup === group.id ? 'expanded' : ''} size={15} /></span></button>)}</div>
+    </section>
+    {selectedValuationGroup && <section className="panel valuation-drilldown" id="valuation-drilldown">
+      <div className="valuation-drilldown-heading"><div><span className="eyebrow">Actual · {period === 'month' ? monthName.format(viewedMonth) : yearKey}</span><h3>{selectedValuationGroup.label}</h3><p>{selectedValuationGroup.transactions.length} adjustment{selectedValuationGroup.transactions.length === 1 ? '' : 's'} contributing {formatMoney(selectedValuationGroup.total, defaultCurrency)}.</p></div><button type="button" className="icon-button" aria-label="Close value-change details" onClick={() => setOpenValuationGroup(null)}><X size={17} /></button></div>
+      {selectedValuationGroup.transactions.length ? <div className="valuation-drilldown-list">{selectedValuationGroup.transactions.map((transaction) => {
         const account = data.accounts.find((item) => item.id === transaction.accountId)
         const convertedAmount = convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, data.fxRates) ?? 0
         return <button type="button" className="valuation-drilldown-row" key={transaction.id} onClick={() => onEditTransaction(transaction)}>
@@ -2111,16 +2165,13 @@ function ReportsPage({ data, viewedMonth, defaultCurrency, onUpdateTaxRate, onEd
         </button>
       })}</div> : <div className="valuation-drilldown-empty">No market or asset valuation adjustments in this period.</div>}
     </section>}
-    <div className="report-footnote"><CircleHelp size={16} /><p>Company tax is estimated from tagged company income minus tagged company expenses. Transfers are excluded. Market and asset value changes come from account valuation adjustments. Foreign-currency activity is converted to {defaultCurrency} using the latest saved rate from that month or earlier.</p></div>
+    <div className="report-footnote"><CircleHelp size={16} /><p>Company tax is estimated from tagged company income minus tagged company expenses. Transfers and all balance-sheet valuation changes are excluded from P&amp;L. Foreign-currency activity is converted to {defaultCurrency} using the latest saved rate from that month or earlier.</p></div>
   </div>
 }
 
-function ReportColumn({ title, subtitle, currency, income, expenses, tax, otherTax, otherTaxLabel, operatingResult, valueChanges, resultIncludingValueChanges, valueChangeCount, valueChangesExpanded, onToggleValueChanges }: { title: string; subtitle: string; currency: string; income: number; expenses: number; tax: number; otherTax: number; otherTaxLabel: string; operatingResult: number; valueChanges: number; resultIncludingValueChanges: number; valueChangeCount?: number; valueChangesExpanded?: boolean; onToggleValueChanges?: () => void }) {
+function ReportColumn({ title, subtitle, currency, income, expenses, tax, otherTax, otherTaxLabel, netIncome }: { title: string; subtitle: string; currency: string; income: number; expenses: number; tax: number; otherTax: number; otherTaxLabel: string; netIncome: number }) {
   const row = (label: string, value: number, tone?: string) => <div className={`report-row ${tone ?? ''}`}><span>{label}</span><strong>{formatMoney(value, currency)}</strong></div>
-  const valueChangeRow = onToggleValueChanges
-    ? <button type="button" className="report-row report-row-drilldown" aria-expanded={valueChangesExpanded} aria-controls="valuation-drilldown" onClick={onToggleValueChanges}><span>Market and asset value changes<small>{valueChangeCount} adjustment{valueChangeCount === 1 ? '' : 's'}</small></span><strong>{formatMoney(valueChanges, currency)}<ChevronDown className={valueChangesExpanded ? 'expanded' : ''} size={15} /></strong></button>
-    : row('Market and asset value changes', valueChanges)
-  return <section className="panel report-column"><div className="report-column-heading"><div><span className="eyebrow">{subtitle}</span><h3>{title}</h3></div></div>{row('Income', income, 'income-row')}{row('Expenses', -expenses)}{row('Calculated company tax', -tax)}{otherTax !== 0 && row(otherTaxLabel, -otherTax)}<div className="report-divider" />{row('Operating result', operatingResult, 'result-row')}{valueChangeRow}{row('Result including value changes', resultIncludingValueChanges, 'result-row final-result')}</section>
+  return <section className="panel report-column"><div className="report-column-heading"><div><span className="eyebrow">{subtitle}</span><h3>{title}</h3></div></div>{row('Income', income, 'income-row')}{row('Expenses', -expenses)}{row('Calculated company tax', -tax)}{otherTax !== 0 && row(otherTaxLabel, -otherTax)}<div className="report-divider" />{row('Net income', netIncome, 'result-row final-result')}</section>
 }
 
 function AccountsPage({ accounts, totalBalance, defaultCurrency, convertBalance, onAdd, onSelectAccount, onReorder }: { accounts: Account[]; totalBalance: number; defaultCurrency: string; convertBalance: (account: Account) => number; onAdd: () => void; onSelectAccount: (id: string) => void; onReorder: (accountIds: string[]) => Promise<boolean> }) {
@@ -2204,7 +2255,7 @@ function AccountsPage({ accounts, totalBalance, defaultCurrency, convertBalance,
           onDrop={() => dropAccount(account.id)}
         >
           <div className="large-account-top"><span style={{ background: account.color }}><Banknote size={20} /></span><GripVertical className="reorder-card-handle" size={20} aria-hidden="true" /></div>
-          <h3>{account.name}</h3><strong>{formatMoney(account.balanceMinor, account.currency)}</strong><p>{accountBalanceSheetGroup(account)} · {account.type} · {account.currency}</p>
+          <div className="large-account-name"><h3>{account.name}</h3>{account.providerAccountId && <BankImportConnectedIcon />}</div><strong>{formatMoney(account.balanceMinor, account.currency)}</strong><p>{accountBalanceSheetGroup(account)} · {account.type} · {account.currency}</p>
           <div className="reorder-card-actions">
             <button className="icon-button" onClick={() => moveAccount(account.id, -1)} disabled={index === 0} aria-label={`Move ${account.name} earlier`}><ArrowUp size={16} /></button>
             <button className="icon-button" onClick={() => moveAccount(account.id, 1)} disabled={index === orderedAccounts.length - 1} aria-label={`Move ${account.name} later`}><ArrowDown size={16} /></button>
@@ -2216,7 +2267,7 @@ function AccountsPage({ accounts, totalBalance, defaultCurrency, convertBalance,
         const groupBalance = rows.reduce((sum, account) => sum + convertBalance(account), 0)
         return <section className="balance-sheet-group" key={group}>
           <div className="balance-sheet-group-heading"><div><span className="eyebrow">Balance sheet</span><h2>{group}</h2></div><strong>{formatMoney(groupBalance, defaultCurrency)}</strong></div>
-          <div className="account-card-grid">{rows.map((account) => <button type="button" className="large-account-card" key={account.id} onClick={() => onSelectAccount(account.id)} aria-label={`View ${account.name} transactions`}><div className="large-account-top"><span style={{ background: account.color }}><Banknote size={20} /></span><small>{accountBalanceSheetGroup(account)} · {account.type}</small></div><h3>{account.name}</h3><strong>{formatMoney(account.balanceMinor, account.currency)}</strong><p>Provisional balance · {account.currency}</p></button>)}</div>
+          <div className="account-card-grid">{rows.map((account) => <button type="button" className="large-account-card" key={account.id} onClick={() => onSelectAccount(account.id)} aria-label={`View ${account.name} transactions`}><div className="large-account-top"><span style={{ background: account.color }}><Banknote size={20} /></span><small>{accountBalanceSheetGroup(account)} · {account.type}</small></div><div className="large-account-name"><h3>{account.name}</h3>{account.providerAccountId && <BankImportConnectedIcon />}</div><strong>{formatMoney(account.balanceMinor, account.currency)}</strong><p>Provisional balance · {account.currency}</p></button>)}</div>
         </section>
       })}
     </div>}
@@ -2227,7 +2278,7 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
   return <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}><div className="modal"><div className="modal-heading"><div><span className="eyebrow">Next Expense</span><h2>{title}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></div>{children}</div></div>
 }
 
-function AccountDetailPage({ account, transactions, allTransactions, candidates, categories, payees, mappings, accounts, historyLoaded, historyLoading, onRequestHistory, onBack, onSelectAccount, onEditAccount, onAdjustBalance, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, onCreatePayee, onPromoteMapping, onUnhideCategory, onEditTransaction, reviewingCandidateId, syncing, syncNotice }: { account: Account; transactions: Transaction[]; allTransactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onBack: () => void; onSelectAccount: (id: string) => void; onEditAccount: () => void; onAdjustBalance: () => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string) => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void>; onEditTransaction: (transaction: Transaction) => void; reviewingCandidateId: string; syncing: boolean; syncNotice: string }) {
+function AccountDetailPage({ account, transactions, allTransactions, candidates, categories, payees, mappings, accounts, historyLoaded, historyLoading, onRequestHistory, onBack, onSelectAccount, onEditAccount, onAdjustBalance, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, onRematchPayees, onCreatePayee, onPromoteMapping, onAddAlternativeName, onUnhideCategory, onEditTransaction, reviewingCandidateId, rematchingPayees, syncing, syncNotice }: { account: Account; transactions: Transaction[]; allTransactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onBack: () => void; onSelectAccount: (id: string) => void; onEditAccount: () => void; onAdjustBalance: () => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string) => void; onRematchPayees: () => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onAddAlternativeName: (sourceName: string, payeeId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void>; onEditTransaction: (transaction: Transaction) => void; reviewingCandidateId: string; rematchingPayees: boolean; syncing: boolean; syncNotice: string }) {
   return <div className="page-content narrow-page entity-page">
     <div className="entity-page-toolbar">
       <button className="entity-back" onClick={onBack}><ChevronLeft size={16} />All accounts</button>
@@ -2236,7 +2287,7 @@ function AccountDetailPage({ account, transactions, allTransactions, candidates,
     <section className="panel entity-detail-panel">
       <div className="entity-heading"><div className="entity-heading-icon" style={{ background: account.color }}><CreditCard size={20} /></div><div><span className="eyebrow">{accountBalanceSheetGroup(account)} · {account.type}{account.providerAccountId ? ' · Bank connected' : ''}</span><h2>{account.name}</h2></div><div className="entity-heading-actions"><button className="secondary-button" onClick={onAdjustBalance}><RefreshCw size={16} />Adjust balance</button><button className="secondary-button" onClick={onEditAccount}><Pencil size={16} />Edit account</button>{account.providerAccountId && <button className="primary-button" disabled={syncing} onClick={onSyncBank}>{syncing ? <LoaderCircle className="spin-icon" size={16} /> : <RefreshCw size={16} />}{syncing ? 'Syncing…' : 'Sync now'}</button>}<button className="secondary-button" onClick={onLinkBank}><Link2 size={16} />{account.providerAccountId ? 'Reconnect' : 'Connect bank'}</button></div></div>
       {account.providerAccountId && <div className="bank-sync-status"><div><strong>{account.connectionStatus === 'active' ? 'Bank connection active' : 'Bank connected'}</strong><span>{account.lastSyncedAt ? `Last synced ${new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(account.lastSyncedAt))}` : 'Not synced yet'}</span>{account.lastSyncDiagnostic && !syncNotice && <span>{formatSyncDiagnostic(account.lastSyncDiagnostic)}</span>}</div><span>{syncNotice || formatRateLimits(account)}</span></div>}
-      {account.providerAccountId && <BankImportReview account={account} candidates={candidates} categories={categories} payees={payees} mappings={mappings} reviewingCandidateId={reviewingCandidateId} onModeChange={onImportModeChange} onReview={onReviewCandidate} onCreatePayee={onCreatePayee} onPromoteMapping={onPromoteMapping} onUnhideCategory={onUnhideCategory} />}
+      {account.providerAccountId && <BankImportReview account={account} candidates={candidates} categories={categories} payees={payees} mappings={mappings} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingPayees} onModeChange={onImportModeChange} onReview={onReviewCandidate} onRematchPayees={onRematchPayees} onCreatePayee={onCreatePayee} onPromoteMapping={onPromoteMapping} onAddAlternativeName={onAddAlternativeName} onUnhideCategory={onUnhideCategory} />}
       <AccountDetail account={account} transactions={transactions} allTransactions={allTransactions} categories={categories} accounts={accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={onRequestHistory} onEditTransaction={onEditTransaction} />
     </section>
   </div>
@@ -2295,7 +2346,7 @@ function CategorySearchPicker({ ariaLabel, value, categories, allowEmpty = false
   </div>
 }
 
-function BankImportReview({ account, candidates, categories, payees, mappings, reviewingCandidateId, onModeChange, onReview, onCreatePayee, onPromoteMapping, onUnhideCategory }: { account: Account; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; reviewingCandidateId: string; onModeChange: (mode: 'review' | 'automatic') => void; onReview: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string) => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void> }) {
+function BankImportReview({ account, candidates, categories, payees, mappings, reviewingCandidateId, rematchingPayees, onModeChange, onReview, onRematchPayees, onCreatePayee, onPromoteMapping, onAddAlternativeName, onUnhideCategory }: { account: Account; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; reviewingCandidateId: string; rematchingPayees: boolean; onModeChange: (mode: 'review' | 'automatic') => void; onReview: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string) => void; onRematchPayees: () => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onAddAlternativeName: (sourceName: string, payeeId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void> }) {
   const mode = account.bankImportMode ?? 'review'
   const [categoryAssignments, setCategoryAssignments] = useState<Record<string, string>>({})
   const [payeeAssignments, setPayeeAssignments] = useState<Record<string, string>>({})
@@ -2303,6 +2354,7 @@ function BankImportReview({ account, candidates, categories, payees, mappings, r
   const [mappingChoices, setMappingChoices] = useState<Record<string, boolean>>({})
   const [createdPayeeIds, setCreatedPayeeIds] = useState<Record<string, string>>({})
   const [promotingMappingId, setPromotingMappingId] = useState('')
+  const [addingAlternativeNameId, setAddingAlternativeNameId] = useState('')
   const [unhidingCategoryId, setUnhidingCategoryId] = useState('')
   const pendingNet = candidates.reduce((sum, candidate) => sum + (candidate.type === 'income' ? candidate.amountMinor : -candidate.amountMinor), 0)
   const availableCategories = categories.filter((category) => !category.hidden)
@@ -2315,7 +2367,7 @@ function BankImportReview({ account, candidates, categories, payees, mappings, r
       </div>
     </div>
     {candidates.length > 0 && <div className="bank-review-queue">
-      <div className="bank-review-summary"><strong>{candidates.length} awaiting review</strong><span>Net effect if approved: {formatMoney(pendingNet, account.currency)}</span></div>
+      <div className="bank-review-summary"><strong>{candidates.length} awaiting review</strong><span>Net effect if approved: {formatMoney(pendingNet, account.currency)}</span><button type="button" className="secondary-button" disabled={rematchingPayees || Boolean(reviewingCandidateId)} onClick={onRematchPayees}><RefreshCw className={rematchingPayees ? 'spin-icon' : ''} size={14} />{rematchingPayees ? 'Checking…' : 'Recheck payees'}</button></div>
       {candidates.map((candidate) => {
         const payeeId = payeeAssignments[candidate.id] ?? candidate.payeeId ?? ''
         const selectedPayee = payees.find((payee) => payee.id === payeeId)
@@ -2362,7 +2414,7 @@ function BankImportReview({ account, candidates, categories, payees, mappings, r
             }} />
             <span className="payee-default-summary">Default category: {payeeDefaultCategory ? <CategoryLabel category={payeeDefaultCategory} /> : 'None'}</span>
             {payeeDefaultCategory && payeeDefaultCategory.id !== categoryId && !payeeDefaultCategory.hidden && <button type="button" onClick={() => setCategoryAssignments((current) => ({ ...current, [candidate.id]: payeeDefaultCategory.id }))}>Use default</button>}
-            {suggestedMapping && suggestedPayee && <div className="prefix-match-suggestion"><Sparkles size={13} /><p><strong>Possible match: {suggestedPayee.name}</strong><span>“{suggestedMapping.mapping.sourceName}” matches the start of the {suggestedMapping.sourceText === candidate.note ? 'bank memo' : 'bank description'}.</span><button type="button" disabled={Boolean(promotingMappingId)} onClick={async () => {
+            {suggestedMapping && suggestedPayee && <div className="prefix-match-suggestion"><Sparkles size={13} /><p><strong>Possible match: {suggestedPayee.name}</strong><span>“{suggestedMapping.mapping.sourceName}” matches the start of the {suggestedMapping.sourceText === candidate.note ? 'bank memo' : 'bank description'}.</span><span className="prefix-match-actions"><button type="button" disabled={Boolean(promotingMappingId || addingAlternativeNameId)} onClick={async () => {
               setPromotingMappingId(suggestedMapping.mapping.id)
               try {
                 await onPromoteMapping(suggestedMapping.mapping.id)
@@ -2374,7 +2426,19 @@ function BankImportReview({ account, candidates, categories, payees, mappings, r
               } finally {
                 setPromotingMappingId('')
               }
-            }}>{promotingMappingId === suggestedMapping.mapping.id ? 'Updating…' : 'Use Starts with and select payee'}</button></p></div>}
+            }}>{promotingMappingId === suggestedMapping.mapping.id ? 'Updating…' : 'Use Starts with and select payee'}</button><button type="button" disabled={Boolean(promotingMappingId || addingAlternativeNameId)} onClick={async () => {
+              setAddingAlternativeNameId(candidate.id)
+              try {
+                await onAddAlternativeName(suggestedMapping.sourceText, suggestedPayee.id)
+                const nextDefault = categories.find((category) => category.id === suggestedPayee.defaultCategoryId)
+                setPayeeAssignments((current) => ({ ...current, [candidate.id]: suggestedPayee.id }))
+                setRememberChoices((current) => ({ ...current, [candidate.id]: Boolean(suggestedPayee.id) }))
+                setMappingChoices((current) => ({ ...current, [candidate.id]: false }))
+                if (nextDefault) setCategoryAssignments((current) => ({ ...current, [candidate.id]: nextDefault.id }))
+              } finally {
+                setAddingAlternativeNameId('')
+              }
+            }}>{addingAlternativeNameId === candidate.id ? 'Adding…' : 'Add to alternative names and select payee'}</button></span></p></div>}
             {offerMapping && <label className="remember-category remember-mapping"><input type="checkbox" checked={rememberMapping} onChange={(event) => setMappingChoices((current) => ({ ...current, [candidate.id]: event.target.checked }))} /><span>Remember “{candidate.payee}” as an alternative name for <strong>{selectedPayee?.name}</strong></span></label>}
           </div>
           <div className="bank-review-category">
