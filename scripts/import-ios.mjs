@@ -128,15 +128,15 @@ for (const { values } of budgetRows) {
 // remain attached to their normal expense category.
 const incomeCategoryNames = new Set(['Salary', 'Other income', 'Uncategorised income'])
 const reportGroupFor = (name) => {
-  if (incomeCategoryNames.has(name)) return 'income'
-  if (/tax|irpf|cuota ss/i.test(name)) return 'tax'
-  return 'expense'
+  if (incomeCategoryNames.has(name)) return 'personal_income'
+  if (/tax|irpf|cuota ss/i.test(name)) return 'personal_tax'
+  return 'personal_expense'
 }
 
 const colors = ['#cc7048', '#738c5a', '#d49b4d', '#9b6a71', '#5d7d91', '#7f7062', '#607d68', '#8b6d8f']
 const iconFor = (name, reportGroup) => {
   const lower = name.toLowerCase()
-  if (reportGroup === 'income') return 'briefcase'
+  if (reportGroup === 'personal_income' || reportGroup === 'company_revenue') return 'briefcase'
   if (lower.includes('home') || lower.includes('apartment')) return 'house'
   if (lower.includes('grocer')) return 'basket'
   if (lower.includes('car') || lower.includes('transport')) return 'car'
@@ -212,7 +212,7 @@ for (const transaction of transactions) {
 const categoryGroups = new Map(categories.map((category) => [category.id, category.reportGroup]))
 const sum = (type) => transactions.filter((transaction) => transaction.type === type).reduce((total, transaction) => total + transaction.amountMinor, 0)
 const refundsMinor = transactions
-  .filter((transaction) => transaction.type === 'income' && categoryGroups.get(transaction.categoryId) === 'expense')
+  .filter((transaction) => transaction.type === 'income' && categoryGroups.get(transaction.categoryId) === 'personal_expense')
   .reduce((total, transaction) => total + transaction.amountMinor, 0)
 const trueIncomeMinor = sum('income') - refundsMinor
 const data = { accounts, categories, budgets, transactions, settings: { estimatedCompanyTaxRateBps: 2000 } }

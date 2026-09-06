@@ -591,7 +591,7 @@ export async function updateBankImportCandidatePayee(workspaceId: string, candid
 }
 
 export async function createCategory(workspaceId: string, category: Category) {
-  const categoryType = category.reportGroup === 'income' ? 'Income' : 'Expense'
+  const categoryType = category.reportGroup === 'personal_income' || category.reportGroup === 'company_revenue' ? 'Income' : 'Expense'
   const { error } = await neon.from('categories').insert({
     id: category.id,
     workspace_id: workspaceId,
@@ -675,7 +675,7 @@ export async function updateCategoryHidden(workspaceId: string, categoryId: stri
 }
 
 export async function updateCategoryDetails(workspaceId: string, categoryId: string, details: Pick<Category, 'name' | 'reportGroup' | 'icon' | 'color'>) {
-  const categoryType = details.reportGroup === 'income' ? 'Income' : 'Expense'
+  const categoryType = details.reportGroup === 'personal_income' || details.reportGroup === 'company_revenue' ? 'Income' : 'Expense'
   const { data, error } = await neon.from('categories')
     .update({
       name: details.name.normalize('NFKC').trim(),

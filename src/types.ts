@@ -1,6 +1,6 @@
 export type AccountScope = 'Personal' | 'Company'
 export type BalanceSheetGroup = 'Personal' | 'Company' | 'Real estate' | 'Pension'
-export type ReportGroup = 'income' | 'expense' | 'tax'
+export type ReportGroup = 'personal_income' | 'personal_expense' | 'personal_tax' | 'company_revenue' | 'company_expense' | 'company_tax'
 export type BalanceAdjustmentReason = 'market_valuation' | 'asset_valuation' | 'liability_adjustment' | 'reconciliation' | 'other'
 
 export type Account = {

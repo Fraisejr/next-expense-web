@@ -80,6 +80,17 @@ const navItems: { id: Page; label: string; icon: typeof House; path: string }[] 
   { id: 'payees', label: 'Payees', icon: UsersRound, path: '/payees' },
 ]
 const balanceSheetGroups: BalanceSheetGroup[] = ['Personal', 'Company', 'Real estate', 'Pension']
+const incomeReportGroups: ReportGroup[] = ['personal_income', 'company_revenue']
+const expenseReportGroups: ReportGroup[] = ['personal_expense', 'company_expense']
+const taxReportGroups: ReportGroup[] = ['personal_tax', 'company_tax']
+
+function isIncomeReportGroup(group?: ReportGroup) {
+  return Boolean(group && incomeReportGroups.includes(group))
+}
+
+function isExpenseReportGroup(group?: ReportGroup) {
+  return Boolean(group && expenseReportGroups.includes(group))
+}
 
 function accountBalanceSheetGroup(account: Account): BalanceSheetGroup {
   return account.balanceSheetGroup ?? (account.scope === 'Company' ? 'Company' : 'Personal')
@@ -370,15 +381,16 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   const categoryGroup = (categoryId?: string) => data.categories.find((category) => category.id === categoryId)?.reportGroup
   const convertedTransactionAmount = (transaction: Transaction) => convertMinor(transaction.amountMinor, transaction.currency, workspace.defaultCurrency, transaction.date, data.fxRates) ?? 0
   const convertCurrentBalance = (account: Account) => convertMinor(account.balanceMinor, account.currency, workspace.defaultCurrency, todayInParis(), data.fxRates) ?? 0
-  const income = transactions
-    .filter((t) => categoryGroup(t.categoryId) === 'income')
+  const totalForReportGroup = (group: ReportGroup) => transactions
+    .filter((t) => categoryGroup(t.categoryId) === group)
     .reduce((sum, t) => sum + (t.type === 'income' ? convertedTransactionAmount(t) : t.type === 'expense' ? -convertedTransactionAmount(t) : 0), 0)
-  const expenses = transactions
-    .filter((t) => categoryGroup(t.categoryId) === 'expense')
+  const totalExpenseForReportGroup = (group: ReportGroup) => transactions
+    .filter((t) => categoryGroup(t.categoryId) === group)
     .reduce((sum, t) => sum + (t.type === 'expense' ? convertedTransactionAmount(t) : t.type === 'income' ? -convertedTransactionAmount(t) : 0), 0)
-  const taxesPaid = transactions
-    .filter((t) => categoryGroup(t.categoryId) === 'tax')
-    .reduce((sum, t) => sum + (t.type === 'expense' ? convertedTransactionAmount(t) : t.type === 'income' ? -convertedTransactionAmount(t) : 0), 0)
+  const personalIncome = totalForReportGroup('personal_income')
+  const personalExpenses = totalExpenseForReportGroup('personal_expense')
+  const companyRevenue = totalForReportGroup('company_revenue')
+  const companyExpenses = totalExpenseForReportGroup('company_expense')
   const activeAccounts = data.accounts.filter((account) => !account.closed)
   const closedAccounts = data.accounts.filter((account) => account.closed)
   const pendingImportCounts = useMemo(() => {
@@ -393,17 +405,15 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       .filter((t) => t.categoryId === id && t.type !== 'transfer')
       .reduce((sum, t) => {
         const direction = t.type === 'income' ? 1 : -1
-        return sum + (group === 'income' ? direction : -direction) * convertedTransactionAmount(t)
+        return sum + (isIncomeReportGroup(group) ? direction : -direction) * convertedTransactionAmount(t)
       }, 0)
   }
   const budgetForCategory = (categoryId: string) => data.budgets
     .filter((budget) => budget.month === selectedMonthKey && budget.categoryId === categoryId)
     .reduce((sum, budget) => sum + budget.amountMinor, 0)
-  const companyCategoryGroupIds = new Set(data.categoryGroups.filter((group) => group.name.toLocaleLowerCase('en') === 'company').map((group) => group.id))
-  const companyCategories = data.categories.filter((category) => category.categoryGroupId && companyCategoryGroupIds.has(category.categoryGroupId))
-  const companyIncome = companyCategories.filter((category) => category.reportGroup === 'income').reduce((sum, category) => sum + categorySpending(category.id), 0)
-  const companyExpenses = companyCategories.filter((category) => category.reportGroup === 'expense').reduce((sum, category) => sum + categorySpending(category.id), 0)
-  const estimatedCompanyTax = Math.max(0, Math.round((companyIncome - companyExpenses) * data.settings.estimatedCompanyTaxRateBps / 10_000))
+  const personalTaxesPaid = totalExpenseForReportGroup('personal_tax')
+  const companyTaxesPaid = totalExpenseForReportGroup('company_tax')
+  const estimatedCompanyTax = Math.max(0, Math.round((companyRevenue - companyExpenses) * data.settings.estimatedCompanyTaxRateBps / 10_000))
   const selectedCategory = data.categories.find((category) => category.id === categoryMatch?.params.categoryId)
   const selectedAccount = data.accounts.find((account) => account.id === accountMatch?.params.accountId)
   const selectedPayee = data.payees.find((payee) => payee.id === payeeMatch?.params.payeeId)
@@ -1213,7 +1223,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         )}
         {page === 'overview' && !selectedCategory && (
           <div className="page-content narrow-page overview-page">
-            <OverviewPage accounts={activeAccounts} defaultCurrency={workspace.defaultCurrency} totalBalance={totalBalance} convertBalance={convertCurrentBalance} income={income} expenses={expenses} tax={taxesPaid + estimatedCompanyTax} netIncome={income - expenses - taxesPaid - estimatedCompanyTax} month={viewedMonth} onOpenNetWorth={() => goTo('/reports/net-worth')} onOpenProfitAndLoss={() => goTo('/reports')} />
+            <OverviewPage accounts={activeAccounts} defaultCurrency={workspace.defaultCurrency} totalBalance={totalBalance} convertBalance={convertCurrentBalance} personal={{ income: personalIncome, expenses: personalExpenses, tax: personalTaxesPaid, net: personalIncome - personalExpenses - personalTaxesPaid }} company={{ income: companyRevenue, expenses: companyExpenses, tax: companyTaxesPaid + estimatedCompanyTax, net: companyRevenue - companyExpenses - companyTaxesPaid - estimatedCompanyTax }} month={viewedMonth} onOpenNetWorth={() => goTo('/reports/net-worth')} onOpenProfitAndLoss={() => goTo('/reports')} />
             <BudgetsPage categories={data.categories} categoryGroups={data.categoryGroups} categorySpending={categorySpending} budgetForCategory={budgetForCategory} showHiddenActivityAlert={selectedMonthKey === toMonthKey(new Date())} onAdd={() => setModal('category')} onManageGroups={() => setModal('category-groups')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onUnhideCategory={(id) => setCategoryHidden(id, false)} />
           </div>
         )}
@@ -2054,15 +2064,15 @@ function overviewBalanceGroup(account: Account): OverviewBalanceGroup {
   return account.investment ? 'Investments' : 'Personal'
 }
 
-function OverviewPage({ accounts, defaultCurrency, totalBalance, convertBalance, income, expenses, tax, netIncome, month, onOpenNetWorth, onOpenProfitAndLoss }: {
+type OverviewPnl = { income: number; expenses: number; tax: number; net: number }
+
+function OverviewPage({ accounts, defaultCurrency, totalBalance, convertBalance, personal, company, month, onOpenNetWorth, onOpenProfitAndLoss }: {
   accounts: Account[]
   defaultCurrency: string
   totalBalance: number
   convertBalance: (account: Account) => number
-  income: number
-  expenses: number
-  tax: number
-  netIncome: number
+  personal: OverviewPnl
+  company: OverviewPnl
   month: Date
   onOpenNetWorth: () => void
   onOpenProfitAndLoss: () => void
@@ -2072,8 +2082,11 @@ function OverviewPage({ accounts, defaultCurrency, totalBalance, convertBalance,
     balance: accounts.filter((account) => overviewBalanceGroup(account) === group).reduce((sum, account) => sum + convertBalance(account), 0),
   }))
   const positiveGroupTotal = groupBalances.reduce((sum, item) => sum + Math.max(0, item.balance), 0)
-  const positiveNetIncome = Math.max(0, netIncome)
-  const pnlAllocationTotal = Math.max(1, Math.max(0, expenses) + Math.max(0, tax) + positiveNetIncome)
+  const combinedNetIncome = personal.net + company.net
+  const scope = (label: string, values: OverviewPnl) => {
+    const allocationTotal = Math.max(1, Math.max(0, values.expenses) + Math.max(0, values.tax) + Math.max(0, values.net))
+    return <div className="overview-pnl-scope"><div className="overview-pnl-scope-heading"><span>{label}</span><strong className={values.net < 0 ? 'negative' : 'positive'}>{formatCompactMoney(values.net, defaultCurrency)}</strong></div><div className="overview-stack pnl-stack"><i style={{ flexGrow: Math.max(0, values.expenses) / allocationTotal }} /><i style={{ flexGrow: Math.max(0, values.tax) / allocationTotal }} /><i style={{ flexGrow: Math.max(0, values.net) / allocationTotal }} /></div><div className="overview-pnl-scope-values"><span>{label === 'Company' ? 'Revenue' : 'Income'} <b>{formatCompactMoney(values.income, defaultCurrency)}</b></span><span>Expenses <b>−{formatCompactMoney(Math.abs(values.expenses), defaultCurrency)}</b></span><span>Tax <b>−{formatCompactMoney(Math.abs(values.tax), defaultCurrency)}</b></span></div></div>
+  }
 
   return <section className="overview-summary">
     <div className="overview-heading"><span className="eyebrow">At a glance</span><h2>Your finances</h2><p>Current net worth and activity for {monthName.format(month)}. Open either summary for the full detail.</p></div>
@@ -2090,11 +2103,8 @@ function OverviewPage({ accounts, defaultCurrency, totalBalance, convertBalance,
 
       <button type="button" className="overview-summary-card" onClick={onOpenProfitAndLoss}>
         <div className="overview-card-heading"><span>Profit &amp; loss · {new Intl.DateTimeFormat('en', { month: 'long' }).format(month)}</span><BarChart3 size={18} /></div>
-        <div className="overview-primary-value"><strong className={netIncome < 0 ? 'negative' : 'positive'}>{formatMoney(netIncome, defaultCurrency)}</strong><small>Net income</small></div>
-        <div className="overview-stack pnl-stack" role="img" aria-label={`Profit and loss composition: income ${formatMoney(income, defaultCurrency)}, expenses ${formatMoney(expenses, defaultCurrency)}, estimated and recorded tax ${formatMoney(tax, defaultCurrency)}, net income ${formatMoney(netIncome, defaultCurrency)}`}>
-          <i style={{ flexGrow: Math.max(0, expenses) / pnlAllocationTotal }} /><i style={{ flexGrow: Math.max(0, tax) / pnlAllocationTotal }} /><i style={{ flexGrow: positiveNetIncome / pnlAllocationTotal }} />
-        </div>
-        <div className="overview-breakdown four-columns"><div><span>Income</span><strong>{formatCompactMoney(income, defaultCurrency)}</strong></div><div><span>Expenses</span><strong className="negative">−{formatCompactMoney(Math.abs(expenses), defaultCurrency)}</strong></div><div><span>Tax</span><strong className="negative">−{formatCompactMoney(Math.abs(tax), defaultCurrency)}</strong></div><div><span>Net</span><strong className={netIncome < 0 ? 'negative' : 'positive'}>{formatCompactMoney(netIncome, defaultCurrency)}</strong></div></div>
+        <div className="overview-primary-value"><strong className={combinedNetIncome < 0 ? 'negative' : 'positive'}>{formatMoney(combinedNetIncome, defaultCurrency)}</strong><small>Combined net income</small></div>
+        <div className="overview-pnl-scopes">{scope('Personal', personal)}{scope('Company', company)}</div>
         <span className="overview-open">View report <ArrowRight size={15} /></span>
       </button>
     </div>
@@ -2109,9 +2119,12 @@ function BudgetsPage({ categories, categoryGroups, categorySpending, budgetForCa
   const [showHiddenOnly, setShowHiddenOnly] = useState(false)
   const visibleCategories = categories.filter((category) => !category.hidden)
   const hiddenCategories = categories.filter((category) => category.hidden)
-  const incomeCategories = visibleCategories.filter((category) => category.reportGroup === 'income')
-  const expenseCategories = visibleCategories.filter((category) => category.reportGroup === 'expense')
-  const taxCategories = visibleCategories.filter((category) => category.reportGroup === 'tax')
+  const personalIncomeCategories = visibleCategories.filter((category) => category.reportGroup === 'personal_income')
+  const personalExpenseCategories = visibleCategories.filter((category) => category.reportGroup === 'personal_expense')
+  const companyRevenueCategories = visibleCategories.filter((category) => category.reportGroup === 'company_revenue')
+  const companyExpenseCategories = visibleCategories.filter((category) => category.reportGroup === 'company_expense')
+  const personalTaxCategories = visibleCategories.filter((category) => category.reportGroup === 'personal_tax')
+  const companyTaxCategories = visibleCategories.filter((category) => category.reportGroup === 'company_tax')
   const groupedRows = (rows: Category[]) => {
     const byOrder = (left: Category, right: Category) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.name.localeCompare(right.name)
     const knownGroups = categoryGroups.map((group) => ({ group, rows: rows.filter((category) => category.categoryGroupId === group.id).sort(byOrder) })).filter((item) => item.rows.length > 0)
@@ -2122,16 +2135,22 @@ function BudgetsPage({ categories, categoryGroups, categorySpending, budgetForCa
   const hiddenSection = <section className="budget-section"><div className="budget-section-heading"><div><h3>Hidden categories</h3><span>Unhide categories you want to return to active planning and new transactions</span></div></div>{groupedRows(hiddenCategories).map(({ group, rows }) => <div className="category-group-block" key={group.id}><div className="category-group-label">{group.name}</div><div className="category-list roomy">{rows.map((category) => <HiddenCategoryBudgetRow key={category.id} category={category} spent={categorySpending(category.id)} budget={budgetForCategory(category.id)} onSelect={() => onSelectCategory(category.id)} onUnhide={() => onUnhideCategory(category.id)} />)}</div></div>)}</section>
   return <section className="budget-planning">
     <HiddenCategoryActivityAlert categories={categories} categorySpending={categorySpending} onSelectCategory={onSelectCategory} prominent={showHiddenActivityAlert} />
-    <div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>{showHiddenOnly ? 'Hidden categories' : 'Budget by category'}</h2></div><div className="budget-page-actions">{hiddenCategories.length > 0 && <button className="text-button" onClick={() => setShowHiddenOnly((current) => !current)}>{showHiddenOnly ? <EyeOff size={16} /> : <Eye size={16} />}{showHiddenOnly ? 'Show active categories' : `Show hidden only (${hiddenCategories.length})`}</button>}<button className="secondary-button" onClick={onManageGroups}><Settings size={16} />Manage groups</button><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button></div></div>{showHiddenOnly ? hiddenSection : <>{section('Planned income', 'Actual income compared with this month’s plan', incomeCategories)}{section('Expense budgets', 'Net spending compared with this month’s budget', expenseCategories)}{taxCategories.length > 0 && section('Tax plan', 'Recorded tax costs compared with this month’s plan', taxCategories)}</>}</div>
+    <div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>{showHiddenOnly ? 'Hidden categories' : 'Budget by category'}</h2></div><div className="budget-page-actions">{hiddenCategories.length > 0 && <button className="text-button" onClick={() => setShowHiddenOnly((current) => !current)}>{showHiddenOnly ? <EyeOff size={16} /> : <Eye size={16} />}{showHiddenOnly ? 'Show active categories' : `Show hidden only (${hiddenCategories.length})`}</button>}<button className="secondary-button" onClick={onManageGroups}><Settings size={16} />Manage groups</button><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button></div></div>{showHiddenOnly ? hiddenSection : <>{section('Personal income', 'Actual personal income compared with this month’s plan', personalIncomeCategories)}{section('Personal expenses', 'Personal spending compared with this month’s budget', personalExpenseCategories)}{personalTaxCategories.length > 0 && section('Personal taxes', 'Personal tax costs compared with this month’s plan', personalTaxCategories)}{section('Company revenue', 'Actual company revenue compared with this month’s plan', companyRevenueCategories)}{section('Company expenses', 'Company spending compared with this month’s budget', companyExpenseCategories)}{companyTaxCategories.length > 0 && section('Company taxes', 'Company tax costs compared with this month’s plan', companyTaxCategories)}</>}</div>
   </section>
 }
 
 type ReportPeriod = 'month' | 'year'
 type ValuationGroup = 'investments' | 'real-estate' | 'other-assets'
+type PnlScope = 'combined' | 'personal' | 'company'
+type PnlMetric = 'income' | 'expenses' | 'taxes' | 'netIncome'
+type PnlHistoryPoint = { key: string; label: string; income: number; expenses: number; taxes: number; netIncome: number }
+const pnlMetricDefinitions: { id: PnlMetric; label: string }[] = [{ id: 'income', label: 'Income' }, { id: 'expenses', label: 'Expenses' }, { id: 'taxes', label: 'Taxes' }, { id: 'netIncome', label: 'Net income' }]
 
 function ReportsPage({ data, viewedMonth, defaultCurrency, view, historyLoading, onChangeView, onUpdateTaxRate, onEditTransaction }: { data: AppData; viewedMonth: Date; defaultCurrency: string; view: ReportView; historyLoading: boolean; onChangeView: (view: ReportView) => void; onUpdateTaxRate: (rateBps: number) => void; onEditTransaction: (transaction: Transaction) => void }) {
   const [period, setPeriod] = useState<ReportPeriod>('month')
   const [openValuationGroup, setOpenValuationGroup] = useState<ValuationGroup | null>(null)
+  const [pnlScope, setPnlScope] = useState<PnlScope>('combined')
+  const [pnlMetrics, setPnlMetrics] = useState<PnlMetric[]>(pnlMetricDefinitions.map((metric) => metric.id))
   const toolbar = <div className="report-toolbar">
     <span className="report-scope-label">Personal + company</span>
     <div className="segmented report-segmented" aria-label="Report view"><button className={view === 'profit-loss' ? 'active transfer' : ''} aria-pressed={view === 'profit-loss'} onClick={() => onChangeView('profit-loss')}>Profit &amp; loss</button><button className={view === 'net-worth' ? 'active transfer' : ''} aria-pressed={view === 'net-worth'} onClick={() => onChangeView('net-worth')}>Net worth</button></div>
@@ -2145,33 +2164,42 @@ function ReportsPage({ data, viewedMonth, defaultCurrency, view, historyLoading,
   const monthKey = toMonthKey(viewedMonth)
   const yearKey = String(viewedMonth.getFullYear())
   const categoryById = new Map(data.categories.map((category) => [category.id, category]))
-  const companyCategoryGroupIds = new Set(data.categoryGroups.filter((group) => group.name.toLocaleLowerCase('en') === 'company').map((group) => group.id))
-  const isCompanyCategory = (categoryId?: string) => {
-    const categoryGroupId = categoryById.get(categoryId ?? '')?.categoryGroupId
-    return Boolean(categoryGroupId && companyCategoryGroupIds.has(categoryGroupId))
-  }
   const inPeriod = (date: string) => period === 'month' ? date.startsWith(monthKey) : date.startsWith(yearKey)
   const reportTransactions = data.transactions.filter((transaction) => inPeriod(transaction.date) && (transaction.type === 'expense' || transaction.type === 'income'))
-  const companyTransactions = reportTransactions.filter((transaction) => isCompanyCategory(transaction.categoryId))
   const budgetInPeriod = (month: string) => period === 'month' ? month === monthKey : month.startsWith(yearKey)
   const reportBudgets = data.budgets.filter((budget) => budgetInPeriod(budget.month))
-  const companyBudgets = data.budgets.filter((budget) => budgetInPeriod(budget.month) && isCompanyCategory(budget.categoryId))
 
   const totalTransactionsForGroup = (transactions: Transaction[], group: ReportGroup) => transactions
     .filter((transaction) => categoryById.get(transaction.categoryId ?? '')?.reportGroup === group)
     .reduce((sum, transaction) => {
       const direction = transaction.type === 'income' ? 1 : -1
       const amount = convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, data.fxRates) ?? 0
-      return sum + (group === 'income' ? direction : -direction) * amount
+      return sum + (isIncomeReportGroup(group) ? direction : -direction) * amount
     }, 0)
   const totalBudgetsForGroup = (budgets: AppData['budgets'], group: ReportGroup) => budgets
     .filter((budget) => categoryById.get(budget.categoryId)?.reportGroup === group)
     .reduce((sum, budget) => sum + budget.amountMinor, 0)
   const estimatedTax = (profitMinor: number) => Math.max(0, Math.round(profitMinor * data.settings.estimatedCompanyTaxRateBps / 10_000))
 
-  const actualIncome = totalTransactionsForGroup(reportTransactions, 'income')
-  const actualExpenses = totalTransactionsForGroup(reportTransactions, 'expense')
-  const recordedTaxes = totalTransactionsForGroup(reportTransactions, 'tax')
+  const personalActualIncome = totalTransactionsForGroup(reportTransactions, 'personal_income')
+  const personalActualExpenses = totalTransactionsForGroup(reportTransactions, 'personal_expense')
+  const companyActualRevenue = totalTransactionsForGroup(reportTransactions, 'company_revenue')
+  const companyActualExpenses = totalTransactionsForGroup(reportTransactions, 'company_expense')
+  const personalRecordedTaxes = totalTransactionsForGroup(reportTransactions, 'personal_tax')
+  const companyRecordedTaxes = totalTransactionsForGroup(reportTransactions, 'company_tax')
+  const actualBreakdown = (group: ReportGroup) => {
+    const totals = new Map<string, ReportBreakdownItem>()
+    for (const transaction of reportTransactions) {
+      const category = categoryById.get(transaction.categoryId ?? '')
+      if (!category || category.reportGroup !== group) continue
+      const direction = transaction.type === 'income' ? 1 : -1
+      const amount = convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, data.fxRates) ?? 0
+      const contribution = (isIncomeReportGroup(group) ? direction : -direction) * amount
+      const current = totals.get(category.id)
+      totals.set(category.id, { id: category.id, label: category.name, value: (current?.value ?? 0) + contribution, count: (current?.count ?? 0) + 1 })
+    }
+    return [...totals.values()].sort((left, right) => Math.abs(right.value) - Math.abs(left.value) || left.label.localeCompare(right.label))
+  }
   const valuationAdjustments = data.transactions
     .filter((transaction) => inPeriod(transaction.date) && transaction.type === 'balance_adjustment' && (transaction.adjustmentReason === 'market_valuation' || transaction.adjustmentReason === 'asset_valuation'))
     .sort((left, right) => right.date.localeCompare(left.date))
@@ -2191,27 +2219,78 @@ function ReportsPage({ data, viewedMonth, defaultCurrency, view, historyLoading,
     return { ...group, transactions: groupTransactions, total: groupTransactions.reduce((sum, transaction) => sum + (convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, data.fxRates) ?? 0), 0) }
   })
   const selectedValuationGroup = valuationGroups.find((group) => group.id === openValuationGroup)
-  const companyActualProfit = totalTransactionsForGroup(companyTransactions, 'income') - totalTransactionsForGroup(companyTransactions, 'expense')
+  const companyActualProfit = companyActualRevenue - companyActualExpenses
   const companyTaxEstimate = estimatedTax(companyActualProfit)
-  const actualOperatingResult = actualIncome - actualExpenses - recordedTaxes - companyTaxEstimate
+  const personalActualNetIncome = personalActualIncome - personalActualExpenses - personalRecordedTaxes
+  const companyActualNetIncome = companyActualRevenue - companyActualExpenses - companyRecordedTaxes - companyTaxEstimate
 
-  const forecastIncome = totalBudgetsForGroup(reportBudgets, 'income')
-  const forecastExpenses = totalBudgetsForGroup(reportBudgets, 'expense')
-  const plannedTaxes = totalBudgetsForGroup(reportBudgets, 'tax')
-  const companyForecastProfit = totalBudgetsForGroup(companyBudgets, 'income') - totalBudgetsForGroup(companyBudgets, 'expense')
+  const personalForecastIncome = totalBudgetsForGroup(reportBudgets, 'personal_income')
+  const personalForecastExpenses = totalBudgetsForGroup(reportBudgets, 'personal_expense')
+  const companyForecastRevenue = totalBudgetsForGroup(reportBudgets, 'company_revenue')
+  const companyForecastExpenses = totalBudgetsForGroup(reportBudgets, 'company_expense')
+  const personalPlannedTaxes = totalBudgetsForGroup(reportBudgets, 'personal_tax')
+  const companyPlannedTaxes = totalBudgetsForGroup(reportBudgets, 'company_tax')
+  const companyForecastProfit = companyForecastRevenue - companyForecastExpenses
   const forecastTax = estimatedTax(companyForecastProfit)
-  const forecastOperatingResult = forecastIncome - forecastExpenses - plannedTaxes - forecastTax
+  const personalForecastNetIncome = personalForecastIncome - personalForecastExpenses - personalPlannedTaxes
+  const companyForecastNetIncome = companyForecastRevenue - companyForecastExpenses - companyPlannedTaxes - forecastTax
+  const forecastGlobalNetIncome = personalForecastNetIncome + companyForecastNetIncome
+  const actualGlobalNetIncome = personalActualNetIncome + companyActualNetIncome
+  const historyPeriods = period === 'month'
+    ? Array.from({ length: 12 }, (_, index) => {
+      const date = new Date(viewedMonth.getFullYear(), viewedMonth.getMonth() - (11 - index), 1)
+      return { key: toMonthKey(date), label: new Intl.DateTimeFormat('en', { month: 'short' }).format(date) }
+    })
+    : (() => {
+      const selectedYear = viewedMonth.getFullYear()
+      const earliestYear = data.transactions.length ? Math.min(...data.transactions.map((transaction) => Number(transaction.date.slice(0, 4)))) : selectedYear
+      const firstYear = Math.min(selectedYear, earliestYear)
+      return Array.from({ length: selectedYear - firstYear + 1 }, (_, index) => ({ key: String(firstYear + index), label: String(firstYear + index) }))
+    })()
+  const pnlHistoryPoints: PnlHistoryPoint[] = historyPeriods.map(({ key, label }) => {
+    const periodTransactions = data.transactions.filter((transaction) => transaction.date.startsWith(key) && (transaction.type === 'income' || transaction.type === 'expense'))
+    const personalIncome = totalTransactionsForGroup(periodTransactions, 'personal_income')
+    const companyRevenue = totalTransactionsForGroup(periodTransactions, 'company_revenue')
+    const personalExpenses = totalTransactionsForGroup(periodTransactions, 'personal_expense')
+    const companyExpenses = totalTransactionsForGroup(periodTransactions, 'company_expense')
+    const personalTaxes = totalTransactionsForGroup(periodTransactions, 'personal_tax')
+    const companyTaxes = totalTransactionsForGroup(periodTransactions, 'company_tax') + estimatedTax(companyRevenue - companyExpenses)
+    const income = pnlScope === 'personal' ? personalIncome : pnlScope === 'company' ? companyRevenue : personalIncome + companyRevenue
+    const expenses = pnlScope === 'personal' ? personalExpenses : pnlScope === 'company' ? companyExpenses : personalExpenses + companyExpenses
+    const taxes = pnlScope === 'personal' ? personalTaxes : pnlScope === 'company' ? companyTaxes : personalTaxes + companyTaxes
+    return { key, label, income, expenses, taxes, netIncome: income - expenses - taxes }
+  })
+  const pnlScopeLabel = pnlScope === 'combined' ? 'Combined' : pnlScope === 'personal' ? 'Personal' : 'Company'
+  function togglePnlMetric(metric: PnlMetric) {
+    setPnlMetrics((current) => current.includes(metric) ? current.length === 1 ? current : current.filter((item) => item !== metric) : [...current, metric])
+  }
 
   return <div className="page-content narrow-page report-page">
     {toolbar}
     <section className="report-hero">
-      <div><span className="eyebrow">Combined performance · {period === 'month' ? monthName.format(viewedMonth) : yearKey}</span><h2>Economic result</h2><p>Your personal and company activity in one P&amp;L. Internal transfers are excluded.</p></div>
+      <div><span className="eyebrow">Personal + company · {period === 'month' ? monthName.format(viewedMonth) : yearKey}</span><h2>Profit &amp; loss</h2><p>See the combined result first, followed by separate Personal and Company detail. Internal transfers are excluded.</p></div>
       <label className="tax-rate-field"><span>Company tax planning rate</span><div><input type="number" min="0" max="100" step="0.1" value={data.settings.estimatedCompanyTaxRateBps / 100} onChange={(event) => onUpdateTaxRate(Math.max(0, Math.round(Number(event.target.value) * 100)))} /><b>%</b></div><small>Planning estimate only</small></label>
     </section>
-    <div className="report-comparison">
-      <ReportColumn title="Forecast" subtitle="From monthly budgets" currency={defaultCurrency} income={forecastIncome} expenses={forecastExpenses} tax={forecastTax} otherTax={plannedTaxes} otherTaxLabel="Other planned taxes" netIncome={forecastOperatingResult} />
-      <ReportColumn title="Actual" subtitle="From recorded activity" currency={defaultCurrency} income={actualIncome} expenses={actualExpenses} tax={companyTaxEstimate} otherTax={recordedTaxes} otherTaxLabel="Other recorded taxes" netIncome={actualOperatingResult} />
-    </div>
+    <section className="panel pnl-history">
+      <div className="net-worth-section-heading"><div><span className="eyebrow">{period === 'month' ? 'Trailing 12 months' : 'Annual history'}</span><h3>P&amp;L over time</h3><p>{pnlScopeLabel} results through {period === 'month' ? monthName.format(viewedMonth) : yearKey}. Choose a scope and any combination of measures.</p></div>{historyLoading && <span className="history-loading"><LoaderCircle size={14} />Loading full history</span>}</div>
+      <div className="pnl-chart-filters">
+        <div className="segmented three-way pnl-scope-selector" aria-label="P&L chart scope"><button className={pnlScope === 'combined' ? 'active transfer' : ''} aria-pressed={pnlScope === 'combined'} onClick={() => setPnlScope('combined')}>Combined</button><button className={pnlScope === 'personal' ? 'active transfer' : ''} aria-pressed={pnlScope === 'personal'} onClick={() => setPnlScope('personal')}>Personal</button><button className={pnlScope === 'company' ? 'active transfer' : ''} aria-pressed={pnlScope === 'company'} onClick={() => setPnlScope('company')}>Company</button></div>
+        <div className="pnl-chart-legend" aria-label="P&L chart measures">{pnlMetricDefinitions.map((metric) => <button type="button" key={metric.id} className={pnlMetrics.includes(metric.id) ? 'selected' : ''} aria-pressed={pnlMetrics.includes(metric.id)} onClick={() => togglePnlMetric(metric.id)}><i className={metric.id === 'netIncome' ? 'net' : metric.id} />{metric.label}</button>)}</div>
+      </div>
+      <PnlBarChart points={pnlHistoryPoints} currency={defaultCurrency} metrics={pnlMetrics} />
+    </section>
+    <section className="report-scope-section combined-report-section"><div className="report-scope-heading"><span className="eyebrow">At a glance</span><h3>Combined P&amp;L</h3></div><div className="report-comparison">
+      <CombinedReportColumn title="Forecast" subtitle="From monthly budgets" currency={defaultCurrency} personalIncome={personalForecastIncome} personalExpenses={personalForecastExpenses} personalTax={personalPlannedTaxes} companyRevenue={companyForecastRevenue} companyExpenses={companyForecastExpenses} companyTax={companyPlannedTaxes + forecastTax} globalNetIncome={forecastGlobalNetIncome} />
+      <CombinedReportColumn title="Actual" subtitle="From recorded activity" currency={defaultCurrency} personalIncome={personalActualIncome} personalExpenses={personalActualExpenses} personalTax={personalRecordedTaxes} companyRevenue={companyActualRevenue} companyExpenses={companyActualExpenses} companyTax={companyRecordedTaxes + companyTaxEstimate} globalNetIncome={actualGlobalNetIncome} />
+    </div></section>
+    <section className="report-scope-section"><div className="report-scope-heading"><span className="eyebrow">Personal</span><h3>Personal P&amp;L</h3></div><div className="report-comparison">
+      <ReportColumn title="Forecast" subtitle="From monthly budgets" currency={defaultCurrency} income={personalForecastIncome} expenses={personalForecastExpenses} otherTax={personalPlannedTaxes} otherTaxLabel="Planned taxes" netIncome={personalForecastNetIncome} />
+      <ReportColumn title="Actual" subtitle="From recorded activity" currency={defaultCurrency} income={personalActualIncome} expenses={personalActualExpenses} otherTax={personalRecordedTaxes} otherTaxLabel="Recorded taxes" netIncome={personalActualNetIncome} breakdowns={{ income: actualBreakdown('personal_income'), expenses: actualBreakdown('personal_expense') }} />
+    </div></section>
+    <section className="report-scope-section"><div className="report-scope-heading"><span className="eyebrow">Company</span><h3>Company P&amp;L</h3></div><div className="report-comparison">
+      <ReportColumn title="Forecast" subtitle="From monthly budgets" currency={defaultCurrency} incomeLabel="Revenue" income={companyForecastRevenue} expenses={companyForecastExpenses} tax={forecastTax} otherTax={companyPlannedTaxes} otherTaxLabel="Other planned taxes" netIncome={companyForecastNetIncome} />
+      <ReportColumn title="Actual" subtitle="From recorded activity" currency={defaultCurrency} incomeLabel="Revenue" income={companyActualRevenue} expenses={companyActualExpenses} tax={companyTaxEstimate} otherTax={companyRecordedTaxes} otherTaxLabel="Other recorded taxes" netIncome={companyActualNetIncome} breakdowns={{ income: actualBreakdown('company_revenue'), expenses: actualBreakdown('company_expense') }} />
+    </div></section>
     <section className="panel valuation-summary">
       <div className="valuation-summary-heading"><div><span className="eyebrow">Excluded from P&amp;L</span><h3>Balance-sheet performance</h3><p>Value changes are separated by asset type so they do not distort net income.</p></div></div>
       <div className="valuation-summary-grid">{valuationGroups.map((group) => <button type="button" key={group.id} className={openValuationGroup === group.id ? 'valuation-summary-card selected' : 'valuation-summary-card'} aria-expanded={openValuationGroup === group.id} aria-controls="valuation-drilldown" onClick={() => setOpenValuationGroup((current) => current === group.id ? null : group.id)}><span><strong>{group.label}</strong><small>{group.description} · {group.transactions.length} adjustment{group.transactions.length === 1 ? '' : 's'}</small></span><span><strong className={group.total < 0 ? 'negative' : group.total > 0 ? 'positive' : ''}>{formatMoney(group.total, defaultCurrency)}</strong><ChevronDown className={openValuationGroup === group.id ? 'expanded' : ''} size={15} /></span></button>)}</div>
@@ -2342,9 +2421,62 @@ function NetWorthBarChart({ points, currency }: { points: NetWorthPoint[]; curre
   </div>
 }
 
-function ReportColumn({ title, subtitle, currency, income, expenses, tax, otherTax, otherTaxLabel, netIncome }: { title: string; subtitle: string; currency: string; income: number; expenses: number; tax: number; otherTax: number; otherTaxLabel: string; netIncome: number }) {
+function PnlBarChart({ points, currency, metrics }: { points: PnlHistoryPoint[]; currency: string; metrics: PnlMetric[] }) {
+  const signedValue = (point: PnlHistoryPoint, metric: PnlMetric) => metric === 'expenses' ? -point.expenses : metric === 'taxes' ? -point.taxes : point[metric]
+  const signedValues = points.flatMap((point) => metrics.map((metric) => signedValue(point, metric)))
+  const minimum = Math.min(0, ...signedValues)
+  const maximum = Math.max(0, ...signedValues)
+  const range = Math.max(1, maximum - minimum)
+  const zeroPosition = (-minimum / range) * 100
+  const styleFor = (value: number) => ({ bottom: `${(Math.min(0, value) - minimum) / range * 100}%`, height: `${Math.max(value === 0 ? 0 : 1.5, Math.abs(value) / range * 100)}%` })
+  const metricLabel = (metric: PnlMetric) => pnlMetricDefinitions.find((item) => item.id === metric)?.label ?? metric
+  const barSlot = 100 / metrics.length
+  const barWidth = Math.min(24, barSlot * .66)
+
+  return <div className="net-worth-chart-scroll pnl-chart-scroll">
+      <div className="net-worth-chart pnl-chart" style={{ minWidth: `${Math.max(680, points.length * 72)}px` }} role="img" aria-label={`Profit and loss history: ${points.map((point) => `${point.label}, ${metrics.map((metric) => `${metricLabel(metric)} ${formatMoney(signedValue(point, metric), currency)}`).join(', ')}`).join('; ')}`}>
+        {points.map((point) => {
+          const headlineMetric = metrics.includes('netIncome') ? 'netIncome' : metrics[0]
+          const headlineValue = signedValue(point, headlineMetric)
+          const title = `${point.label} · ${metrics.map((metric) => `${metricLabel(metric)} ${formatMoney(signedValue(point, metric), currency)}`).join(' · ')}`
+          return <div className="net-worth-chart-column pnl-chart-column" key={point.key} title={title}>
+          <strong className={headlineValue < 0 ? 'negative' : ''}>{formatCompactMoney(headlineValue, currency)}</strong>
+          <div className="net-worth-bar-track pnl-bar-track"><span className="net-worth-zero-axis" style={{ bottom: `${zeroPosition}%` }} />{metrics.map((metric, index) => {
+            const value = signedValue(point, metric)
+            return <i key={metric} className={`${metric === 'netIncome' ? 'net' : metric} ${metric === 'netIncome' && value < 0 ? 'negative' : ''}`} style={{ ...styleFor(value), left: `${index * barSlot + (barSlot - barWidth) / 2}%`, width: `${barWidth}%` }} />
+          })}</div>
+          <span>{point.label}</span>
+        </div>})}
+      </div>
+    </div>
+}
+
+type ReportBreakdownItem = { id: string; label: string; value: number; count: number }
+
+function CombinedReportColumn({ title, subtitle, currency, personalIncome, personalExpenses, personalTax, companyRevenue, companyExpenses, companyTax, globalNetIncome }: { title: string; subtitle: string; currency: string; personalIncome: number; personalExpenses: number; personalTax: number; companyRevenue: number; companyExpenses: number; companyTax: number; globalNetIncome: number }) {
+  const row = (label: string, value: number, tone = '') => <div className={`report-row ${tone}`}><span>{label}</span><strong>{formatMoney(value, currency)}</strong></div>
+  return <section className="panel report-column combined-report-column">
+    <div className="report-column-heading"><div><span className="eyebrow">{subtitle}</span><h3>{title}</h3></div></div>
+    <div className="combined-report-group"><span className="combined-report-group-label">Income</span>{row('Personal', personalIncome, 'combined-report-split-row income-row')}{row('Company', companyRevenue, 'combined-report-split-row income-row')}{row('Total income', personalIncome + companyRevenue, 'result-row subtotal-result')}</div>
+    <div className="combined-report-group"><span className="combined-report-group-label">Expenses</span>{row('Personal', -personalExpenses, 'combined-report-split-row')}{row('Company', -companyExpenses, 'combined-report-split-row')}{row('Total expenses', -(personalExpenses + companyExpenses), 'result-row subtotal-result')}</div>
+    <div className="combined-report-group"><span className="combined-report-group-label">Taxes</span>{row('Personal', -personalTax, 'combined-report-split-row')}{row('Company', -companyTax, 'combined-report-split-row')}{row('Total taxes', -(personalTax + companyTax), 'result-row subtotal-result')}</div>
+    <div className="report-divider" />
+    {row('Global net income', globalNetIncome, 'result-row final-result')}
+  </section>
+}
+
+function ReportColumn({ title, subtitle, currency, incomeLabel = 'Income', income, expenses, tax, otherTax, otherTaxLabel, netIncome, breakdowns }: { title: string; subtitle: string; currency: string; incomeLabel?: string; income: number; expenses: number; tax?: number; otherTax: number; otherTaxLabel: string; netIncome: number; breakdowns?: { income: ReportBreakdownItem[]; expenses: ReportBreakdownItem[] } }) {
+  const [expanded, setExpanded] = useState<'income' | 'expenses' | null>(null)
   const row = (label: string, value: number, tone?: string) => <div className={`report-row ${tone ?? ''}`}><span>{label}</span><strong>{formatMoney(value, currency)}</strong></div>
-  return <section className="panel report-column"><div className="report-column-heading"><div><span className="eyebrow">{subtitle}</span><h3>{title}</h3></div></div>{row('Income', income, 'income-row')}{row('Expenses', -expenses)}{row('Calculated company tax', -tax)}{otherTax !== 0 && row(otherTaxLabel, -otherTax)}<div className="report-divider" />{row('Net income', netIncome, 'result-row final-result')}</section>
+  const expandableRow = (id: 'income' | 'expenses', label: string, value: number, tone?: string) => {
+    const items = breakdowns?.[id] ?? []
+    const open = expanded === id
+    return <div className={`report-expandable ${open ? 'open' : ''}`}>
+      <button type="button" className={`report-row report-row-button ${tone ?? ''}`} aria-expanded={open} disabled={!items.length} onClick={() => setExpanded((current) => current === id ? null : id)}><span><ChevronRight className={open ? 'expanded' : ''} size={14} />{label}</span><strong>{formatMoney(value, currency)}</strong></button>
+      {open && <div className="report-breakdown-list">{items.map((item) => <div className="report-breakdown-row" key={item.id}><span><strong>{item.label}</strong><small>{item.count} transaction{item.count === 1 ? '' : 's'}</small></span><b>{formatMoney(id === 'expenses' ? -item.value : item.value, currency)}</b></div>)}</div>}
+    </div>
+  }
+  return <section className="panel report-column"><div className="report-column-heading"><div><span className="eyebrow">{subtitle}</span><h3>{title}</h3></div></div>{breakdowns ? expandableRow('income', incomeLabel, income, 'income-row') : row(incomeLabel, income, 'income-row')}{breakdowns ? expandableRow('expenses', 'Expenses', -expenses) : row('Expenses', -expenses)}{tax !== undefined && row('Calculated company tax', -tax)}{otherTax !== 0 && row(otherTaxLabel, -otherTax)}<div className="report-divider" />{row('Net income', netIncome, 'result-row final-result')}</section>
 }
 
 function AccountsPage({ accounts, pendingImportCounts, totalBalance, defaultCurrency, convertBalance, onAdd, onSelectAccount, onReorder }: { accounts: Account[]; pendingImportCounts: Map<string, number>; totalBalance: number; defaultCurrency: string; convertBalance: (account: Account) => number; onAdd: () => void; onSelectAccount: (id: string) => void; onReorder: (accountIds: string[]) => Promise<boolean> }) {
@@ -3115,12 +3247,12 @@ function TransactionForm({ accounts, categories, payees, onSubmit }: { accounts:
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? '')
   const [toAccountId, setToAccountId] = useState(accounts[1]?.id ?? '')
   const relevant = categories.filter((category) => type === 'income'
-    ? ['income', 'expense'].includes(category.reportGroup)
-    : ['expense', 'tax'].includes(category.reportGroup))
-  const [categoryId, setCategoryId] = useState(categories.find(c => c.reportGroup === 'expense')?.id ?? '')
+    ? isIncomeReportGroup(category.reportGroup) || isExpenseReportGroup(category.reportGroup)
+    : isExpenseReportGroup(category.reportGroup) || taxReportGroups.includes(category.reportGroup))
+  const [categoryId, setCategoryId] = useState(categories.find(c => c.reportGroup === 'personal_expense')?.id ?? '')
   function changeType(next: Transaction['type']) {
     setType(next)
-    if (next !== 'transfer') setCategoryId(categories.find(c => c.reportGroup === next)?.id ?? categories[0]?.id ?? '')
+    if (next !== 'transfer') setCategoryId(categories.find(c => c.reportGroup === (next === 'income' ? 'personal_income' : 'personal_expense'))?.id ?? categories[0]?.id ?? '')
   }
   function submit(e: FormEvent) {
     e.preventDefault()
@@ -3310,7 +3442,7 @@ function CategoryDetailsForm({ category, categories, onSubmit }: { category: Cat
     }
   }}>
     <label><span>Category name</span><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} /></label>
-    <label><span>Report group</span><select value={reportGroup} onChange={(event) => setReportGroup(event.target.value as ReportGroup)}><option value="income">Income</option><option value="expense">Expense</option><option value="tax">Tax</option></select></label>
+    <label><span>Report group</span><select value={reportGroup} onChange={(event) => setReportGroup(event.target.value as ReportGroup)}><option value="personal_income">Personal income</option><option value="personal_expense">Personal expense</option><option value="personal_tax">Personal tax</option><option value="company_revenue">Company revenue</option><option value="company_expense">Company expense</option><option value="company_tax">Company tax</option></select></label>
     <div className="category-appearance-row">
       <div className="category-appearance-preview"><span style={{ color, background: `${color}18` }}><PreviewIcon size={22} /></span><div><small>Preview</small><strong>{normalizedName || 'Category'}</strong></div></div>
       <label className="category-color-field"><span>Color</span><div><input type="color" value={validColor ? color : '#5d7d91'} onChange={(event) => setColor(event.target.value)} /><input aria-label="Category color hex value" value={color} onChange={(event) => setColor(event.target.value)} maxLength={7} /></div></label>
@@ -3324,9 +3456,9 @@ function CategoryDetailsForm({ category, categories, onSubmit }: { category: Cat
 }
 
 function CategoryForm({ categoryGroups, onSubmit }: { categoryGroups: CategoryGroup[]; onSubmit: (c: Omit<Category, 'id'>, budgetMinor: number) => void }) {
-  const [name, setName] = useState(''); const [budget, setBudget] = useState(''); const [reportGroup, setReportGroup] = useState<ReportGroup>('expense'); const [categoryGroupId, setCategoryGroupId] = useState(categoryGroups[0]?.id ?? '')
-  function submit(e: FormEvent) { e.preventDefault(); const budgetMinor = parseMoneyToMinor(budget || '0'); if (!name || budgetMinor === null) return; onSubmit({ name, reportGroup, categoryGroupId: categoryGroupId || undefined, color: '#5d7d91', icon: reportGroup === 'income' ? 'briefcase' : 'sparkles', hidden: false }, budgetMinor) }
-  return <form className="form" onSubmit={submit}><label><span>Category name</span><input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Personal care" /></label><div className="form-grid"><label><span>Report group</span><select value={reportGroup} onChange={e => setReportGroup(e.target.value as ReportGroup)}><option value="income">Income</option><option value="expense">Expense</option><option value="tax">Tax</option></select></label><label><span>Category group</span><select value={categoryGroupId} onChange={e => setCategoryGroupId(e.target.value)}>{categoryGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label></div><label><span>Monthly plan</span><input type="number" min="0" step="0.01" value={budget} onChange={e => setBudget(e.target.value)} placeholder="0.00" /></label><button className="primary-button form-submit">Create category<ArrowRight size={18} /></button></form>
+  const [name, setName] = useState(''); const [budget, setBudget] = useState(''); const [reportGroup, setReportGroup] = useState<ReportGroup>('personal_expense'); const [categoryGroupId, setCategoryGroupId] = useState(categoryGroups[0]?.id ?? '')
+  function submit(e: FormEvent) { e.preventDefault(); const budgetMinor = parseMoneyToMinor(budget || '0'); if (!name || budgetMinor === null) return; onSubmit({ name, reportGroup, categoryGroupId: categoryGroupId || undefined, color: '#5d7d91', icon: isIncomeReportGroup(reportGroup) ? 'briefcase' : 'sparkles', hidden: false }, budgetMinor) }
+  return <form className="form" onSubmit={submit}><label><span>Category name</span><input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Personal care" /></label><div className="form-grid"><label><span>Report group</span><select value={reportGroup} onChange={e => setReportGroup(e.target.value as ReportGroup)}><option value="personal_income">Personal income</option><option value="personal_expense">Personal expense</option><option value="personal_tax">Personal tax</option><option value="company_revenue">Company revenue</option><option value="company_expense">Company expense</option><option value="company_tax">Company tax</option></select></label><label><span>Category group</span><select value={categoryGroupId} onChange={e => setCategoryGroupId(e.target.value)}>{categoryGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label></div><label><span>Monthly plan</span><input type="number" min="0" step="0.01" value={budget} onChange={e => setBudget(e.target.value)} placeholder="0.00" /></label><button className="primary-button form-submit">Create category<ArrowRight size={18} /></button></form>
 }
 
 export default App

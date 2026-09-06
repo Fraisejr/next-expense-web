@@ -199,10 +199,10 @@ const categories = archive.categories.map((category) => ({
   hidden: category.hidden,
   default_budget_minor: category.defaultBudgetMinor,
   report_group: category.type === 'Income'
-    ? 'income'
+    ? 'personal_income'
     : /tax|irpf|cuota ss/i.test(category.name)
-      ? 'tax'
-      : 'expense',
+      ? 'personal_tax'
+      : 'personal_expense',
 }))
 
 const payees = archive.payees.map((payee) => ({
