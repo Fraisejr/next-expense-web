@@ -54,6 +54,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .sidebar-account-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .bank-import-connected-icon { flex: 0 0 auto; width: 20px; height: 20px; display: inline-grid; place-items: center; color: #326c60; background: #e4efea; border: 1px solid #c8ddd4; border-radius: 50%; vertical-align: middle; }
 .sidebar-account .bank-import-connected-icon { width: 17px; height: 17px; margin-left: -2px; }
+.account-reconciled-indicator { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; color: #27725d; }
+.account-reconciled-indicator.labelled { gap: 5px; padding: 4px 7px; color: #266b58; background: #e5f1eb; border: 1px solid #c5ded2; border-radius: 6px; font-size: 8.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.sidebar-account .account-reconciled-indicator { margin-left: -3px; }
 .sidebar-account > b { flex: 0 0 auto; font-family: 'DM Mono', monospace; font-size: 11.5px; font-weight: 500; letter-spacing: -.04em; }
 .sidebar-add-account { display: flex; align-items: center; gap: 6px; margin-top: 8px; padding: 8px 14px; color: #527068; font-size: 9.5px; font-weight: 700; text-align: left; }
 .sidebar-add-account:hover { color: var(--green); }
@@ -418,6 +421,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .entity-page-toolbar select { min-width: 240px; height: 38px; padding: 0 30px 0 11px; border: 1px solid #d9dbd4; border-radius: 8px; background: var(--paper); color: var(--ink); font-size: 11.5px; }
 .entity-detail-panel { min-height: 560px; }
 .entity-heading { display: flex; align-items: center; gap: 12px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.entity-heading-title { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
 .entity-heading h2 { margin-top: 4px; font-size: 26px; }
 .entity-heading-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 10px; color: #fff; }
 .entity-heading-action { margin-left: auto; }
@@ -474,13 +478,18 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .prefix-match-suggestion button:disabled { cursor: wait; opacity: .6; }
 .prefix-match-suggestion .prefix-match-actions { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 1px; }
 .bank-review-category { display: grid; gap: 6px; }
+.bank-review-transfer-choice { grid-column: 3 / 5; display: grid; grid-template-columns: minmax(190px, 280px) minmax(0, 1fr); align-items: end; gap: 7px 12px; }
+.bank-review-transfer-choice label > span { margin: 0 0 5px; color: var(--muted); font-size: 8.5px; font-weight: 700; }
+.bank-review-transfer-choice select { width: 100%; height: 34px; padding: 0 28px 0 9px; border: 1px solid #cbd8d1; border-radius: 7px; color: var(--ink); background: #f8fbf9; font-size: 10px; }
+.bank-review-transfer-choice p { margin: 0 0 6px; color: var(--muted); font-size: 8.5px; line-height: 1.4; }
+.bank-review-transfer-choice .auth-error { grid-column: 1 / -1; margin: 0; }
 .hidden-category-warning { display: flex; align-items: flex-start; gap: 6px; padding: 7px 8px; border: 1px solid #e5c9b2; border-radius: 6px; color: #9a563b; background: #fff4e9; }
 .hidden-category-warning svg { flex: 0 0 auto; margin-top: 1px; }
 .hidden-category-warning p { margin: 0; font-size: 8.5px; line-height: 1.45; }
 .hidden-category-warning p strong { display: inline; color: #87462f; font-size: inherit; }
 .hidden-category-warning button { padding: 0; border: 0; color: #7c4937; background: transparent; font: inherit; font-weight: 800; text-decoration: underline; cursor: pointer; }
 .hidden-category-warning button:disabled { cursor: wait; opacity: .6; }
-.bank-review-actions { display: flex; gap: 7px; }
+.bank-review-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .bank-review-actions button { height: 32px; padding-inline: 10px; }
 .entity-detail-panel .category-detail-list { max-height: none; }
 

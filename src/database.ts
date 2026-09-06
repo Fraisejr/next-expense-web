@@ -560,6 +560,16 @@ export async function approveBankImportCandidate(workspaceId: string, candidateI
   return String(data)
 }
 
+export async function approveBankImportCandidateAsTransfer(workspaceId: string, candidateId: string, counterpartyAccountId: string) {
+  const { data, error } = await neon.rpc('approve_bank_import_candidate_as_transfer', {
+    p_workspace_id: workspaceId,
+    p_candidate_id: candidateId,
+    p_counterparty_account_id: counterpartyAccountId,
+  })
+  if (error) throw error
+  return String(data)
+}
+
 export async function rejectBankImportCandidate(workspaceId: string, candidateId: string) {
   const { error } = await neon.from('bank_import_candidates')
     .update({ status: 'rejected', decided_at: new Date().toISOString() })
