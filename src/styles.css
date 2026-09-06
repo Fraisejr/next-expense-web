@@ -53,6 +53,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .sidebar-account > span i { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; }
 .sidebar-account-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .bank-import-connected-icon { flex: 0 0 auto; width: 20px; height: 20px; display: inline-grid; place-items: center; color: #326c60; background: #e4efea; border: 1px solid #c8ddd4; border-radius: 50%; vertical-align: middle; }
+.bank-import-connected-icon.awaiting-approval { color: #a25b2c; background: #fff0df; border-color: #e9c6a4; }
 .sidebar-account .bank-import-connected-icon { width: 17px; height: 17px; margin-left: -2px; }
 .account-reconciled-indicator { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; color: #27725d; }
 .account-reconciled-indicator.labelled { gap: 5px; padding: 4px 7px; color: #266b58; background: #e5f1eb; border: 1px solid #c5ded2; border-radius: 6px; font-size: 8.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
@@ -460,6 +461,10 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .bank-review-row > b { font-family: 'DM Mono', monospace; font-size: 10.5px; font-weight: 500; }
 .payee-match-badge { width: fit-content; margin-top: 6px; padding: 3px 6px; border-radius: 5px; color: #8a5b42; background: #f5e7dc; font-size: 7.5px; font-style: normal; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
 .payee-match-badge.matched { color: #346859; background: #e4eee9; }
+.bank-review-description-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 8px; margin-top: 6px; }
+.bank-review-description-actions .payee-match-badge { flex: 0 0 auto; margin-top: 0; white-space: nowrap; }
+.bank-review-description-actions button { display: inline-flex; align-items: center; gap: 4px; padding: 2px 0; border: 0; color: #3b6c60; background: transparent; font-size: 8px; font-weight: 800; white-space: nowrap; cursor: pointer; }
+.bank-review-description-actions button:disabled { cursor: wait; opacity: .55; }
 .bank-review-payee { display: grid; gap: 5px; }
 .bank-review-payee > span { margin: 0; color: var(--muted); font-size: 8.5px; white-space: normal; }
 .bank-review-payee .payee-default-summary { display: flex; align-items: center; gap: 6px; }

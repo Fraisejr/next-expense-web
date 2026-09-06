@@ -1142,6 +1142,53 @@ export async function updateTransactionDetails(workspaceId: string, transactionI
   if (!data?.length) throw new Error('The transaction could not be updated because it no longer exists or you no longer have access to it.')
 }
 
+export async function updateTransferDetails(workspaceId: string, transactionId: string, date: string, destinationAccountId: string, memo: string) {
+  const { data: transactionRows, error: transactionError } = await neon.from('transactions')
+    .select('account_id,destination_account_id,currency,transaction_type')
+    .eq('workspace_id', workspaceId)
+    .eq('id', transactionId)
+    .limit(1)
+  if (transactionError) throw transactionError
+  const transaction = transactionRows?.[0]
+  if (!transaction || transaction.transaction_type !== 'transfer') throw new Error('The transfer no longer exists.')
+  if (transaction.account_id === destinationAccountId) throw new Error('Choose an account other than the source account.')
+
+  const { data: accountRows, error: accountError } = await neon.from('accounts')
+    .select('currency')
+    .eq('workspace_id', workspaceId)
+    .eq('id', destinationAccountId)
+    .limit(1)
+  if (accountError) throw accountError
+  if (!accountRows?.length) throw new Error('The destination account no longer exists.')
+  if (accountRows[0].currency !== transaction.currency) throw new Error('The destination account must use the same currency.')
+
+  if (transaction.destination_account_id !== destinationAccountId && transaction.destination_account_id) {
+    const { data: incomingReferences, error: referenceError } = await neon.from('bank_transaction_refs')
+      .select('id')
+      .eq('workspace_id', workspaceId)
+      .eq('transaction_id', transactionId)
+      .eq('account_id', transaction.destination_account_id)
+      .limit(1)
+    if (referenceError) throw referenceError
+    if (incomingReferences?.length) throw new Error('The destination cannot be changed because its incoming bank transaction has already been reconciled.')
+  }
+
+  const periodId = await ensurePeriod(workspaceId, date.slice(0, 7))
+  const { data, error } = await neon.from('transactions')
+    .update({
+      transaction_date: date,
+      period_id: periodId,
+      destination_account_id: destinationAccountId,
+      memo: memo.normalize('NFKC').trim() || null,
+    })
+    .eq('workspace_id', workspaceId)
+    .eq('id', transactionId)
+    .eq('transaction_type', 'transfer')
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The transfer could not be updated.')
+}
+
 export async function updateTransactionCategories(workspaceId: string, transactionIds: string[], categoryId: string) {
   if (!transactionIds.length) return
   const { data, error } = await neon.from('transactions')

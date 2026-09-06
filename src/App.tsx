@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import {
   ArrowLeftRight, ArrowRight, Banknote, BriefcaseBusiness,
   BarChart3, BriefcaseMedical, CalendarDays, CarFront, ChevronDown, ChevronLeft, ChevronRight, CircleHelp,
-  ArrowDown, ArrowUp, Check, CircleCheck, CreditCard, Download, Dumbbell, Eye, EyeOff, FileCheck2, GripVertical, HeartHandshake, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Pencil, Plane, Plus, ReceiptText, Search, Settings, Trash2, Upload,
+  ArrowDown, ArrowUp, Check, CircleAlert, CircleCheck, CreditCard, Download, Dumbbell, Eye, EyeOff, FileCheck2, GripVertical, HeartHandshake, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Pencil, Plane, Plus, ReceiptText, Search, Settings, Trash2, Upload,
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteAllUnusedPayees, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDetails, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
+import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteAllUnusedPayees, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDetails, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
 import { convertMinor } from './currency'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
@@ -379,6 +379,11 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     .reduce((sum, t) => sum + (t.type === 'expense' ? convertedTransactionAmount(t) : t.type === 'income' ? -convertedTransactionAmount(t) : 0), 0)
   const activeAccounts = data.accounts.filter((account) => !account.closed)
   const closedAccounts = data.accounts.filter((account) => account.closed)
+  const pendingImportCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const candidate of data.bankImportCandidates) counts.set(candidate.accountId, (counts.get(candidate.accountId) ?? 0) + 1)
+    return counts
+  }, [data.bankImportCandidates])
   const totalBalance = activeAccounts.reduce((sum, account) => sum + convertCurrentBalance(account), 0)
   const categorySpending = (id: string) => {
     const group = categoryGroup(id)
@@ -769,6 +774,24 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
+  async function changeTransferDetails(transactionId: string, date: string, destinationAccountId: string, memo: string) {
+    const transaction = data.transactions.find((item) => item.id === transactionId && item.type === 'transfer')
+    if (!transaction) return
+    try {
+      setSyncError('')
+      await updateTransferDetails(workspace.workspaceId, transactionId, date, destinationAccountId, memo)
+      void clearTransactionCache(workspace.workspaceId)
+      monthCache.current.delete(transaction.date.slice(0, 7))
+      monthCache.current.delete(date.slice(0, 7))
+      const refreshed = await reloadWorkspaceSnapshot()
+      setData(refreshed.data)
+      setCategoryTarget(null)
+    } catch (error) {
+      setSyncError(getErrorMessage(error, 'Could not update the transfer.'))
+      throw error
+    }
+  }
+
   async function changeOpeningBalance(transactionId: string, date: string, amountMinor: number) {
     const transaction = data.transactions.find((item) => item.id === transactionId && item.type === 'opening_balance')
     if (!transaction) return
@@ -1146,8 +1169,8 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <a href={pathWithMonth('/accounts')} className={page === 'accounts' && !selectedAccount ? 'account-section-title active' : 'account-section-title'} onClick={(event) => useClientNavigation(event, () => goTo('/accounts'))}>
             <span><WalletCards size={16} />Accounts</span><b>{formatMoney(totalBalance, workspace.defaultCurrency)}</b>
           </a>
-          {accountsByBalanceSheetGroup.map(({ group, accounts }) => accounts.length > 0 && <SidebarAccountGroup key={group} label={group} accounts={accounts} open={openAccountGroups[group]} onToggle={() => setOpenAccountGroups((current) => ({ ...current, [group]: !current[group] }))} selectedAccountId={selectedAccount?.id} accountHref={(id) => pathWithMonth(`/accounts/${id}`)} onSelect={(id) => goTo(`/accounts/${id}`)} />)}
-          {closedAccounts.length > 0 && <SidebarAccountGroup label="Closed accounts" accounts={closedAccounts} open={closedAccountsOpen} onToggle={() => setClosedAccountsOpen((current) => !current)} selectedAccountId={selectedAccount?.id} accountHref={(id) => pathWithMonth(`/accounts/${id}`)} onSelect={(id) => goTo(`/accounts/${id}`)} />}
+          {accountsByBalanceSheetGroup.map(({ group, accounts }) => accounts.length > 0 && <SidebarAccountGroup key={group} label={group} accounts={accounts} pendingImportCounts={pendingImportCounts} open={openAccountGroups[group]} onToggle={() => setOpenAccountGroups((current) => ({ ...current, [group]: !current[group] }))} selectedAccountId={selectedAccount?.id} accountHref={(id) => pathWithMonth(`/accounts/${id}`)} onSelect={(id) => goTo(`/accounts/${id}`)} />)}
+          {closedAccounts.length > 0 && <SidebarAccountGroup label="Closed accounts" accounts={closedAccounts} pendingImportCounts={pendingImportCounts} open={closedAccountsOpen} onToggle={() => setClosedAccountsOpen((current) => !current)} selectedAccountId={selectedAccount?.id} accountHref={(id) => pathWithMonth(`/accounts/${id}`)} onSelect={(id) => goTo(`/accounts/${id}`)} />}
           <button className="sidebar-add-account" onClick={() => setModal('account')}><Plus size={13} />Add account</button>
         </nav>
 
@@ -1196,7 +1219,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <ReportsPage data={data} viewedMonth={viewedMonth} defaultCurrency={workspace.defaultCurrency} onUpdateTaxRate={changeTaxRate} onEditTransaction={setCategoryTarget} />
         )}
         {page === 'accounts' && !selectedAccount && (
-          <AccountsPage accounts={activeAccounts} totalBalance={totalBalance} defaultCurrency={workspace.defaultCurrency} convertBalance={convertCurrentBalance} onAdd={() => setModal('account')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onReorder={reorderAccounts} />
+          <AccountsPage accounts={activeAccounts} pendingImportCounts={pendingImportCounts} totalBalance={totalBalance} defaultCurrency={workspace.defaultCurrency} convertBalance={convertCurrentBalance} onAdd={() => setModal('account')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onReorder={reorderAccounts} />
         )}
         {page === 'settings' && (
           <SettingsPage workspaceId={workspace.workspaceId} workspaceName={workspace.workspaceName} defaultCurrency={workspace.defaultCurrency} accounts={data.accounts} fxRates={data.fxRates} onSaveFxRate={saveExchangeRate} onDeleteFxRate={removeExchangeRate} />
@@ -1224,12 +1247,14 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           {modal === 'bank' && bankTarget && <BankLinkForm account={bankTarget} workspaceId={workspace.workspaceId} onComplete={() => window.location.reload()} />}
         </ModalShell>
       )}
-      {categoryTarget && <ModalShell title={categoryTarget.type === 'opening_balance' ? 'Edit opening balance' : categoryTarget.type === 'balance_adjustment' ? 'Edit balance adjustment' : 'Edit transaction'} onClose={() => setCategoryTarget(null)}>
+      {categoryTarget && <ModalShell title={categoryTarget.type === 'opening_balance' ? 'Edit opening balance' : categoryTarget.type === 'balance_adjustment' ? 'Edit balance adjustment' : categoryTarget.type === 'transfer' ? 'Edit transfer' : 'Edit transaction'} onClose={() => setCategoryTarget(null)}>
         {categoryTarget.type === 'opening_balance'
           ? <OpeningBalanceForm transaction={categoryTarget} onSubmit={(date, amountMinor) => changeOpeningBalance(categoryTarget.id, date, amountMinor)} />
           : categoryTarget.type === 'balance_adjustment'
             ? <BalanceAdjustmentForm account={data.accounts.find((account) => account.id === categoryTarget.accountId)!} transaction={categoryTarget} onSubmit={(date, balance, reason, memo) => saveBalanceAdjustment(data.accounts.find((account) => account.id === categoryTarget.accountId)!, date, balance, reason, memo, categoryTarget.id)} />
-          : <TransactionDetailsForm transaction={categoryTarget} transactions={data.transactions} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} onSubmit={(date, payeeName, payeeId, categoryId, memo, rememberDefault, rememberMapping, mappingSource, matchingTransactionIds) => changeTransactionDetails(categoryTarget.id, date, payeeName, payeeId, categoryId, memo, rememberDefault, rememberMapping, mappingSource, matchingTransactionIds)} />}
+            : categoryTarget.type === 'transfer'
+              ? <TransferDetailsForm transaction={categoryTarget} accounts={data.accounts} onSubmit={(date, destinationAccountId, memo) => changeTransferDetails(categoryTarget.id, date, destinationAccountId, memo)} />
+              : <TransactionDetailsForm transaction={categoryTarget} transactions={data.transactions} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} onSubmit={(date, payeeName, payeeId, categoryId, memo, rememberDefault, rememberMapping, mappingSource, matchingTransactionIds) => changeTransactionDetails(categoryTarget.id, date, payeeName, payeeId, categoryId, memo, rememberDefault, rememberMapping, mappingSource, matchingTransactionIds)} />}
       </ModalShell>}
     </div>
   )
@@ -1300,8 +1325,10 @@ function AuthScreen() {
   </main>
 }
 
-function BankImportConnectedIcon() {
-  return <span className="bank-import-connected-icon" role="img" aria-label="Connected for bank import" title="Connected for bank import"><Link2 size={11} strokeWidth={2.4} /></span>
+function BankImportConnectedIcon({ pendingCount = 0 }: { pendingCount?: number }) {
+  const awaitingApproval = pendingCount > 0
+  const label = awaitingApproval ? `${pendingCount} imported ${pendingCount === 1 ? 'transaction' : 'transactions'} awaiting approval` : 'Connected for bank import'
+  return <span className={`bank-import-connected-icon${awaitingApproval ? ' awaiting-approval' : ''}`} role="img" aria-label={label} title={label}>{awaitingApproval ? <CircleAlert size={12} strokeWidth={2.4} /> : <Link2 size={11} strokeWidth={2.4} />}</span>
 }
 
 function accountIsReconciled(account: Account) {
@@ -1315,14 +1342,14 @@ function AccountReconciledIndicator({ label = false }: { label?: boolean }) {
   return <span className={`account-reconciled-indicator${label ? ' labelled' : ''}`} role="status" aria-label="Reconciled" title="Calculated balance matches the latest bank balance"><CircleCheck size={label ? 14 : 13} strokeWidth={2.4} />{label && <span>Reconciled</span>}</span>
 }
 
-function SidebarAccountGroup({ label, accounts, open, onToggle, selectedAccountId, accountHref, onSelect }: { label: string; accounts: Account[]; open: boolean; onToggle: () => void; selectedAccountId?: string; accountHref: (id: string) => string; onSelect: (id: string) => void }) {
+function SidebarAccountGroup({ label, accounts, pendingImportCounts, open, onToggle, selectedAccountId, accountHref, onSelect }: { label: string; accounts: Account[]; pendingImportCounts: Map<string, number>; open: boolean; onToggle: () => void; selectedAccountId?: string; accountHref: (id: string) => string; onSelect: (id: string) => void }) {
   const subtotal = accounts.reduce((sum, account) => sum + account.balanceMinor, 0)
   const currencies = [...new Set(accounts.map((account) => account.currency))]
   return <div className="sidebar-account-group">
     <button className="sidebar-account-group-title" onClick={onToggle} aria-expanded={open}>
       <span><ChevronDown size={12} className={open ? '' : 'collapsed'} />{label}</span><b>{currencies.length === 1 ? formatMoney(subtotal, currencies[0]) : `${accounts.length} accounts`}</b>
     </button>
-    {open && <div className="sidebar-account-list">{accounts.map((account) => <a key={account.id} href={accountHref(account.id)} className={selectedAccountId === account.id ? 'sidebar-account active' : 'sidebar-account'} onClick={(event) => useClientNavigation(event, () => onSelect(account.id))}><span><i style={{ background: account.color }} /><span className="sidebar-account-name">{account.name}</span>{account.providerAccountId && <BankImportConnectedIcon />}{accountIsReconciled(account) && <AccountReconciledIndicator />}</span><b className={account.balanceMinor < 0 ? 'negative' : ''}>{formatMoney(account.balanceMinor, account.currency)}</b></a>)}</div>}
+    {open && <div className="sidebar-account-list">{accounts.map((account) => <a key={account.id} href={accountHref(account.id)} className={selectedAccountId === account.id ? 'sidebar-account active' : 'sidebar-account'} onClick={(event) => useClientNavigation(event, () => onSelect(account.id))}><span><i style={{ background: account.color }} /><span className="sidebar-account-name">{account.name}</span>{account.providerAccountId && <BankImportConnectedIcon pendingCount={pendingImportCounts.get(account.id)} />}{accountIsReconciled(account) && <AccountReconciledIndicator />}</span><b className={account.balanceMinor < 0 ? 'negative' : ''}>{formatMoney(account.balanceMinor, account.currency)}</b></a>)}</div>}
   </div>
 }
 
@@ -1650,7 +1677,7 @@ function TransactionRow({ transaction, categories, accounts, compact = false, fo
         <span>{isTransfer ? `${sourceAccount?.name ?? 'Account'} → ${destinationAccount?.name ?? 'Account'}` : isOpeningBalance ? sourceAccount?.name ?? 'Unknown account' : isBalanceAdjustment ? `Balance set to ${formatMoney(transaction.balanceCheckpointMinor ?? 0, transaction.currency)}` : showAccount ? sourceAccount?.name ?? 'Unknown account' : category?.name ?? 'Uncategorised'} · {formatShortDate(transaction.date)}</span>
         {transaction.note?.trim() && <span className="transaction-memo">{transaction.note.trim()}</span>}
       </div>
-      {onEditCategory && <button type="button" className={!category && !isOpeningBalance ? 'transaction-category-edit missing' : 'transaction-category-edit'} onClick={onEditCategory} aria-label={`Edit ${isOpeningBalance ? 'opening balance' : transaction.payee}`}><Pencil size={12} />Edit</button>}
+      {onEditCategory && <button type="button" className={!category && !isTransfer && !isOpeningBalance && !isBalanceAdjustment ? 'transaction-category-edit missing' : 'transaction-category-edit'} onClick={onEditCategory} aria-label={`Edit ${isOpeningBalance ? 'opening balance' : isTransfer ? 'transfer' : transaction.payee}`}><Pencil size={12} />Edit</button>}
       <b className={transaction.type === 'income' || transferIsIncoming || ((isOpeningBalance || isBalanceAdjustment) && transaction.amountMinor >= 0) ? 'positive' : isTransfer && !focusAccountId ? 'transfer-amount' : ''}>{prefix}{formatMoney(amountMinor, transaction.currency)}</b>
     </div>
   )
@@ -1685,7 +1712,7 @@ function TransactionsPage({ transactions, allTransactions, accounts, categories,
         <div className="transaction-list-full">
           {displayedTransactions.map((transaction) => (
             <div className="transaction-table-row" key={transaction.id}>
-              <TransactionRow transaction={transaction} categories={categories} accounts={accounts} onEditCategory={transaction.type === 'expense' || transaction.type === 'income' || transaction.type === 'opening_balance' || transaction.type === 'balance_adjustment' ? () => onEditCategory(transaction) : undefined} />
+              <TransactionRow transaction={transaction} categories={categories} accounts={accounts} onEditCategory={() => onEditCategory(transaction)} />
               <span className="account-name">{accounts.find((a) => a.id === transaction.accountId)?.name}{transaction.type === 'transfer' ? ` → ${accounts.find((a) => a.id === transaction.toAccountId)?.name ?? ''}` : ''}</span>
             </div>
           ))}
@@ -2201,7 +2228,7 @@ function ReportColumn({ title, subtitle, currency, income, expenses, tax, otherT
   return <section className="panel report-column"><div className="report-column-heading"><div><span className="eyebrow">{subtitle}</span><h3>{title}</h3></div></div>{row('Income', income, 'income-row')}{row('Expenses', -expenses)}{row('Calculated company tax', -tax)}{otherTax !== 0 && row(otherTaxLabel, -otherTax)}<div className="report-divider" />{row('Net income', netIncome, 'result-row final-result')}</section>
 }
 
-function AccountsPage({ accounts, totalBalance, defaultCurrency, convertBalance, onAdd, onSelectAccount, onReorder }: { accounts: Account[]; totalBalance: number; defaultCurrency: string; convertBalance: (account: Account) => number; onAdd: () => void; onSelectAccount: (id: string) => void; onReorder: (accountIds: string[]) => Promise<boolean> }) {
+function AccountsPage({ accounts, pendingImportCounts, totalBalance, defaultCurrency, convertBalance, onAdd, onSelectAccount, onReorder }: { accounts: Account[]; pendingImportCounts: Map<string, number>; totalBalance: number; defaultCurrency: string; convertBalance: (account: Account) => number; onAdd: () => void; onSelectAccount: (id: string) => void; onReorder: (accountIds: string[]) => Promise<boolean> }) {
   const [reordering, setReordering] = useState(false)
   const [orderedIds, setOrderedIds] = useState(() => accounts.map((account) => account.id))
   const [draggedId, setDraggedId] = useState('')
@@ -2282,7 +2309,7 @@ function AccountsPage({ accounts, totalBalance, defaultCurrency, convertBalance,
           onDrop={() => dropAccount(account.id)}
         >
           <div className="large-account-top"><span style={{ background: account.color }}><Banknote size={20} /></span><GripVertical className="reorder-card-handle" size={20} aria-hidden="true" /></div>
-          <div className="large-account-name"><h3>{account.name}</h3>{account.providerAccountId && <BankImportConnectedIcon />}</div><strong>{formatMoney(account.balanceMinor, account.currency)}</strong><p>{accountBalanceSheetGroup(account)} · {account.type} · {account.currency}</p>
+          <div className="large-account-name"><h3>{account.name}</h3>{account.providerAccountId && <BankImportConnectedIcon pendingCount={pendingImportCounts.get(account.id)} />}</div><strong>{formatMoney(account.balanceMinor, account.currency)}</strong><p>{accountBalanceSheetGroup(account)} · {account.type} · {account.currency}</p>
           <div className="reorder-card-actions">
             <button className="icon-button" onClick={() => moveAccount(account.id, -1)} disabled={index === 0} aria-label={`Move ${account.name} earlier`}><ArrowUp size={16} /></button>
             <button className="icon-button" onClick={() => moveAccount(account.id, 1)} disabled={index === orderedAccounts.length - 1} aria-label={`Move ${account.name} later`}><ArrowDown size={16} /></button>
@@ -2294,7 +2321,7 @@ function AccountsPage({ accounts, totalBalance, defaultCurrency, convertBalance,
         const groupBalance = rows.reduce((sum, account) => sum + convertBalance(account), 0)
         return <section className="balance-sheet-group" key={group}>
           <div className="balance-sheet-group-heading"><div><span className="eyebrow">Balance sheet</span><h2>{group}</h2></div><strong>{formatMoney(groupBalance, defaultCurrency)}</strong></div>
-          <div className="account-card-grid">{rows.map((account) => <button type="button" className="large-account-card" key={account.id} onClick={() => onSelectAccount(account.id)} aria-label={`View ${account.name} transactions`}><div className="large-account-top"><span style={{ background: account.color }}><Banknote size={20} /></span><small>{accountBalanceSheetGroup(account)} · {account.type}</small></div><div className="large-account-name"><h3>{account.name}</h3>{account.providerAccountId && <BankImportConnectedIcon />}</div><strong>{formatMoney(account.balanceMinor, account.currency)}</strong><p>Provisional balance · {account.currency}</p></button>)}</div>
+          <div className="account-card-grid">{rows.map((account) => <button type="button" className="large-account-card" key={account.id} onClick={() => onSelectAccount(account.id)} aria-label={`View ${account.name} transactions`}><div className="large-account-top"><span style={{ background: account.color }}><Banknote size={20} /></span><small>{accountBalanceSheetGroup(account)} · {account.type}</small></div><div className="large-account-name"><h3>{account.name}</h3>{account.providerAccountId && <BankImportConnectedIcon pendingCount={pendingImportCounts.get(account.id)} />}</div><strong>{formatMoney(account.balanceMinor, account.currency)}</strong><p>Provisional balance · {account.currency}</p></button>)}</div>
         </section>
       })}
     </div>}
@@ -2425,7 +2452,7 @@ function BankImportReview({ account, accounts, candidates, categories, payees, m
         const eligibleTransferAccounts = accounts.filter((item) => item.id !== account.id && !item.closed && item.currency === candidate.currency)
         const transferAccountId = transferAccountAssignments[candidate.id] ?? eligibleTransferAccounts[0]?.id ?? ''
         return <div className="bank-review-row" key={candidate.id}>
-          <div className="bank-review-description"><strong>{selectedPayee?.name ?? candidate.payee}{candidate.posted ? null : <em className="pending-badge">Pending</em>}</strong><span>{formatShortDate(candidate.date)} · {selectedPayee ? `Bank: ${candidate.payee}` : 'Bank description'}{distinctNote ? ` · ${distinctNote}` : ''}</span><em className={selectedPayee ? 'payee-match-badge matched' : 'payee-match-badge'}>{selectedPayee ? 'Matched payee' : 'New payee on approval'}</em></div>
+          <div className="bank-review-description"><strong>{selectedPayee?.name ?? candidate.payee}{candidate.posted ? null : <em className="pending-badge">Pending</em>}</strong><span>{formatShortDate(candidate.date)} · {selectedPayee ? `Bank: ${candidate.payee}` : 'Bank description'}{distinctNote ? ` · ${distinctNote}` : ''}</span><div className="bank-review-description-actions"><em className={selectedPayee ? 'payee-match-badge matched' : 'payee-match-badge'}>{selectedPayee ? 'Matched payee' : 'New payee on approval'}</em>{!transferMode && eligibleTransferAccounts.length > 0 && <button type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => setTransferCandidateId(candidate.id)}><ArrowLeftRight size={12} />Post as transfer</button>}</div></div>
           <b className={candidate.type === 'income' ? 'positive' : ''}>{candidate.type === 'income' ? '+' : '−'}{formatMoney(candidate.amountMinor, candidate.currency)}</b>
           {transferMode ? <div className="bank-review-transfer-choice">
             <label><span>{candidate.type === 'expense' ? 'Transfer to account' : 'Transfer from account'}</span><select aria-label={`${candidate.type === 'expense' ? 'Destination' : 'Source'} account for ${candidate.payee}`} value={transferAccountId} onChange={(event) => setTransferAccountAssignments((current) => ({ ...current, [candidate.id]: event.target.value }))}>{eligibleTransferAccounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
@@ -2495,7 +2522,6 @@ function BankImportReview({ account, accounts, candidates, categories, payees, m
               <button className="primary-button" type="button" disabled={!transferAccountId || Boolean(reviewingCandidateId)} onClick={() => void onPostTransfer(candidate.id, transferAccountId)}>{reviewingCandidateId === candidate.id ? <LoaderCircle className="spin-icon" size={14} /> : <ArrowLeftRight size={14} />}Post transfer</button>
             </> : <>
               <button className="secondary-button" type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => onReview(candidate.id, 'reject')}><X size={14} />Reject</button>
-              <button className="secondary-button" type="button" disabled={Boolean(reviewingCandidateId) || !eligibleTransferAccounts.length} onClick={() => setTransferCandidateId(candidate.id)}><ArrowLeftRight size={14} />Transfer</button>
               <button className="primary-button" type="button" disabled={!categoryId || Boolean(hiddenCategory) || Boolean(reviewingCandidateId)} onClick={() => onReview(candidate.id, 'approve', categoryId, rememberCategory, payeeId || null, offerMapping && rememberMapping, candidate.payee, createdPayeeIds[candidate.id] === payeeId, account.id)}>{reviewingCandidateId === candidate.id ? <LoaderCircle className="spin-icon" size={14} /> : <Check size={14} />}Approve</button>
             </>}
           </div>
@@ -2645,7 +2671,7 @@ function AccountDetail({ account, transactions, allTransactions, categories, acc
     </div>
     <div className="category-detail-heading account-transaction-heading"><span>{historyLoading && transactionPeriod === 'all' && !historyLoaded ? 'Loading transaction history…' : `${periodTransactions.length} transaction${periodTransactions.length === 1 ? '' : 's'} ${transactionPeriod === 'all' ? 'across all dates' : 'in the selected month'}`}</span><div><b>{account.scope} · {account.type}</b><div className="segmented account-transaction-period"><button type="button" className={transactionPeriod === 'month' ? 'active transfer' : ''} onClick={() => setTransactionPeriod('month')}>Selected month</button><button type="button" className={transactionPeriod === 'all' ? 'active transfer' : ''} onClick={() => { setTransactionPeriod('all'); void onRequestHistory() }}>{historyLoading && !historyLoaded ? 'Loading…' : 'All dates'}</button></div></div></div>
     <div className="category-detail-list">
-      {displayedTransactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} focusAccountId={account.id} onEditCategory={transaction.type === 'expense' || transaction.type === 'income' || transaction.type === 'opening_balance' || transaction.type === 'balance_adjustment' ? () => onEditTransaction(transaction) : undefined} />)}
+      {displayedTransactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} focusAccountId={account.id} onEditCategory={() => onEditTransaction(transaction)} />)}
       {!periodTransactions.length && <div className="empty-state compact-empty"><ReceiptText size={24} /><h3>No transactions yet</h3></div>}
     </div>
     {transactionPeriod === 'all' && pageCount > 1 && <nav className="account-transaction-pagination" aria-label="Account transaction pages"><button type="button" className="secondary-button" disabled={transactionPage === 1} onClick={() => setTransactionPage((current) => Math.max(1, current - 1))}><ChevronLeft size={15} />Previous</button><span>Page {transactionPage} of {pageCount} · {detailTransactionPageSize} per page</span><button type="button" className="secondary-button" disabled={transactionPage === pageCount} onClick={() => setTransactionPage((current) => Math.min(pageCount, current + 1))}>Next<ChevronRight size={15} /></button></nav>}
@@ -2861,6 +2887,49 @@ function TransactionDetailsForm({ transaction, transactions, categories, payees,
       })}</div>
     </section>}
     <button className="primary-button form-submit" disabled={!date || !categoryId || !payeeQuery.trim() || (!changed && !rememberDefault) || saving}>{saving ? 'Saving…' : selectedRelatedCount ? `Save ${selectedRelatedCount + 1} transactions` : 'Save transaction'}<ArrowRight size={18} /></button>
+  </form>
+}
+
+function TransferDetailsForm({ transaction, accounts, onSubmit }: { transaction: Transaction; accounts: Account[]; onSubmit: (date: string, destinationAccountId: string, memo: string) => Promise<void> }) {
+  const [date, setDate] = useState(transaction.date)
+  const [destinationAccountId, setDestinationAccountId] = useState(transaction.toAccountId ?? '')
+  const [memo, setMemo] = useState(transaction.note ?? '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const sourceAccount = accounts.find((account) => account.id === transaction.accountId)
+  const destinationAccounts = accounts.filter((account) => account.id !== transaction.accountId
+    && account.currency === transaction.currency
+    && (!account.closed || account.id === transaction.toAccountId))
+  const changed = date !== transaction.date
+    || destinationAccountId !== transaction.toAccountId
+    || memo.normalize('NFKC').trim() !== (transaction.note ?? '').normalize('NFKC').trim()
+
+  return <form className="form transfer-details-form" onSubmit={async (event) => {
+    event.preventDefault()
+    if (!date || !destinationAccountId || !changed) return
+    setSaving(true)
+    setError('')
+    try {
+      await onSubmit(date, destinationAccountId, memo)
+    } catch (cause) {
+      setError(getErrorMessage(cause, 'Could not update the transfer.'))
+    } finally {
+      setSaving(false)
+    }
+  }}>
+    <div className="category-edit-transaction transfer-edit-summary">
+      <span className="transaction-icon"><ArrowLeftRight size={18} /></span>
+      <div><strong>{sourceAccount?.name ?? 'Unknown account'} → {accounts.find((account) => account.id === transaction.toAccountId)?.name ?? 'Unknown account'}</strong><span>{formatMoney(transaction.amountMinor, transaction.currency)}</span></div>
+    </div>
+    <label><span>Date</span><input required type="date" max={todayInParis()} value={date} onChange={(event) => setDate(event.target.value)} /></label>
+    <div className="form-grid">
+      <label><span>From account</span><input value={sourceAccount?.name ?? 'Unknown account'} disabled /></label>
+      <label><span>To account</span><select required value={destinationAccountId} onChange={(event) => setDestinationAccountId(event.target.value)}>{destinationAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.closed ? ' (closed)' : ''}</option>)}</select></label>
+    </div>
+    <label><span>Memo <i>Optional</i></span><input value={memo} onChange={(event) => setMemo(event.target.value)} placeholder="Add a note about this transfer" /></label>
+    <p className="form-help">The amount, source account, and attached bank transaction IDs remain unchanged.</p>
+    {error && <p className="auth-error" role="alert">{error}</p>}
+    <button className="primary-button form-submit" type="submit" disabled={!changed || !destinationAccountId || saving}>{saving ? 'Saving…' : 'Save transfer'}<ArrowRight size={18} /></button>
   </form>
 }
 
