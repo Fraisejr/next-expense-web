@@ -6,7 +6,7 @@ import {
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, assignPayeeMapping, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteAllUnusedPayees, deleteCategoryGroup, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateCategoryName, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
+import { approveBankImportCandidate, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteAllUnusedPayees, deleteCategoryGroup, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateCategoryName, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Category, CategoryGroup, Payee, PayeeMapping, ReportGroup, Transaction } from './types'
 
@@ -216,9 +216,9 @@ function WorkspaceApp({ userName }: { userName: string }) {
     setLoading(true)
     setError(null)
     try {
-      setWorkspace(await loadWorkspace())
+      setWorkspace(await loadWorkspace(new URLSearchParams(window.location.search).get('month') ?? undefined))
     } catch (caught) {
-      setError(caught instanceof Error ? caught : new Error('Could not load your workspace.'))
+      setError(new Error(getErrorMessage(caught, 'Could not load your workspace.')))
     } finally {
       setLoading(false)
     }
@@ -253,6 +253,10 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   const [syncingAccountId, setSyncingAccountId] = useState('')
   const [reviewingCandidateId, setReviewingCandidateId] = useState('')
   const [syncNotice, setSyncNotice] = useState<{ accountId: string; message: string } | null>(null)
+  const [historyLoaded, setHistoryLoaded] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const historyRequest = useRef<Promise<void> | null>(null)
+  const monthCache = useRef(new Map<string, Transaction[]>())
 
   const accountMatch = matchPath('/accounts/:accountId', location.pathname)
   const categoryMatch = matchPath('/categories/:categoryId', location.pathname)
@@ -269,6 +273,24 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
               : 'budgets'
   const requestedMonth = fromMonthKey(new URLSearchParams(location.search).get('month'))
   const viewedMonth = requestedMonth ?? new Date()
+  const selectedMonthKey = toMonthKey(viewedMonth)
+
+  if (!monthCache.current.size) monthCache.current.set(selectedMonthKey, workspace.data.transactions)
+
+  const ensureFullHistory = useCallback(async () => {
+    if (historyLoaded) return
+    if (historyRequest.current) return historyRequest.current
+    setHistoryLoading(true)
+    const request = loadCachedAllTransactions(workspace.workspaceId, data.transactions)
+      .then((allTransactions) => {
+        setData((current) => ({ ...current, transactions: allTransactions }))
+        setHistoryLoaded(true)
+      })
+      .catch((cause) => setSyncError(getErrorMessage(cause, 'Could not load transaction history.')))
+      .finally(() => { setHistoryLoading(false); historyRequest.current = null })
+    historyRequest.current = request
+    return request
+  }, [data.transactions, historyLoaded, workspace.workspaceId])
 
   useEffect(() => {
     if (requestedMonth) return
@@ -280,6 +302,37 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'auto' })
   }, [location.pathname])
+
+  useEffect(() => {
+    if (historyLoaded) return
+    const cached = monthCache.current.get(selectedMonthKey)
+    if (cached) {
+      setData((current) => ({ ...current, transactions: cached }))
+    }
+    let cancelled = false
+    const fetchMonth = async (monthKey: string, activate: boolean) => {
+      if (monthCache.current.has(monthKey)) return
+      const monthStart = `${monthKey}-01`
+      const nextMonth = new Date(`${monthStart}T12:00:00Z`)
+      nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1)
+      const { transactions: monthTransactions } = await loadTransactionPage(workspace.workspaceId, { startDate: monthStart, endDate: nextMonth.toISOString().slice(0, 10) })
+      if (cancelled) return
+      monthCache.current.set(monthKey, monthTransactions)
+      if (activate) setData((current) => ({ ...current, transactions: monthTransactions }))
+    }
+    if (!cached) void fetchMonth(selectedMonthKey, true).catch((cause) => { if (!cancelled) setSyncError(getErrorMessage(cause, 'Could not load this month.')) })
+    const selectedDate = new Date(`${selectedMonthKey}-01T12:00:00Z`)
+    for (const offset of [-1, 1]) {
+      const adjacent = new Date(selectedDate)
+      adjacent.setUTCMonth(adjacent.getUTCMonth() + offset)
+      void fetchMonth(adjacent.toISOString().slice(0, 7), false).catch(() => undefined)
+    }
+    return () => { cancelled = true }
+  }, [historyLoaded, selectedMonthKey, workspace.workspaceId])
+
+  useEffect(() => {
+    if (page === 'payees' || page === 'reports' || Boolean(accountMatch || categoryMatch || payeeMatch || categoryTarget)) void ensureFullHistory()
+  }, [accountMatch, categoryMatch, categoryTarget, ensureFullHistory, page, payeeMatch])
 
   useEffect(() => {
     if (new URLSearchParams(location.search).get('bank_link') !== 'complete') return
@@ -301,7 +354,6 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       .sort((a, b) => b.date.localeCompare(a.date)),
     [data.transactions, viewedMonth],
   )
-  const selectedMonthKey = toMonthKey(viewedMonth)
   const categoryGroup = (categoryId?: string) => data.categories.find((category) => category.id === categoryId)?.reportGroup
   const income = transactions
     .filter((t) => t.currency === workspace.defaultCurrency)
@@ -366,6 +418,14 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
 
   function moveMonth(delta: number) {
     navigate(pathWithMonth(location.pathname, new Date(viewedMonth.getFullYear(), viewedMonth.getMonth() + delta, 1)))
+  }
+
+  async function reloadWorkspaceSnapshot() {
+    await clearTransactionCache(workspace.workspaceId)
+    const refreshed = await loadWorkspace(selectedMonthKey)
+    monthCache.current.set(selectedMonthKey, refreshed.data.transactions)
+    setHistoryLoaded(false)
+    return refreshed
   }
 
   function selectMonth(month: string) {
@@ -632,6 +692,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       const payeeWithDefaults = createdPayee && resolvedPayee ? { ...resolvedPayee, defaultCategoryId: transaction.categoryId, defaultAccountId: transaction.accountId } : resolvedPayee
       const nextTransaction = { ...transaction, id: uid(), payeeId: resolvedPayee?.id }
       await createTransaction(workspace.workspaceId, nextTransaction)
+      void clearTransactionCache(workspace.workspaceId)
     setData((current) => ({
       ...current,
       transactions: [...current.transactions, nextTransaction],
@@ -661,6 +722,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       const transaction = data.transactions.find((item) => item.id === transactionId)
       await updateTransactionDetails(workspace.workspaceId, transactionId, payee.id, categoryId, memo)
       await updateTransactionCategories(workspace.workspaceId, matchingTransactionIds, categoryId)
+      void clearTransactionCache(workspace.workspaceId)
       if (createdPayee && transaction) await updatePayeeDefaults(workspace.workspaceId, payee.id, categoryId, transaction.accountId)
       else if (rememberDefault) await updatePayeeDefaultCategory(workspace.workspaceId, payee.id, categoryId)
       if (rememberMapping && mappingSource.trim()) {
@@ -670,7 +732,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           if (existingMapping && existingMapping.payeeId !== payee.id) await updatePayeeMapping(workspace.workspaceId, existingMapping.id, mappingSource, payee.id, existingMapping.matchType)
           else if (!existingMapping) await createPayeeMapping(workspace.workspaceId, mappingSource, payee.id)
         } catch (mappingError) {
-          const refreshed = await loadWorkspace()
+          const refreshed = await reloadWorkspaceSnapshot()
           setData(refreshed.data)
           setCategoryTarget(null)
           setSyncError(`Transaction updated, but its bank memo could not be saved as a mapping: ${getErrorMessage(mappingError, 'Unknown error')}`)
@@ -697,6 +759,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await updateOpeningBalance(workspace.workspaceId, transactionId, date, amountMinor)
+      void clearTransactionCache(workspace.workspaceId)
       const difference = amountMinor - transaction.amountMinor
       setData((current) => ({
         ...current,
@@ -719,7 +782,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         amountMinor: 0, type: 'balance_adjustment', accountId: account.id, currency: account.currency,
         balanceCheckpointMinor: observedBalanceMinor, adjustmentReason: reason, posted: true, source: 'manual',
       })
-      const refreshed = await loadWorkspace()
+      const refreshed = await reloadWorkspaceSnapshot()
       setData(refreshed.data)
       setModal(null)
       setAccountTarget(null)
@@ -734,7 +797,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await assignPayeeMapping(workspace.workspaceId, sourceName, payeeId)
-      const refreshed = await loadWorkspace()
+      const refreshed = await reloadWorkspaceSnapshot()
       setData(refreshed.data)
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not map the transaction description.'))
@@ -749,7 +812,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       if (!payee) throw new Error('The payee could not be created.')
       await updatePayeeDefaults(workspace.workspaceId, payee.id, categoryId || null, accountId || null)
       await assignPayeeMapping(workspace.workspaceId, sourceName, payee.id)
-      const refreshed = await loadWorkspace()
+      const refreshed = await reloadWorkspaceSnapshot()
       setData(refreshed.data)
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not create and map the payee.'))
@@ -842,7 +905,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       const deletedIds = await deleteAllUnusedPayees(workspace.workspaceId, data.unusedPayeeIds)
-      const refreshed = await loadWorkspace()
+      const refreshed = await reloadWorkspaceSnapshot()
       setData(refreshed.data)
       return deletedIds.length
     } catch (error) {
@@ -855,7 +918,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await createPayeeMapping(workspace.workspaceId, sourceName, payeeId)
-      const refreshed = await loadWorkspace()
+      const refreshed = await reloadWorkspaceSnapshot()
       setData(refreshed.data)
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not add the mapping.'))
@@ -936,7 +999,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           try {
             await updatePayeeDefaults(workspace.workspaceId, resolvedPayeeId, categoryId, defaultAccountId)
           } catch (defaultsError) {
-            const refreshed = await loadWorkspace()
+            const refreshed = await reloadWorkspaceSnapshot()
             setData(refreshed.data)
             setSyncError(`Transaction approved, but the new payee defaults could not be saved: ${getErrorMessage(defaultsError, 'Unknown error')}`)
             return
@@ -949,7 +1012,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
             if (existingMapping && existingMapping.payeeId !== resolvedPayeeId) await updatePayeeMapping(workspace.workspaceId, existingMapping.id, bankDescription, resolvedPayeeId, existingMapping.matchType)
             else if (!existingMapping) await createPayeeMapping(workspace.workspaceId, bankDescription, resolvedPayeeId)
           } catch (mappingError) {
-            const refreshed = await loadWorkspace()
+            const refreshed = await reloadWorkspaceSnapshot()
             setData(refreshed.data)
             setSyncError(`Transaction approved, but its bank description could not be saved as a mapping: ${getErrorMessage(mappingError, 'Unknown error')}`)
             return
@@ -957,7 +1020,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         }
       }
       else await rejectBankImportCandidate(workspace.workspaceId, candidateId)
-      const refreshed = await loadWorkspace()
+      const refreshed = await reloadWorkspaceSnapshot()
       setData(refreshed.data)
     } catch (error) {
       setSyncError(getErrorMessage(error, `Could not ${decision} the bank transaction.`))
@@ -983,7 +1046,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         }),
       })
       const result = await saveBankSync(workspace.workspaceId, account, payload)
-      const refreshed = await loadWorkspace()
+      const refreshed = await reloadWorkspaceSnapshot()
       setData(refreshed.data)
       const remaining = [
         result.rateLimits.transactions?.remaining === undefined ? null : `${result.rateLimits.transactions.remaining} transaction requests left`,
@@ -1057,7 +1120,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         {syncError && <div className="sync-error" role="alert">{syncError}</div>}
 
         {page === 'transactions' && (
-          <TransactionsPage transactions={transactions} allTransactions={data.transactions} accounts={data.accounts} categories={data.categories} search={search} setSearch={setSearch} onEditCategory={setCategoryTarget} />
+          <TransactionsPage transactions={transactions} allTransactions={data.transactions} accounts={data.accounts} categories={data.categories} search={search} setSearch={setSearch} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={ensureFullHistory} onEditCategory={setCategoryTarget} />
         )}
         {page === 'payees' && !selectedPayee && (
           <PayeesPage payees={data.payees} unusedPayeeIds={data.unusedPayeeIds} mappings={data.payeeMappings} transactions={data.transactions} categories={data.categories} accounts={data.accounts} onSelectPayee={(id) => goTo(`/payees/${id}`)} onMapPayee={mapUnmatchedPayee} onCreatePayee={createPayeeFromUnmatched} onChangeDefaultCategory={changePayeeDefaultCategoryOnly} onDeleteUnusedPayee={removeUnusedPayee} onDeleteAllUnusedPayees={removeAllUnusedPayees} />
@@ -1384,7 +1447,7 @@ function TransactionRow({ transaction, categories, accounts, compact = false, fo
   )
 }
 
-function TransactionsPage({ transactions, allTransactions, accounts, categories, search, setSearch, onEditCategory }: { transactions: Transaction[]; allTransactions: Transaction[]; accounts: Account[]; categories: Category[]; search: string; setSearch: (value: string) => void; onEditCategory: (transaction: Transaction) => void }) {
+function TransactionsPage({ transactions, allTransactions, accounts, categories, search, setSearch, historyLoaded, historyLoading, onRequestHistory, onEditCategory }: { transactions: Transaction[]; allTransactions: Transaction[]; accounts: Account[]; categories: Category[]; search: string; setSearch: (value: string) => void; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onEditCategory: (transaction: Transaction) => void }) {
   const [view, setView] = useState<'month' | 'all' | 'uncategorized'>('month')
   const [transactionPage, setTransactionPage] = useState(1)
   const sortedAllTransactions = useMemo(() => [...allTransactions].sort((left, right) => right.date.localeCompare(left.date)), [allTransactions])
@@ -1408,7 +1471,7 @@ function TransactionsPage({ transactions, allTransactions, accounts, categories,
   return (
     <div className="page-content narrow-page">
       <div className="panel full-panel">
-        <div className="panel-heading transaction-heading"><div><span className="eyebrow">Ledger</span><h2>{heading}</h2></div><div className="transaction-heading-actions"><div className="segmented three-way transaction-view-toggle"><button type="button" className={view === 'month' ? 'active transfer' : ''} onClick={() => setView('month')}>This month</button><button type="button" className={view === 'all' ? 'active transfer' : ''} onClick={() => setView('all')}>All dates</button><button type="button" className={view === 'uncategorized' ? 'active' : ''} onClick={() => setView('uncategorized')}>Needs category <b>{uncategorized.length}</b></button></div><label className="search-box"><Search size={17} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search transactions" /></label></div></div>
+        <div className="panel-heading transaction-heading"><div><span className="eyebrow">Ledger</span><h2>{heading}</h2></div><div className="transaction-heading-actions"><div className="segmented three-way transaction-view-toggle"><button type="button" className={view === 'month' ? 'active transfer' : ''} onClick={() => setView('month')}>This month</button><button type="button" className={view === 'all' ? 'active transfer' : ''} onClick={() => { setView('all'); void onRequestHistory() }}>{historyLoading && !historyLoaded ? 'Loading…' : 'All dates'}</button><button type="button" className={view === 'uncategorized' ? 'active' : ''} onClick={() => { setView('uncategorized'); void onRequestHistory() }}>Needs category <b>{historyLoaded ? uncategorized.length : '…'}</b></button></div><label className="search-box"><Search size={17} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search transactions" /></label></div></div>
         <div className="table-header"><span>Description</span><span>Account</span><span>Amount</span></div>
         <div className="transaction-list-full">
           {displayedTransactions.map((transaction) => (

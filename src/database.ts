@@ -81,42 +81,131 @@ async function allRows(table: string, columns = '*', orderColumn = 'id'): Promis
   }
 }
 
-function calculateAccountBalances(transactions: Transaction[]) {
-  const events = new Map<string, { transaction: Transaction; amount: number }[]>()
-  const add = (accountId: string | undefined, transaction: Transaction, amount: number) => {
-    if (!accountId) return
-    events.set(accountId, [...(events.get(accountId) ?? []), { transaction, amount }])
-  }
+function mapTransactionRows(transactionRows: Row[]): Transaction[] {
+  return transactionRows.map((row) => ({
+    id: String(row.id),
+    date: String(row.transaction_date),
+    payee: String(row.payee ?? row.payee_name ?? row.memo ?? 'Unknown payee'),
+    payeeId: (row.payee_id as string | null) ?? undefined,
+    debtorId: (row.debtor_id as string | null) ?? undefined,
+    note: (row.memo as string | null) ?? undefined,
+    amountMinor: number(row.amount_minor),
+    destinationAmountMinor: row.destination_amount_minor ? number(row.destination_amount_minor) : undefined,
+    type: row.transaction_type as Transaction['type'],
+    accountId: String(row.account_id),
+    categoryId: (row.category_id as string | null) ?? undefined,
+    toAccountId: (row.destination_account_id as string | null) ?? undefined,
+    currency: String(row.currency),
+    payeeRaw: (row.payee_name as string | null) ?? undefined,
+    source: row.source as Transaction['source'],
+    providerTransactionId: (row.provider_transaction_id as string | null) ?? undefined,
+    posted: Boolean(row.posted),
+    balanceCheckpointMinor: row.balance_checkpoint_minor === null || row.balance_checkpoint_minor === undefined ? undefined : number(row.balance_checkpoint_minor),
+    adjustmentReason: (row.adjustment_reason as BalanceAdjustmentReason | null) ?? undefined,
+  }))
+}
 
-  for (const transaction of transactions) {
-    if (transaction.type === 'income') add(transaction.accountId, transaction, transaction.amountMinor)
-    if (transaction.type === 'expense') add(transaction.accountId, transaction, -transaction.amountMinor)
-    if (transaction.type === 'opening_balance') add(transaction.accountId, transaction, transaction.amountMinor)
-    if (transaction.type === 'balance_adjustment') add(transaction.accountId, transaction, 0)
-    if (transaction.type === 'transfer') {
-      add(transaction.accountId, transaction, -transaction.amountMinor)
-      add(transaction.toAccountId, transaction, transaction.destinationAmountMinor ?? transaction.amountMinor)
-    }
-  }
+export type TransactionQuery = {
+  limit?: number
+  offset?: number
+  search?: string
+  accountId?: string
+  categoryId?: string
+  payeeId?: string
+  uncategorized?: boolean
+  startDate?: string
+  endDate?: string
+}
 
-  const balances = new Map<string, number>()
-  for (const [accountId, accountEvents] of events) {
-    let balance = 0
-    accountEvents.sort((left, right) => left.transaction.date.localeCompare(right.transaction.date)
-      || Number(left.transaction.type === 'balance_adjustment') - Number(right.transaction.type === 'balance_adjustment')
-      || left.transaction.id.localeCompare(right.transaction.id))
-    for (const event of accountEvents) {
-      if (event.transaction.type === 'balance_adjustment') {
-        const checkpoint = event.transaction.balanceCheckpointMinor ?? balance
-        event.transaction.amountMinor = checkpoint - balance
-        balance = checkpoint
-      } else {
-        balance += event.amount
-      }
+export type TransactionPage = { transactions: Transaction[]; total: number }
+
+export async function loadTransactionPage(workspaceId: string, query: TransactionQuery = {}): Promise<TransactionPage> {
+  const { data, error } = await neon.rpc('list_workspace_transactions', {
+    p_workspace_id: workspaceId,
+    p_limit: query.limit ?? 1000,
+    p_offset: query.offset ?? 0,
+    p_search: query.search?.trim() || null,
+    p_account_id: query.accountId ?? null,
+    p_category_id: query.categoryId ?? null,
+    p_payee_id: query.payeeId ?? null,
+    p_uncategorized: query.uncategorized ?? false,
+    p_start_date: query.startDate ?? null,
+    p_end_date: query.endDate ?? null,
+  })
+  if (error) throw error
+  const rows = (data ?? []) as unknown as Row[]
+  return { transactions: mapTransactionRows(rows), total: rows.length ? number(rows[0].total_count) : 0 }
+}
+
+export async function loadAllTransactions(workspaceId: string): Promise<Transaction[]> {
+  const firstPage = await loadTransactionPage(workspaceId, { limit: 1000 })
+  if (firstPage.transactions.length >= firstPage.total) return firstPage.transactions
+  const remainingOffsets = Array.from({ length: Math.ceil(firstPage.total / 1000) - 1 }, (_, index) => (index + 1) * 1000)
+  const remainingPages = await Promise.all(remainingOffsets.map((offset) => loadTransactionPage(workspaceId, { limit: 1000, offset })))
+  return [firstPage, ...remainingPages].flatMap((page) => page.transactions)
+}
+
+const transactionCacheDatabase = 'next-expense-cache'
+const transactionCacheStore = 'transaction-history'
+const transactionCacheMaxAgeMs = 60 * 60 * 1000
+
+function openTransactionCache(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === 'undefined') return Promise.resolve(null)
+  return new Promise((resolve) => {
+    const request = indexedDB.open(transactionCacheDatabase, 1)
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(transactionCacheStore)) request.result.createObjectStore(transactionCacheStore)
     }
-    balances.set(accountId, balance)
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => resolve(null)
+  })
+}
+
+async function readTransactionCache(workspaceId: string): Promise<Transaction[] | null> {
+  const database = await openTransactionCache()
+  if (!database) return null
+  return new Promise((resolve) => {
+    const request = database.transaction(transactionCacheStore, 'readonly').objectStore(transactionCacheStore).get(workspaceId)
+    request.onsuccess = () => {
+      const cached = request.result as { savedAt?: number; transactions?: Transaction[] } | undefined
+      resolve(cached?.savedAt && Date.now() - cached.savedAt < transactionCacheMaxAgeMs && Array.isArray(cached.transactions) ? cached.transactions : null)
+      database.close()
+    }
+    request.onerror = () => { resolve(null); database.close() }
+  })
+}
+
+async function writeTransactionCache(workspaceId: string, transactions: Transaction[]) {
+  const database = await openTransactionCache()
+  if (!database) return
+  await new Promise<void>((resolve) => {
+    const request = database.transaction(transactionCacheStore, 'readwrite').objectStore(transactionCacheStore).put({ savedAt: Date.now(), transactions }, workspaceId)
+    request.onsuccess = () => resolve()
+    request.onerror = () => resolve()
+  })
+  database.close()
+}
+
+export async function loadCachedAllTransactions(workspaceId: string, currentTransactions: Transaction[] = []) {
+  const cached = await readTransactionCache(workspaceId)
+  if (cached) {
+    const currentMonths = new Set(currentTransactions.map((transaction) => transaction.date.slice(0, 7)))
+    return [...cached.filter((transaction) => !currentMonths.has(transaction.date.slice(0, 7))), ...currentTransactions]
   }
-  return balances
+  const transactions = await loadAllTransactions(workspaceId)
+  void writeTransactionCache(workspaceId, transactions)
+  return transactions
+}
+
+export async function clearTransactionCache(workspaceId: string) {
+  const database = await openTransactionCache()
+  if (!database) return
+  await new Promise<void>((resolve) => {
+    const request = database.transaction(transactionCacheStore, 'readwrite').objectStore(transactionCacheStore).delete(workspaceId)
+    request.onsuccess = () => resolve()
+    request.onerror = () => resolve()
+  })
+  database.close()
 }
 
 export type LoadedWorkspace = {
@@ -184,11 +273,15 @@ export async function restoreWorkspaceBackup(workspaceId: string, backup: Worksp
   return data as { restoredAt?: string; counts?: Record<string, number> } | null
 }
 
-export async function loadWorkspace(): Promise<LoadedWorkspace> {
-  return loadWorkspaceWithRetries(3)
+export async function loadWorkspace(month?: string): Promise<LoadedWorkspace> {
+  const now = new Date()
+  const selectedMonth = month && /^\d{4}-\d{2}$/.test(month)
+    ? month
+    : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  return loadWorkspaceWithRetries(3, selectedMonth)
 }
 
-async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<LoadedWorkspace> {
+async function loadWorkspaceWithRetries(retriesRemaining: number, month: string): Promise<LoadedWorkspace> {
   const { data: memberships, error: membershipError } = await neon
     .from('workspace_members')
     .select('workspace_id')
@@ -197,54 +290,35 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
   const workspaceId = (memberships?.[0] as Row | undefined)?.workspace_id as string | undefined
   if (!workspaceId) throw new WorkspaceNotLinkedError()
 
-  const [workspaceResult, accountRows, categoryGroupRows, categoryRows, periodRows, budgetRows, payeeRows, mappingRows, transactionRows, connectionRows, candidateRows, unusedPayeeResult] = await Promise.all([
+  const monthStart = /^\d{4}-\d{2}$/.test(month) ? `${month}-01` : `${new Date().toISOString().slice(0, 7)}-01`
+  const nextMonthDate = new Date(`${monthStart}T12:00:00Z`)
+  nextMonthDate.setUTCMonth(nextMonthDate.getUTCMonth() + 1)
+  const monthEnd = nextMonthDate.toISOString().slice(0, 10)
+  const [workspaceResult, accountRows, categoryGroupRows, categoryRows, periodRows, budgetRows, payeeRows, mappingRows, transactionPage, balanceResult, connectionRows, candidateRows, unusedPayeeResult] = await Promise.all([
     neon.from('workspaces').select('name,default_currency,estimated_company_tax_rate_bps').eq('id', workspaceId).limit(1),
-    allRows('accounts', '*', 'sort_order'),
-    allRows('category_groups', '*', 'sort_order'),
-    allRows('categories', '*', 'sort_order'),
-    allRows('periods', '*', 'period_start_date'),
-    allRows('budgets'),
-    allRows('payees', '*', 'sort_order'),
-    allRows('payee_mappings'),
-    allRows('transactions'),
-    allRows('bank_connections'),
-    allRows('bank_import_candidates'),
+    allRows('accounts', 'id,name,display_type,scope,balance_sheet_group,currency,color,sort_order,closed,investment,pension,auto_sync,bank_import_mode,provider_account_id,institution_id,country', 'sort_order'),
+    allRows('category_groups', 'id,name,sort_order,show_categories', 'sort_order'),
+    allRows('categories', 'id,name,sort_order,color,icon,report_group,category_group_id,hidden', 'sort_order'),
+    allRows('periods', 'id,year,month,period_start_date', 'period_start_date'),
+    allRows('budgets', 'id,period_id,category_id,scope,amount_minor'),
+    allRows('payees', 'id,name,sort_order,default_category_id,default_account_id', 'sort_order'),
+    allRows('payee_mappings', 'id,source_name,payee_id,match_type'),
+    loadTransactionPage(workspaceId, { startDate: monthStart, endDate: monthEnd }),
+    neon.rpc('workspace_account_balances', { p_workspace_id: workspaceId }),
+    allRows('bank_connections', 'id,account_id,status,last_synced_at,metadata'),
+    neon.from('bank_import_candidates').select('id,account_id,transaction_date,amount_minor,currency,transaction_type,payee_name,payee_id,category_id,memo,posted,status').eq('workspace_id', workspaceId).eq('status', 'pending').order('transaction_date', { ascending: false }),
     neon.rpc('list_unused_payee_ids', { p_workspace_id: workspaceId }),
   ])
   if (workspaceResult.error) throw workspaceResult.error
+  if (balanceResult.error) throw balanceResult.error
+  if (candidateRows.error) throw candidateRows.error
 
-  const payeeNames = new Map(payeeRows.map((row) => [row.id as string, row.name as string]))
-  const referencedPayeeIds = new Set(transactionRows.flatMap((row) => [row.payee_id, row.debtor_id].filter((id): id is string => typeof id === 'string')))
   const unusedPayeeIds = unusedPayeeResult.error
-    ? payeeRows.filter((row) => !referencedPayeeIds.has(String(row.id))).map((row) => String(row.id))
+    ? []
     : ((unusedPayeeResult.data ?? []) as unknown as Row[]).map((row) => String(row.payee_id))
   const periods = new Map(periodRows.map((row) => [row.id as string, `${row.year}-${String(row.month).padStart(2, '0')}`]))
-  const transactions: Transaction[] = transactionRows.map((row) => ({
-    id: row.id as string,
-    date: row.transaction_date as string,
-    payee: (row.transaction_type === 'opening_balance'
-      ? 'Opening balance'
-      : row.transaction_type === 'balance_adjustment'
-        ? 'Balance adjustment'
-        : payeeNames.get(row.payee_id as string) || row.payee_name || row.memo || 'Unknown payee') as string,
-    payeeId: (row.payee_id as string | null) ?? undefined,
-    debtorId: (row.debtor_id as string | null) ?? undefined,
-    note: (row.memo as string | null) ?? undefined,
-    amountMinor: number(row.amount_minor),
-    destinationAmountMinor: row.destination_amount_minor ? number(row.destination_amount_minor) : undefined,
-    type: row.transaction_type as Transaction['type'],
-    accountId: row.account_id as string,
-    categoryId: (row.category_id as string | null) ?? undefined,
-    toAccountId: (row.destination_account_id as string | null) ?? undefined,
-    currency: row.currency as string,
-    payeeRaw: (row.payee_name as string | null) ?? undefined,
-    source: row.source as Transaction['source'],
-    providerTransactionId: (row.provider_transaction_id as string | null) ?? undefined,
-    posted: Boolean(row.posted),
-    balanceCheckpointMinor: row.balance_checkpoint_minor === null || row.balance_checkpoint_minor === undefined ? undefined : number(row.balance_checkpoint_minor),
-    adjustmentReason: (row.adjustment_reason as BalanceAdjustmentReason | null) ?? undefined,
-  }))
-  const accountBalances = calculateAccountBalances(transactions)
+  const transactions = transactionPage.transactions
+  const accountBalances = new Map(((balanceResult.data ?? []) as unknown as Row[]).map((row) => [String(row.account_id), number(row.balance_minor)]))
   const connections = new Map(connectionRows
     .filter((row) => row.account_id && row.status === 'active')
     .map((row) => [row.account_id as string, row]))
@@ -325,7 +399,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
       amountMinor: number(row.amount_minor),
     }] : []
   })
-  const bankImportCandidates: BankImportCandidate[] = candidateRows
+  const bankImportCandidates: BankImportCandidate[] = ((candidateRows.data ?? []) as unknown as Row[])
     .filter((row) => row.status === 'pending')
     .map((row) => ({
       id: String(row.id),
@@ -349,7 +423,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number): Promise<Loade
     if (retriesRemaining > 0) {
       const attempt = 4 - retriesRemaining
       await new Promise((resolve) => setTimeout(resolve, 200 * (2 ** (attempt - 1))))
-      return loadWorkspaceWithRetries(retriesRemaining - 1)
+      return loadWorkspaceWithRetries(retriesRemaining - 1, month)
     }
     throw new Error('The linked workspace could not be read.')
   }
