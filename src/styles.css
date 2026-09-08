@@ -770,7 +770,55 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .budget-section + .budget-section { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line); }
 .budget-section-heading h3 { font-family: 'Newsreader', serif; font-size: 18px; }
 .budget-section-heading span { display: block; color: var(--muted); font-size: 10.5px; margin-top: 5px; }
-.budget-page-actions { display: flex; align-items: center; gap: 12px; }
+.budget-page-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
+.budget-overview-totals { display: grid; gap: 7px; margin-bottom: 25px; }
+.budget-totals-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid #dedfd8; border-radius: 8px; background: #dedfd8; }
+.budget-totals-summary > div { min-width: 0; padding: 14px; background: #f3f2ed; }
+.budget-totals-summary span, .budget-totals-summary strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.budget-totals-summary span { color: var(--muted); font-size: 9px; }
+.budget-totals-summary strong { margin-top: 6px; font-family: 'DM Mono', monospace; font-size: 14px; font-weight: 500; letter-spacing: -.03em; }
+.budget-totals-summary .budgeted-savings { background: #edf4ef; }
+.budget-totals-summary .budgeted-savings span { color: #557268; font-weight: 700; }
+.budget-totals-summary.actual > div { background: #fafaf7; }
+.budget-totals-summary.actual .budgeted-savings { background: #f1f5f4; }
+.monthly-plan-wizard { display: grid; gap: 20px; padding-top: 18px; }
+.monthly-plan-steps { display: grid; grid-template-columns: auto 1fr auto 1fr auto; align-items: center; gap: 8px; color: #a1a49d; font-size: 8px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.monthly-plan-steps span.active { color: #426d63; }
+.monthly-plan-steps i { height: 1px; background: #dedfd9; }
+.monthly-plan-start { display: grid; gap: 16px; }
+.monthly-plan-start > div:first-child h3, .monthly-plan-complete h3 { font-family: 'Newsreader', serif; font-size: 20px; }
+.monthly-plan-start > div:first-child p, .monthly-plan-complete p, .monthly-plan-review > p { margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.monthly-plan-source-list { display: grid; gap: 8px; }
+.monthly-plan-source-list button { display: grid; grid-template-columns: 24px minmax(0, 1fr) 18px; align-items: center; gap: 9px; padding: 12px; border: 1px solid #dcddd7; border-radius: 9px; color: #697169; background: #faf9f6; text-align: left; cursor: pointer; }
+.monthly-plan-source-list button:hover { border-color: #b8c8c1; }
+.monthly-plan-source-list button.selected { color: #315f54; border-color: #7da397; background: #f0f6f2; box-shadow: 0 0 0 2px rgba(81, 130, 119, .08); }
+.monthly-plan-source-list button > span strong, .monthly-plan-source-list button > span small { display: block; }
+.monthly-plan-source-list button > span strong { color: var(--ink); font-size: 10.5px; }
+.monthly-plan-source-list button > span small { margin-top: 3px; color: var(--muted); font-size: 8.5px; line-height: 1.4; }
+.monthly-plan-source-list button > svg:last-child { opacity: 0; }
+.monthly-plan-source-list button.selected > svg:last-child { opacity: 1; }
+.monthly-plan-lookback { display: grid; grid-template-columns: 1fr 130px; align-items: center; gap: 12px; color: var(--muted); font-size: 9.5px; font-weight: 700; }
+.monthly-plan-lookback select { width: 100%; height: 37px; padding: 0 9px; border: 1px solid #d9dbd4; border-radius: 7px; background: #fff; color: var(--ink); font-size: 10.5px; }
+.monthly-plan-history { display: flex; align-items: center; gap: 7px; padding: 9px 10px; border-radius: 7px; color: #7a684f; background: #f7f1e6; font-size: 9px; line-height: 1.4; }
+.monthly-plan-category-groups { max-height: min(460px, 50vh); overflow-y: auto; padding-right: 3px; }
+.monthly-plan-category-groups section + section { margin-top: 18px; }
+.monthly-plan-category-groups section > h3 { padding: 0 3px 7px; border-bottom: 1px solid #e4e5df; font-family: 'Newsreader', serif; font-size: 17px; }
+.monthly-plan-category { display: grid; grid-template-columns: 16px minmax(120px, 1fr) 112px; align-items: center; gap: 9px; padding: 9px 3px; border-bottom: 1px solid #ecece7; }
+.monthly-plan-category > input { width: 14px; height: 14px; accent-color: var(--green); }
+.monthly-plan-category > label { display: flex; align-items: center; height: 35px; padding: 0 8px; border: 1px solid #d9dbd4; border-radius: 7px; background: #fff; }
+.monthly-plan-category > label span { color: var(--muted); font-size: 8px; font-weight: 700; }
+.monthly-plan-category > label input { min-width: 0; width: 100%; height: 31px; padding-left: 5px; border: 0; outline: 0; background: transparent; font-family: 'DM Mono', monospace; font-size: 10px; text-align: right; }
+.monthly-plan-category > label:has(input:disabled) { opacity: .45; }
+.monthly-plan-category > small { grid-column: 2 / -1; margin-top: -6px; color: var(--muted); font-size: 8px; }
+.monthly-plan-actions { display: flex; justify-content: space-between; gap: 10px; margin-top: 18px; }
+.monthly-plan-actions button { min-width: 120px; justify-content: center; }
+.monthly-plan-totals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; overflow: hidden; margin-top: 15px; border: 1px solid #dedfd8; border-radius: 8px; background: #dedfd8; }
+.monthly-plan-totals > div { padding: 13px 10px; background: #f4f3ee; }
+.monthly-plan-totals span, .monthly-plan-totals strong { display: block; }
+.monthly-plan-totals span { color: var(--muted); font-size: 8px; }
+.monthly-plan-totals strong { margin-top: 6px; font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 500; }
+.monthly-plan-complete { display: grid; justify-items: center; gap: 7px; padding: 34px 10px 18px; text-align: center; }
+.monthly-plan-complete > svg { margin-bottom: 6px; color: #4f806f; }
 .report-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 .report-scope-label { color: #53675f; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .report-toolbar .segmented { width: 190px; }
@@ -1163,6 +1211,11 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .fx-rate-add { grid-template-columns: 1fr; padding: 12px; }
   .fx-rate-add label:nth-child(3), .fx-rate-add > .primary-button { grid-column: auto; }
   .panel-heading { align-items: flex-start; }
+  .budget-page-actions { width: 100%; justify-content: flex-start; }
+  .budget-totals-summary { grid-template-columns: 1fr 1fr; }
+  .monthly-plan-category { grid-template-columns: 16px minmax(0, 1fr) 100px; }
+  .monthly-plan-totals { grid-template-columns: 1fr; }
+  .monthly-plan-actions button { min-width: 0; flex: 1; }
   .budget-summary { grid-template-columns: 1fr 1fr 1fr; }
   .summary-rule { display: none; }
   .form-grid { grid-template-columns: 1fr; }

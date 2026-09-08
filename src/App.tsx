@@ -9,11 +9,11 @@ import { matchPath, useLocation, useNavigate } from 'react-router-dom'
 import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteAllUnusedPayees, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDetails, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
 import { convertMinor } from './currency'
-import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, Transaction, YearlyFinancialPlan } from './types'
+import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, Transaction, YearlyFinancialPlan } from './types'
 
 type Page = 'overview' | 'transactions' | 'payees' | 'reports' | 'accounts' | 'settings'
 type ReportView = 'profit-loss' | 'net-worth'
-type Modal = 'transaction' | 'account' | 'edit-account' | 'balance-adjustment' | 'category' | 'edit-category' | 'category-groups' | 'bank' | null
+type Modal = 'transaction' | 'account' | 'edit-account' | 'balance-adjustment' | 'category' | 'edit-category' | 'category-groups' | 'monthly-plan' | 'bank' | null
 const BANK_LINK_STORAGE_KEY = 'next-expense-gocardless-link'
 const moneyFormatters = new Map<string, Intl.NumberFormat>()
 const monthName = new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric' })
@@ -589,6 +589,28 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       }))
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not update the budget.')
+    }
+  }
+
+  async function addMissingMonthlyBudgets(entries: { categoryId: string; amountMinor: number }[]) {
+    const existingCategoryIds = new Set(data.budgets.filter((budget) => budget.month === selectedMonthKey).map((budget) => budget.categoryId))
+    const budgets: Budget[] = entries
+      .filter((entry) => !existingCategoryIds.has(entry.categoryId))
+      .map((entry) => ({ id: uid(), month: selectedMonthKey, categoryId: entry.categoryId, scope: 'Personal', amountMinor: entry.amountMinor }))
+    const saved: Budget[] = []
+    try {
+      setSyncError('')
+      for (const budget of budgets) {
+        await saveBudget(workspace.workspaceId, budget)
+        saved.push(budget)
+      }
+      setData((current) => ({ ...current, budgets: [...current.budgets, ...saved] }))
+      setModal(null)
+    } catch (error) {
+      if (saved.length) setData((current) => ({ ...current, budgets: [...current.budgets, ...saved] }))
+      const message = getErrorMessage(error, 'Could not save the monthly plan.')
+      setSyncError(message)
+      throw new Error(message, { cause: error })
     }
   }
 
@@ -1261,7 +1283,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <div className="page-content narrow-page overview-page">
             <YearlySpendingPlan data={data} defaultCurrency={workspace.defaultCurrency} historyLoading={historyLoading} onSavePlan={changeYearlyFinancialPlan} />
             <OverviewPage accounts={activeAccounts} defaultCurrency={workspace.defaultCurrency} totalBalance={totalBalance} convertBalance={convertCurrentBalance} personal={{ income: personalIncome, expenses: personalExpenses, tax: personalTaxesPaid, net: personalIncome - personalExpenses - personalTaxesPaid }} company={{ income: companyRevenue, expenses: companyExpenses, tax: companyTaxesPaid + estimatedCompanyTax, net: companyRevenue - companyExpenses - companyTaxesPaid - estimatedCompanyTax }} month={viewedMonth} onOpenNetWorth={() => goTo('/reports/net-worth')} onOpenProfitAndLoss={() => goTo('/reports')} />
-            <BudgetsPage categories={data.categories} categoryGroups={data.categoryGroups} categorySpending={categorySpending} budgetForCategory={budgetForCategory} showHiddenActivityAlert={selectedMonthKey === toMonthKey(new Date())} onAdd={() => setModal('category')} onManageGroups={() => setModal('category-groups')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onUnhideCategory={(id) => setCategoryHidden(id, false)} />
+            <BudgetsPage categories={data.categories} categoryGroups={data.categoryGroups} defaultCurrency={workspace.defaultCurrency} categorySpending={categorySpending} budgetForCategory={budgetForCategory} showHiddenActivityAlert={selectedMonthKey === toMonthKey(new Date())} onPlanMonth={() => { setModal('monthly-plan'); void ensureFullHistory() }} onAdd={() => setModal('category')} onManageGroups={() => setModal('category-groups')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onUnhideCategory={(id) => setCategoryHidden(id, false)} />
           </div>
         )}
         {page === 'reports' && (
@@ -1285,7 +1307,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       </main>
 
       {modal && (
-        <ModalShell title={modal === 'transaction' ? 'Add transaction' : modal === 'account' ? 'Create account' : modal === 'edit-account' ? 'Edit account' : modal === 'balance-adjustment' ? 'Adjust balance' : modal === 'category' ? 'Create category' : modal === 'edit-category' ? 'Edit category' : modal === 'category-groups' ? 'Manage category groups' : `Connect ${bankTarget?.name ?? 'account'}`} onClose={() => { setModal(null); setAccountTarget(null) }}>
+        <ModalShell title={modal === 'transaction' ? 'Add transaction' : modal === 'account' ? 'Create account' : modal === 'edit-account' ? 'Edit account' : modal === 'balance-adjustment' ? 'Adjust balance' : modal === 'category' ? 'Create category' : modal === 'edit-category' ? 'Edit category' : modal === 'category-groups' ? 'Manage category groups' : modal === 'monthly-plan' ? `Plan ${monthName.format(viewedMonth)}` : `Connect ${bankTarget?.name ?? 'account'}`} onClose={() => { setModal(null); setAccountTarget(null) }}>
           {modal === 'transaction' && <TransactionForm accounts={activeAccounts} categories={data.categories.filter((category) => !category.hidden)} payees={data.payees} onSubmit={addTransaction} />}
           {modal === 'account' && <AccountForm onSubmit={addAccount} />}
           {modal === 'edit-account' && accountTarget && <AccountForm account={accountTarget} onSubmit={(changes) => editAccount({ ...accountTarget, ...changes })} />}
@@ -1293,6 +1315,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           {modal === 'category' && <CategoryForm categoryGroups={data.categoryGroups} onSubmit={addCategory} />}
           {modal === 'edit-category' && selectedCategory && <CategoryDetailsForm category={selectedCategory} categories={data.categories} onSubmit={editCategory} />}
           {modal === 'category-groups' && <CategoryGroupsForm groups={data.categoryGroups} categories={data.categories} onAdd={addCategoryGroup} onRename={renameCategoryGroup} onReorder={reorderCategoryGroups} onReorderCategories={reorderCategories} onRemove={removeCategoryGroup} />}
+          {modal === 'monthly-plan' && <MonthlyPlanWizard monthKey={selectedMonthKey} categories={data.categories} categoryGroups={data.categoryGroups} budgets={data.budgets} transactions={data.transactions} fxRates={data.fxRates} defaultCurrency={workspace.defaultCurrency} historyLoaded={historyLoaded} historyLoading={historyLoading} onSave={addMissingMonthlyBudgets} />}
           {modal === 'bank' && bankTarget && <BankLinkForm account={bankTarget} workspaceId={workspace.workspaceId} onComplete={() => window.location.reload()} />}
         </ModalShell>
       )}
@@ -2356,31 +2379,160 @@ function OverviewPage({ accounts, defaultCurrency, totalBalance, convertBalance,
   </section>
 }
 
-function BudgetsPage({ categories, categoryGroups, categorySpending, budgetForCategory, showHiddenActivityAlert, onAdd, onManageGroups, onSelectCategory, onUnhideCategory }: {
-  categories: Category[]; categoryGroups: CategoryGroup[]; categorySpending: (id: string) => number; budgetForCategory: (id: string) => number
+type MonthlyPlanSource = 'carry-forward' | 'rolling-average' | 'zero'
+type MonthlyPlanDraft = { value: string; basis: string }
+
+function completedMonthKeysBefore(monthKey: string, count: number) {
+  const target = fromMonthKey(monthKey) ?? new Date()
+  const current = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+  const end = target < current ? target : current
+  return Array.from({ length: count }, (_, index) => toMonthKey(new Date(end.getFullYear(), end.getMonth() - index - 1, 1)))
+}
+
+function MonthlyPlanWizard({ monthKey, categories, categoryGroups, budgets, transactions, fxRates, defaultCurrency, historyLoaded, historyLoading, onSave }: {
+  monthKey: string
+  categories: Category[]
+  categoryGroups: CategoryGroup[]
+  budgets: Budget[]
+  transactions: Transaction[]
+  fxRates: FxRate[]
+  defaultCurrency: string
+  historyLoaded: boolean
+  historyLoading: boolean
+  onSave: (entries: { categoryId: string; amountMinor: number }[]) => Promise<void>
+}) {
+  const [step, setStep] = useState<1 | 2 | 3>(1)
+  const [source, setSource] = useState<MonthlyPlanSource>('carry-forward')
+  const [lookback, setLookback] = useState(6)
+  const [drafts, setDrafts] = useState<Record<string, MonthlyPlanDraft>>({})
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const visibleCategories = categories.filter((category) => !category.hidden)
+  const existingBudgets = budgets.filter((budget) => budget.month === monthKey)
+  const existingCategoryIds = new Set(existingBudgets.map((budget) => budget.categoryId))
+  const missingCategories = visibleCategories.filter((category) => !existingCategoryIds.has(category.id))
+  const previousMonthKey = toMonthKey(new Date(Number(monthKey.slice(0, 4)), Number(monthKey.slice(5, 7)) - 2, 1))
+  const previousBudgets = new Map(budgets.filter((budget) => budget.month === previousMonthKey).map((budget) => [budget.categoryId, budget.amountMinor]))
+  const requestedRollingKeys = completedMonthKeysBefore(monthKey, lookback)
+  const earliestTransactionMonth = transactions.reduce<string | null>((earliest, transaction) => !earliest || transaction.date.slice(0, 7) < earliest ? transaction.date.slice(0, 7) : earliest, null)
+  const rollingKeys = earliestTransactionMonth ? requestedRollingKeys.filter((key) => key >= earliestTransactionMonth) : []
+  const missingCarryForward = missingCategories.some((category) => !previousBudgets.has(category.id))
+  const needsHistory = source === 'rolling-average' || (source === 'carry-forward' && missingCarryForward)
+  const historyUnavailable = needsHistory && !historyLoaded
+  const categoryById = new Map(categories.map((category) => [category.id, category]))
+  const orderedGroups = [...categoryGroups].sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name))
+  const categoryOrder = (left: Category, right: Category) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.name.localeCompare(right.name)
+  const groupedMissing = [
+    ...orderedGroups.map((group) => ({ id: group.id, name: group.name, categories: missingCategories.filter((category) => category.categoryGroupId === group.id).sort(categoryOrder) })).filter((group) => group.categories.length),
+    ...(() => {
+      const ungrouped = missingCategories.filter((category) => !category.categoryGroupId || !categoryGroups.some((group) => group.id === category.categoryGroupId)).sort(categoryOrder)
+      return ungrouped.length ? [{ id: 'ungrouped', name: 'Other', categories: ungrouped }] : []
+    })(),
+  ]
+
+  const rollingAverage = (category: Category) => {
+    if (!rollingKeys.length) return 0
+    const total = rollingKeys.reduce((rollingTotal, key) => rollingTotal + transactions
+      .filter((transaction) => transaction.categoryId === category.id && transaction.date.startsWith(key) && transaction.type !== 'transfer')
+      .reduce((monthTotal, transaction) => {
+        const direction = transaction.type === 'income' ? 1 : transaction.type === 'expense' ? -1 : 0
+        const amount = convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, fxRates) ?? 0
+        return monthTotal + (isIncomeReportGroup(category.reportGroup) ? direction : -direction) * amount
+      }, 0), 0)
+    return Math.max(0, roundToWholeEuroMinor(total / rollingKeys.length))
+  }
+
+  const prepareDrafts = () => {
+    if (historyUnavailable) return
+    const nextDrafts: Record<string, MonthlyPlanDraft> = {}
+    for (const category of missingCategories) {
+      const previous = previousBudgets.get(category.id)
+      const average = rollingAverage(category)
+      const amount = source === 'zero' ? 0 : source === 'rolling-average' ? average : previous ?? average
+      const basis = source === 'zero'
+        ? 'Starts at zero'
+        : source === 'rolling-average'
+          ? `${rollingKeys.length}-month average`
+          : previous !== undefined ? `Copied from ${previousMonthKey}` : `${rollingKeys.length}-month average · no previous budget`
+      nextDrafts[category.id] = { value: (amount / 100).toFixed(2), basis }
+    }
+    setDrafts(nextDrafts)
+    setSelectedIds(new Set(missingCategories.map((category) => category.id)))
+    setStep(2)
+  }
+
+  const parsedEntries = [...selectedIds].flatMap((categoryId) => {
+    const amountMinor = parseMoneyToMinor(drafts[categoryId]?.value ?? '')
+    return amountMinor === null ? [] : [{ categoryId, amountMinor }]
+  })
+  const hasInvalidSelection = [...selectedIds].some((categoryId) => parseMoneyToMinor(drafts[categoryId]?.value ?? '') === null)
+  const finalBudgets = [
+    ...existingBudgets,
+    ...parsedEntries.map((entry) => ({ id: entry.categoryId, month: monthKey, categoryId: entry.categoryId, scope: 'Personal' as const, amountMinor: entry.amountMinor })),
+  ]
+  const plannedIncome = finalBudgets.filter((budget) => isIncomeReportGroup(categoryById.get(budget.categoryId)?.reportGroup)).reduce((sum, budget) => sum + budget.amountMinor, 0)
+  const plannedOutgoings = finalBudgets.filter((budget) => !isIncomeReportGroup(categoryById.get(budget.categoryId)?.reportGroup)).reduce((sum, budget) => sum + budget.amountMinor, 0)
+
+  if (!missingCategories.length) return <div className="monthly-plan-complete"><CircleCheck size={32} /><h3>This month is fully planned</h3><p>Every visible category already has a budget for {monthKey}.</p></div>
+
+  return <div className="monthly-plan-wizard">
+    <div className="monthly-plan-steps" aria-label="Planning progress"><span className={step >= 1 ? 'active' : ''}>1 · Start</span><i /><span className={step >= 2 ? 'active' : ''}>2 · Categories</span><i /><span className={step >= 3 ? 'active' : ''}>3 · Review</span></div>
+    {step === 1 && <div className="monthly-plan-start">
+      <div><h3>Fill {missingCategories.length} missing budget{missingCategories.length === 1 ? '' : 's'}</h3><p>{existingBudgets.length} existing budget{existingBudgets.length === 1 ? '' : 's'} will be preserved. Choose how to create the missing values.</p></div>
+      <div className="monthly-plan-source-list">
+        <button type="button" className={source === 'carry-forward' ? 'selected' : ''} onClick={() => setSource('carry-forward')}><RefreshCw size={18} /><span><strong>Carry last month forward</strong><small>Use the previous budget, falling back to recent actuals when it is missing.</small></span><Check size={16} /></button>
+        <button type="button" className={source === 'rolling-average' ? 'selected' : ''} onClick={() => setSource('rolling-average')}><BarChart3 size={18} /><span><strong>Use rolling averages</strong><small>Suggest a rounded amount from completed months, including zero-activity months.</small></span><Check size={16} /></button>
+        <button type="button" className={source === 'zero' ? 'selected' : ''} onClick={() => setSource('zero')}><Target size={18} /><span><strong>Start from zero</strong><small>Create an intentional zero plan that you can edit in the next step.</small></span><Check size={16} /></button>
+      </div>
+      {source !== 'zero' && <label className="monthly-plan-lookback"><span>Rolling-average window</span><select value={lookback} onChange={(event) => setLookback(Number(event.target.value))}><option value={3}>3 months</option><option value={6}>6 months</option><option value={12}>12 months</option></select></label>}
+      {historyUnavailable && <p className="monthly-plan-history"><LoaderCircle className={historyLoading ? 'spin-icon' : ''} size={15} />{historyLoading ? 'Loading transaction history for accurate suggestions…' : 'Transaction history could not be loaded. Choose “Start from zero” or try again.'}</p>}
+      <button type="button" className="primary-button form-submit" disabled={historyUnavailable} onClick={prepareDrafts}>Review category budgets<ArrowRight size={17} /></button>
+    </div>}
+    {step === 2 && <div className="monthly-plan-categories">
+      <p className="form-help">Adjust any suggestion or uncheck a category to leave it without a budget.</p>
+      <div className="monthly-plan-category-groups">{groupedMissing.map((group) => <section key={group.id}><h3>{group.name}</h3>{group.categories.map((category) => <div className="monthly-plan-category" key={category.id}><input type="checkbox" aria-label={`Include ${category.name}`} checked={selectedIds.has(category.id)} onChange={(event) => setSelectedIds((current) => { const next = new Set(current); if (event.target.checked) next.add(category.id); else next.delete(category.id); return next })} /><CategoryLabel category={category} /><label><span>{defaultCurrency}</span><input aria-label={`${category.name} budget`} type="number" min="0" step="0.01" disabled={!selectedIds.has(category.id)} value={drafts[category.id]?.value ?? ''} onChange={(event) => setDrafts((current) => ({ ...current, [category.id]: { value: event.target.value, basis: 'Edited' } }))} /></label><small>{drafts[category.id]?.basis}</small></div>)}</section>)}</div>
+      <div className="monthly-plan-actions"><button type="button" className="secondary-button" onClick={() => setStep(1)}>Back</button><button type="button" className="primary-button" disabled={!selectedIds.size || hasInvalidSelection} onClick={() => setStep(3)}>Review plan<ArrowRight size={17} /></button></div>
+    </div>}
+    {step === 3 && <div className="monthly-plan-review">
+      <p>{parsedEntries.length} missing budget{parsedEntries.length === 1 ? '' : 's'} will be added. Existing values remain unchanged.</p>
+      <div className="monthly-plan-totals"><div><span>Planned income</span><strong>{formatMoney(plannedIncome, defaultCurrency)}</strong></div><div><span>Planned outgoings</span><strong>{formatMoney(plannedOutgoings, defaultCurrency)}</strong></div><div><span>Expected remainder</span><strong className={plannedIncome - plannedOutgoings < 0 ? 'negative' : 'positive'}>{formatMoney(plannedIncome - plannedOutgoings, defaultCurrency)}</strong></div></div>
+      {error && <p className="auth-error" role="alert">{error}</p>}
+      <div className="monthly-plan-actions"><button type="button" className="secondary-button" disabled={saving} onClick={() => setStep(2)}>Back</button><button type="button" className="primary-button" disabled={saving} onClick={async () => { setSaving(true); setError(''); try { await onSave(parsedEntries) } catch (cause) { setError(getErrorMessage(cause, 'Could not save the monthly plan.')); setSaving(false) } }}>{saving ? 'Saving plan…' : 'Save monthly plan'}<Check size={17} /></button></div>
+    </div>}
+  </div>
+}
+
+function BudgetsPage({ categories, categoryGroups, defaultCurrency, categorySpending, budgetForCategory, showHiddenActivityAlert, onPlanMonth, onAdd, onManageGroups, onSelectCategory, onUnhideCategory }: {
+  categories: Category[]; categoryGroups: CategoryGroup[]; defaultCurrency: string; categorySpending: (id: string) => number; budgetForCategory: (id: string) => number
   showHiddenActivityAlert: boolean
-  onAdd: () => void; onManageGroups: () => void; onSelectCategory: (id: string) => void; onUnhideCategory: (id: string) => Promise<void>
+  onPlanMonth: () => void; onAdd: () => void; onManageGroups: () => void; onSelectCategory: (id: string) => void; onUnhideCategory: (id: string) => Promise<void>
 }) {
   const [showHiddenOnly, setShowHiddenOnly] = useState(false)
   const visibleCategories = categories.filter((category) => !category.hidden)
   const hiddenCategories = categories.filter((category) => category.hidden)
-  const personalIncomeCategories = visibleCategories.filter((category) => category.reportGroup === 'personal_income')
-  const personalExpenseCategories = visibleCategories.filter((category) => category.reportGroup === 'personal_expense')
-  const companyRevenueCategories = visibleCategories.filter((category) => category.reportGroup === 'company_revenue')
-  const companyExpenseCategories = visibleCategories.filter((category) => category.reportGroup === 'company_expense')
-  const personalTaxCategories = visibleCategories.filter((category) => category.reportGroup === 'personal_tax')
-  const companyTaxCategories = visibleCategories.filter((category) => category.reportGroup === 'company_tax')
+  const budgetTotalFor = (groups: ReportGroup[]) => categories.filter((category) => groups.includes(category.reportGroup)).reduce((sum, category) => sum + budgetForCategory(category.id), 0)
+  const budgetedIncome = budgetTotalFor(incomeReportGroups)
+  const budgetedExpenses = budgetTotalFor(expenseReportGroups)
+  const budgetedTaxes = budgetTotalFor(taxReportGroups)
+  const budgetedSavings = budgetedIncome - budgetedExpenses - budgetedTaxes
+  const actualTotalFor = (groups: ReportGroup[]) => categories.filter((category) => groups.includes(category.reportGroup)).reduce((sum, category) => sum + categorySpending(category.id), 0)
+  const actualIncome = actualTotalFor(incomeReportGroups)
+  const actualExpenses = actualTotalFor(expenseReportGroups)
+  const actualTaxes = actualTotalFor(taxReportGroups)
+  const actualSavings = actualIncome - actualExpenses - actualTaxes
   const groupedRows = (rows: Category[]) => {
     const byOrder = (left: Category, right: Category) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.name.localeCompare(right.name)
-    const knownGroups = categoryGroups.map((group) => ({ group, rows: rows.filter((category) => category.categoryGroupId === group.id).sort(byOrder) })).filter((item) => item.rows.length > 0)
+    const orderedGroups = [...categoryGroups].sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name))
+    const knownGroups = orderedGroups.map((group) => ({ group, rows: rows.filter((category) => category.categoryGroupId === group.id).sort(byOrder) })).filter((item) => item.rows.length > 0)
     const ungrouped = rows.filter((category) => !category.categoryGroupId || !categoryGroups.some((group) => group.id === category.categoryGroupId)).sort(byOrder)
     return [...knownGroups, ...(ungrouped.length ? [{ group: { id: 'ungrouped', name: 'Other', sortOrder: 999, showCategories: true }, rows: ungrouped }] : [])]
   }
-  const section = (title: string, subtitle: string, rows: Category[]) => <section className="budget-section"><div className="budget-section-heading"><div><h3>{title}</h3><span>{subtitle}</span></div></div>{groupedRows(rows).map(({ group, rows: groupCategories }) => <div className="category-group-block" key={group.id}><div className="category-group-label">{group.name}</div><div className="category-list roomy">{groupCategories.map((category) => <CategoryRow key={category.id} category={category} spent={categorySpending(category.id)} budget={budgetForCategory(category.id)} onSelect={() => onSelectCategory(category.id)} />)}</div></div>)}</section>
-  const hiddenSection = <section className="budget-section"><div className="budget-section-heading"><div><h3>Hidden categories</h3><span>Unhide categories you want to return to active planning and new transactions</span></div></div>{groupedRows(hiddenCategories).map(({ group, rows }) => <div className="category-group-block" key={group.id}><div className="category-group-label">{group.name}</div><div className="category-list roomy">{rows.map((category) => <HiddenCategoryBudgetRow key={category.id} category={category} spent={categorySpending(category.id)} budget={budgetForCategory(category.id)} onSelect={() => onSelectCategory(category.id)} onUnhide={() => onUnhideCategory(category.id)} />)}</div></div>)}</section>
+  const activeSections = groupedRows(visibleCategories).map(({ group, rows }) => <section className="budget-section" key={group.id}><div className="budget-section-heading"><h3>{group.name}</h3></div><div className="category-list roomy">{rows.map((category) => <CategoryRow key={category.id} category={category} spent={categorySpending(category.id)} budget={budgetForCategory(category.id)} onSelect={() => onSelectCategory(category.id)} />)}</div></section>)
+  const hiddenSections = groupedRows(hiddenCategories).map(({ group, rows }) => <section className="budget-section" key={group.id}><div className="budget-section-heading"><h3>{group.name}</h3></div><div className="category-list roomy">{rows.map((category) => <HiddenCategoryBudgetRow key={category.id} category={category} spent={categorySpending(category.id)} budget={budgetForCategory(category.id)} onSelect={() => onSelectCategory(category.id)} onUnhide={() => onUnhideCategory(category.id)} />)}</div></section>)
   return <section className="budget-planning">
     <HiddenCategoryActivityAlert categories={categories} categorySpending={categorySpending} onSelectCategory={onSelectCategory} prominent={showHiddenActivityAlert} />
-    <div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>{showHiddenOnly ? 'Hidden categories' : 'Budget by category'}</h2></div><div className="budget-page-actions">{hiddenCategories.length > 0 && <button className="text-button" onClick={() => setShowHiddenOnly((current) => !current)}>{showHiddenOnly ? <EyeOff size={16} /> : <Eye size={16} />}{showHiddenOnly ? 'Show active categories' : `Show hidden only (${hiddenCategories.length})`}</button>}<button className="secondary-button" onClick={onManageGroups}><Settings size={16} />Manage groups</button><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button></div></div>{showHiddenOnly ? hiddenSection : <>{section('Personal income', 'Actual personal income compared with this month’s plan', personalIncomeCategories)}{section('Personal expenses', 'Personal spending compared with this month’s budget', personalExpenseCategories)}{personalTaxCategories.length > 0 && section('Personal taxes', 'Personal tax costs compared with this month’s plan', personalTaxCategories)}{section('Company revenue', 'Actual company revenue compared with this month’s plan', companyRevenueCategories)}{section('Company expenses', 'Company spending compared with this month’s budget', companyExpenseCategories)}{companyTaxCategories.length > 0 && section('Company taxes', 'Company tax costs compared with this month’s plan', companyTaxCategories)}</>}</div>
+    <div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>{showHiddenOnly ? 'Hidden categories' : 'Budget by category group'}</h2></div><div className="budget-page-actions">{hiddenCategories.length > 0 && <button className="text-button" onClick={() => setShowHiddenOnly((current) => !current)}>{showHiddenOnly ? <EyeOff size={16} /> : <Eye size={16} />}{showHiddenOnly ? 'Show active categories' : `Show hidden only (${hiddenCategories.length})`}</button>}<button className="secondary-button" onClick={onManageGroups}><Settings size={16} />Manage groups</button><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button><button className="primary-button" onClick={onPlanMonth}><CalendarDays size={16} />Plan month</button></div></div><div className="budget-overview-totals"><div className="budget-totals-summary"><div><span>Income budget</span><strong>{formatMoney(budgetedIncome, defaultCurrency)}</strong></div><div><span>Expense budget</span><strong>{formatMoney(budgetedExpenses, defaultCurrency)}</strong></div><div><span>Tax budget</span><strong>{formatMoney(budgetedTaxes, defaultCurrency)}</strong></div><div className="budgeted-savings"><span>Budgeted savings</span><strong className={budgetedSavings < 0 ? 'negative' : 'positive'}>{formatMoney(budgetedSavings, defaultCurrency)}</strong></div></div><div className="budget-totals-summary actual"><div><span>Actual income</span><strong>{formatMoney(actualIncome, defaultCurrency)}</strong></div><div><span>Actual expenses</span><strong>{formatMoney(actualExpenses, defaultCurrency)}</strong></div><div><span>Actual taxes</span><strong>{formatMoney(actualTaxes, defaultCurrency)}</strong></div><div className="budgeted-savings"><span>Actual savings</span><strong className={actualSavings < 0 ? 'negative' : 'positive'}>{formatMoney(actualSavings, defaultCurrency)}</strong></div></div></div>{showHiddenOnly ? hiddenSections : activeSections}</div>
   </section>
 }
 
