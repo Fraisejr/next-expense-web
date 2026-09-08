@@ -561,18 +561,12 @@ export async function updateTimeCode(workspaceId: string, code: TimeCode) {
 }
 
 export async function saveTimeEntry(workspaceId: string, entry: TimeEntry) {
-  if (entry.hours === 0) {
-    const { error } = await neon.from('time_entries').delete()
-      .eq('workspace_id', workspaceId).eq('time_code_id', entry.codeId).eq('work_date', entry.date)
-    if (error) throw error
-    return
-  }
-  const { error } = await neon.from('time_entries').upsert({
-    workspace_id: workspaceId,
-    time_code_id: entry.codeId,
-    work_date: entry.date,
-    hours: entry.hours,
-  }, { onConflict: 'workspace_id,time_code_id,work_date' })
+  const { error } = await neon.rpc('save_time_entry', {
+    p_workspace_id: workspaceId,
+    p_time_code_id: entry.codeId,
+    p_work_date: entry.date,
+    p_hours: entry.hours,
+  })
   if (error) throw error
 }
 

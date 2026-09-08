@@ -1554,6 +1554,7 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode }: {
   function changeEntry(codeId: string, date: string, rawHours: number) {
     const hours = Math.min(24, Math.max(0, Math.round(rawHours)))
     const key = `${codeId}:${date}`
+    setError('')
     setEntries((current) => hours === 0
       ? current.filter((entry) => entry.codeId !== codeId || entry.date !== date)
       : [...current.filter((entry) => entry.codeId !== codeId || entry.date !== date), { codeId, date, hours }])
