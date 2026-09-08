@@ -1,6 +1,6 @@
 import { neon } from './neon'
 import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
-import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankImportCandidate, BankRateLimit, BankSyncDiagnostic, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, Transaction, YearlyFinancialPlan } from './types'
+import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankImportCandidate, BankRateLimit, BankSyncDiagnostic, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, TimeCode, TimeEntry, Transaction, YearlyFinancialPlan } from './types'
 
 type Row = Record<string, unknown>
 
@@ -311,16 +311,17 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
   const nextMonthDate = new Date(`${monthStart}T12:00:00Z`)
   nextMonthDate.setUTCMonth(nextMonthDate.getUTCMonth() + 1)
   const monthEnd = nextMonthDate.toISOString().slice(0, 10)
-  const [workspaceResult, accountRows, categoryGroupRows, categoryRows, periodRows, budgetRows, fxRateRows, payeeRows, mappingRows, transactionPage, balanceResult, connectionRows, candidateRows, unusedPayeeResult] = await Promise.all([
+  const [workspaceResult, accountRows, categoryGroupRows, categoryRows, periodRows, budgetRows, fxRateRows, payeeRows, mappingRows, timeCodeRows, transactionPage, balanceResult, connectionRows, candidateRows, unusedPayeeResult] = await Promise.all([
     neon.from('workspaces').select('name,default_currency,estimated_company_tax_rate_bps,yearly_spending_goals').eq('id', workspaceId).limit(1),
     allRows('accounts', 'id,name,display_type,scope,balance_sheet_group,currency,color,sort_order,closed,investment,pension,auto_sync,bank_import_mode,provider_account_id,institution_id,country', 'sort_order'),
     allRows('category_groups', 'id,name,sort_order,show_categories', 'sort_order'),
-    allRows('categories', 'id,name,sort_order,color,icon,report_group,category_group_id,hidden', 'sort_order'),
+    allRows('categories', 'id,name,sort_order,default_budget_minor,color,icon,report_group,category_group_id,hidden', 'sort_order'),
     allRows('periods', 'id,year,month,period_start_date', 'period_start_date'),
     allRows('budgets', 'id,period_id,category_id,scope,amount_minor'),
     allRows('fx_rates', 'id,base_currency,quote_currency,rate_hundredths,rate_date', 'rate_date'),
     allRows('payees', 'id,name,sort_order,default_category_id,default_account_id', 'sort_order'),
     allRows('payee_mappings', 'id,source_name,payee_id,match_type'),
+    allRows('time_codes', 'id,name,sort_order,hidden_from_month', 'sort_order'),
     loadTransactionPage(workspaceId, { startDate: monthStart, endDate: monthEnd }),
     neon.rpc('workspace_account_balances', { p_workspace_id: workspaceId }),
     allRows('bank_connections', 'id,account_id,status,last_synced_at,metadata'),
@@ -405,6 +406,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
     id: row.id as string,
     name: row.name as string,
     sortOrder: number(row.sort_order),
+    defaultBudgetMinor: number(row.default_budget_minor),
     color: normalizeCategoryColor(row.color),
     icon: normalizeCategoryIcon(row.icon, row.name as string),
     reportGroup: row.report_group as ReportGroup,
@@ -439,6 +441,12 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
     quoteCurrency: row.quote_currency as string,
     rateHundredths: number(row.rate_hundredths),
     date: row.rate_date as string,
+  }))
+  const timeCodes: TimeCode[] = timeCodeRows.map((row) => ({
+    id: String(row.id),
+    name: String(row.name),
+    sortOrder: number(row.sort_order),
+    hiddenFromMonth: (row.hidden_from_month as string | null)?.slice(0, 7) || undefined,
   }))
   const bankImportCandidates: BankImportCandidate[] = ((candidateRows.data ?? []) as unknown as Row[])
     .filter((row) => row.status === 'pending')
@@ -504,11 +512,68 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
       budgets,
       yearlyFinancialPlans,
       fxRates,
+      timeCodes,
       transactions,
       bankImportCandidates,
       settings: { estimatedCompanyTaxRateBps: number(workspace.estimated_company_tax_rate_bps) },
     },
   }
+}
+
+export async function loadTimeEntries(workspaceId: string, month: string): Promise<TimeEntry[]> {
+  const startDate = `${month}-01`
+  const nextMonth = new Date(`${startDate}T12:00:00Z`)
+  nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1)
+  const { data, error } = await neon.from('time_entries')
+    .select('time_code_id,work_date,hours')
+    .eq('workspace_id', workspaceId)
+    .gte('work_date', startDate)
+    .lt('work_date', nextMonth.toISOString().slice(0, 10))
+    .order('work_date', { ascending: true })
+  if (error) throw error
+  return ((data ?? []) as unknown as Row[]).map((row) => ({
+    codeId: String(row.time_code_id),
+    date: String(row.work_date),
+    hours: number(row.hours),
+  }))
+}
+
+export async function createTimeCode(workspaceId: string, code: TimeCode) {
+  const { error } = await neon.from('time_codes').insert({
+    id: code.id,
+    workspace_id: workspaceId,
+    name: code.name.normalize('NFKC').trim(),
+    sort_order: code.sortOrder,
+    hidden_from_month: code.hiddenFromMonth ? `${code.hiddenFromMonth}-01` : null,
+  })
+  if (error) throw error
+}
+
+export async function updateTimeCode(workspaceId: string, code: TimeCode) {
+  const name = code.name.normalize('NFKC').trim()
+  if (!name) throw new Error('A time code name is required.')
+  const { data, error } = await neon.from('time_codes').update({
+    name,
+    hidden_from_month: code.hiddenFromMonth ? `${code.hiddenFromMonth}-01` : null,
+  }).eq('workspace_id', workspaceId).eq('id', code.id).select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The time code could not be updated.')
+}
+
+export async function saveTimeEntry(workspaceId: string, entry: TimeEntry) {
+  if (entry.hours === 0) {
+    const { error } = await neon.from('time_entries').delete()
+      .eq('workspace_id', workspaceId).eq('time_code_id', entry.codeId).eq('work_date', entry.date)
+    if (error) throw error
+    return
+  }
+  const { error } = await neon.from('time_entries').upsert({
+    workspace_id: workspaceId,
+    time_code_id: entry.codeId,
+    work_date: entry.date,
+    hours: entry.hours,
+  }, { onConflict: 'workspace_id,time_code_id,work_date' })
+  if (error) throw error
 }
 
 export async function createAccount(workspaceId: string, account: Account, sortOrder: number, openingBalance?: Transaction) {
@@ -644,6 +709,7 @@ export async function createCategory(workspaceId: string, category: Category) {
     report_group: category.reportGroup,
     category_group_id: category.categoryGroupId ?? null,
     sort_order: category.sortOrder ?? 0,
+    default_budget_minor: category.defaultBudgetMinor,
     color: category.color,
     icon: category.icon,
     hidden: category.hidden,
@@ -733,6 +799,16 @@ export async function updateCategoryDetails(workspaceId: string, categoryId: str
     .select('id')
   if (error) throw error
   if (!data?.length) throw new Error('The category could not be updated.')
+}
+
+export async function updateCategoryDefaultBudget(workspaceId: string, categoryId: string, defaultBudgetMinor: number) {
+  const { data, error } = await neon.from('categories')
+    .update({ default_budget_minor: defaultBudgetMinor })
+    .eq('workspace_id', workspaceId)
+    .eq('id', categoryId)
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The category default budget could not be updated.')
 }
 
 export async function deleteUnusedCategory(workspaceId: string, categoryId: string) {
@@ -1032,6 +1108,16 @@ export async function saveBudget(workspaceId: string, budget: Budget) {
     amount_minor: budget.amountMinor,
   })
   if (error) throw error
+}
+
+export async function deleteBudget(workspaceId: string, budgetId: string) {
+  const { data, error } = await neon.from('budgets')
+    .delete()
+    .eq('workspace_id', workspaceId)
+    .eq('id', budgetId)
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The monthly budget override could not be removed.')
 }
 
 export async function saveFxRate(workspaceId: string, rate: FxRate) {

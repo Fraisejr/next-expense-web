@@ -77,6 +77,7 @@ export type Category = {
   id: string
   name: string
   sortOrder?: number
+  defaultBudgetMinor: number
   color: string
   icon: string
   reportGroup: ReportGroup
@@ -137,6 +138,19 @@ export type FxRate = {
   date: string
 }
 
+export type TimeCode = {
+  id: string
+  name: string
+  sortOrder: number
+  hiddenFromMonth?: string
+}
+
+export type TimeEntry = {
+  codeId: string
+  date: string
+  hours: number
+}
+
 export type Transaction = {
   id: string
   date: string
@@ -170,6 +184,7 @@ export type AppData = {
   budgets: Budget[]
   yearlyFinancialPlans: YearlyFinancialPlan[]
   fxRates: FxRate[]
+  timeCodes: TimeCode[]
   transactions: Transaction[]
   bankImportCandidates: BankImportCandidate[]
   settings: {

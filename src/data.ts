@@ -21,13 +21,13 @@ export const seedData: AppData = {
     { id: 'daily-group', name: 'Daily expenses', sortOrder: 10, showCategories: true },
   ],
   categories: [
-    { id: 'salary', name: 'Salary', color: '#2f6f62', icon: 'briefcase', reportGroup: 'personal_income', categoryGroupId: 'income-group', hidden: false },
-    { id: 'housing', name: 'Housing', color: '#cc7048', icon: 'house', reportGroup: 'personal_expense', categoryGroupId: 'daily-group', hidden: false },
-    { id: 'groceries', name: 'Groceries', color: '#738c5a', icon: 'basket', reportGroup: 'personal_expense', categoryGroupId: 'daily-group', hidden: false },
-    { id: 'transport', name: 'Transport', color: '#d49b4d', icon: 'car', reportGroup: 'personal_expense', categoryGroupId: 'daily-group', hidden: false },
-    { id: 'dining', name: 'Dining out', color: '#9b6a71', icon: 'utensils', reportGroup: 'personal_expense', categoryGroupId: 'daily-group', hidden: false },
-    { id: 'fun', name: 'Fun & leisure', color: '#5d7d91', icon: 'sparkles', reportGroup: 'personal_expense', categoryGroupId: 'daily-group', hidden: false },
-    { id: 'bills', name: 'Bills', color: '#7f7062', icon: 'receipt', reportGroup: 'personal_expense', categoryGroupId: 'daily-group', hidden: false },
+    { id: 'salary', name: 'Salary', defaultBudgetMinor: 0, color: '#2f6f62', icon: 'briefcase', reportGroup: 'personal_income', categoryGroupId: 'income-group', hidden: false },
+    { id: 'housing', name: 'Housing', defaultBudgetMinor: 145000, color: '#cc7048', icon: 'house', reportGroup: 'personal_expense', categoryGroupId: 'daily-group', hidden: false },
+    { id: 'groceries', name: 'Groceries', defaultBudgetMinor: 52000, color: '#738c5a', icon: 'basket', reportGroup: 'personal_expense', categoryGroupId: 'daily-group', hidden: false },
+    { id: 'transport', name: 'Transport', defaultBudgetMinor: 26000, color: '#d49b4d', icon: 'car', reportGroup: 'personal_expense', categoryGroupId: 'daily-group', hidden: false },
+    { id: 'dining', name: 'Dining out', defaultBudgetMinor: 24000, color: '#9b6a71', icon: 'utensils', reportGroup: 'personal_expense', categoryGroupId: 'daily-group', hidden: false },
+    { id: 'fun', name: 'Fun & leisure', defaultBudgetMinor: 18000, color: '#5d7d91', icon: 'sparkles', reportGroup: 'personal_expense', categoryGroupId: 'daily-group', hidden: false },
+    { id: 'bills', name: 'Bills', defaultBudgetMinor: 39000, color: '#7f7062', icon: 'receipt', reportGroup: 'personal_expense', categoryGroupId: 'daily-group', hidden: false },
   ],
   budgets: [
     { id: 'budget-housing', month: currentMonth, categoryId: 'housing', scope: 'Personal', amountMinor: 145000 },
@@ -39,6 +39,7 @@ export const seedData: AppData = {
   ],
   yearlyFinancialPlans: [],
   fxRates: [],
+  timeCodes: [],
   payees: [
     { id: 'green-market', name: 'Green Market' },
     { id: 'northline-energy', name: 'Northline Energy' },

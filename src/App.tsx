@@ -2,16 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import {
   ArrowLeftRight, ArrowRight, Banknote, BriefcaseBusiness,
   BarChart3, BriefcaseMedical, CalendarDays, CarFront, ChevronDown, ChevronLeft, ChevronRight, CircleHelp,
-  ArrowDown, ArrowUp, Check, CircleAlert, CircleCheck, CreditCard, Download, Dumbbell, Eye, EyeOff, FileCheck2, GripVertical, HeartHandshake, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Pencil, Plane, Plus, ReceiptText, Search, Settings, Trash2, Upload,
+  ArrowDown, ArrowUp, Check, CircleAlert, CircleCheck, Clock3, CreditCard, Download, Dumbbell, Eye, EyeOff, FileCheck2, GripVertical, HeartHandshake, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Minus, Pencil, Plane, Plus, ReceiptText, Search, Settings, Trash2, Upload,
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteAllUnusedPayees, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDetails, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
+import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTimeCode, createTransaction, deleteAllUnusedPayees, deleteBudget, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTimeEntries, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveTimeEntry, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTimeCode, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
 import { convertMinor } from './currency'
-import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, Transaction, YearlyFinancialPlan } from './types'
+import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, TimeCode, TimeEntry, Transaction, YearlyFinancialPlan } from './types'
 
-type Page = 'overview' | 'transactions' | 'payees' | 'reports' | 'accounts' | 'settings'
+type Page = 'overview' | 'transactions' | 'payees' | 'reports' | 'accounts' | 'timesheet' | 'settings'
 type ReportView = 'profit-loss' | 'net-worth'
 type Modal = 'transaction' | 'account' | 'edit-account' | 'balance-adjustment' | 'category' | 'edit-category' | 'category-groups' | 'monthly-plan' | 'bank' | null
 const BANK_LINK_STORAGE_KEY = 'next-expense-gocardless-link'
@@ -320,8 +320,9 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         : location.pathname === '/budgets' ? 'overview'
           : location.pathname === '/reports' || location.pathname === '/reports/net-worth' || location.pathname === '/performance' ? 'reports'
             : location.pathname === '/accounts' ? 'accounts'
-              : location.pathname === '/settings' ? 'settings'
-              : 'overview'
+              : location.pathname === '/timesheet' ? 'timesheet'
+                : location.pathname === '/settings' ? 'settings'
+                : 'overview'
   const requestedMonthKey = new URLSearchParams(location.search).get('month')
   const requestedMonth = fromMonthKey(requestedMonthKey)
   const viewedMonth = useMemo(() => fromMonthKey(requestedMonthKey) ?? new Date(), [requestedMonthKey])
@@ -439,15 +440,16 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       }, 0)
   }
   const budgetForCategory = (categoryId: string) => data.budgets
-    .filter((budget) => budget.month === selectedMonthKey && budget.categoryId === categoryId)
-    .reduce((sum, budget) => sum + budget.amountMinor, 0)
+    .find((budget) => budget.month === selectedMonthKey && budget.categoryId === categoryId)?.amountMinor
+    ?? data.categories.find((category) => category.id === categoryId)?.defaultBudgetMinor
+    ?? 0
   const personalTaxesPaid = totalExpenseForReportGroup('personal_tax')
   const companyTaxesPaid = totalExpenseForReportGroup('company_tax')
   const estimatedCompanyTax = Math.max(0, Math.round((companyRevenue - companyExpenses) * data.settings.estimatedCompanyTaxRateBps / 10_000))
   const selectedCategory = data.categories.find((category) => category.id === categoryMatch?.params.categoryId)
   const selectedAccount = data.accounts.find((account) => account.id === accountMatch?.params.accountId)
   const selectedPayee = data.payees.find((payee) => payee.id === payeeMatch?.params.payeeId)
-  const pageTitle = selectedAccount?.name ?? selectedCategory?.name ?? selectedPayee?.name ?? (page === 'settings' ? 'Settings' : page === 'reports' && reportView === 'net-worth' ? 'Net worth' : navItems.find((item) => item.id === page)?.label) ?? 'Overview'
+  const pageTitle = selectedAccount?.name ?? selectedCategory?.name ?? selectedPayee?.name ?? (page === 'settings' ? 'Settings' : page === 'timesheet' ? 'Timesheet' : page === 'reports' && reportView === 'net-worth' ? 'Net worth' : navItems.find((item) => item.id === page)?.label) ?? 'Overview'
   const accountsByBalanceSheetGroup = balanceSheetGroups.map((group) => ({ group, accounts: activeAccounts.filter((account) => accountBalanceSheetGroup(account) === group) }))
 
   function pathWithMonth(path: string, month = viewedMonth) {
@@ -484,6 +486,17 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   async function removeExchangeRate(rateId: string) {
     await deleteFxRate(workspace.workspaceId, rateId)
     setData((current) => ({ ...current, fxRates: current.fxRates.filter((rate) => rate.id !== rateId) }))
+  }
+
+  async function addTimeCode(name: string) {
+    const code: TimeCode = { id: uid(), name: name.normalize('NFKC').trim(), sortOrder: data.timeCodes.length }
+    await createTimeCode(workspace.workspaceId, code)
+    setData((current) => ({ ...current, timeCodes: [...current.timeCodes, code] }))
+  }
+
+  async function changeTimeCode(code: TimeCode) {
+    await updateTimeCode(workspace.workspaceId, code)
+    setData((current) => ({ ...current, timeCodes: current.timeCodes.map((item) => item.id === code.id ? code : item) }))
   }
 
   function selectMonth(month: string) {
@@ -551,22 +564,19 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
-  async function addCategory(category: Omit<Category, 'id'>, budgetMinor: number) {
+  async function addCategory(category: Omit<Category, 'id'>) {
     const categoryId = uid()
     const nextCategory = {
       ...category,
       id: categoryId,
       sortOrder: Math.max(-10, ...data.categories.filter((item) => item.categoryGroupId === category.categoryGroupId).map((item) => item.sortOrder ?? 0)) + 10,
     }
-    const nextBudget = budgetMinor ? { id: uid(), month: selectedMonthKey, categoryId, scope: 'Personal' as const, amountMinor: budgetMinor } : null
     try {
       setSyncError('')
       await createCategory(workspace.workspaceId, nextCategory)
-      if (nextBudget) await saveBudget(workspace.workspaceId, nextBudget)
       setData((current) => ({
         ...current,
         categories: [...current.categories, nextCategory],
-        budgets: nextBudget ? [...current.budgets, nextBudget] : current.budgets,
       }))
       setModal(null)
     } catch (error) {
@@ -588,7 +598,38 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         ],
       }))
     } catch (error) {
-      setSyncError(error instanceof Error ? error.message : 'Could not update the budget.')
+      const message = getErrorMessage(error, 'Could not update the budget.')
+      setSyncError(message)
+      throw new Error(message, { cause: error })
+    }
+  }
+
+  async function updateDefaultBudget(categoryId: string, amountMinor: number) {
+    try {
+      setSyncError('')
+      await updateCategoryDefaultBudget(workspace.workspaceId, categoryId, amountMinor)
+      setData((current) => ({
+        ...current,
+        categories: current.categories.map((category) => category.id === categoryId ? { ...category, defaultBudgetMinor: amountMinor } : category),
+      }))
+    } catch (error) {
+      const message = getErrorMessage(error, 'Could not update the default budget.')
+      setSyncError(message)
+      throw new Error(message, { cause: error })
+    }
+  }
+
+  async function removeBudgetOverride(categoryId: string) {
+    const existing = data.budgets.find((budget) => budget.month === selectedMonthKey && budget.categoryId === categoryId)
+    if (!existing) return
+    try {
+      setSyncError('')
+      await deleteBudget(workspace.workspaceId, existing.id)
+      setData((current) => ({ ...current, budgets: current.budgets.filter((budget) => budget.id !== existing.id) }))
+    } catch (error) {
+      const message = getErrorMessage(error, 'Could not remove the monthly budget override.')
+      setSyncError(message)
+      throw new Error(message, { cause: error })
     }
   }
 
@@ -1245,6 +1286,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         </nav>
 
         <div className="sidebar-bottom">
+          <a href={pathWithMonth('/timesheet')} className={page === 'timesheet' ? 'nav-item active' : 'nav-item'} onClick={(event) => handleClientNavigation(event, () => goTo('/timesheet'))}><Clock3 size={19} /><span>Timesheet</span></a>
           <button className="nav-item"><CircleHelp size={19} /><span>Help & feedback</span></button>
           <a href={pathWithMonth('/settings')} className={page === 'settings' ? 'nav-item active' : 'nav-item'} onClick={(event) => handleClientNavigation(event, () => goTo('/settings'))}><Settings size={19} /><span>Settings</span></a>
           <div className="profile">
@@ -1259,7 +1301,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         <header className="topbar">
           <div className="topbar-title">
             <button className="icon-button mobile-menu" aria-label="Open menu" onClick={() => setMobileNav(!mobileNav)}><Menu size={21} /></button>
-            <div><span className="eyebrow">{selectedAccount ? 'Accounts' : selectedCategory ? 'Categories' : selectedPayee ? 'Payees' : page === 'payees' ? 'Directory' : page === 'settings' ? workspace.workspaceName : page === 'overview' ? 'At a glance' : 'Personal budget'}</span><h1>{pageTitle}</h1></div>
+            <div><span className="eyebrow">{selectedAccount ? 'Accounts' : selectedCategory ? 'Categories' : selectedPayee ? 'Payees' : page === 'payees' ? 'Directory' : page === 'settings' ? workspace.workspaceName : page === 'timesheet' ? 'Daily reporting' : page === 'overview' ? 'At a glance' : 'Personal budget'}</span><h1>{pageTitle}</h1></div>
           </div>
           <div className="top-actions">
             {page !== 'payees' && page !== 'settings' && <div className="month-switcher">
@@ -1267,7 +1309,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
               <MonthPicker value={selectedMonthKey} onChange={selectMonth} />
               <button aria-label="Next month" onClick={() => moveMonth(1)}><ChevronRight size={17} /></button>
             </div>}
-            {page !== 'settings' && <button className="primary-button" onClick={() => setModal('transaction')}><Plus size={18} />Add transaction</button>}
+            {page !== 'settings' && page !== 'timesheet' && <button className="primary-button" onClick={() => setModal('transaction')}><Plus size={18} />Add transaction</button>}
           </div>
         </header>
 
@@ -1295,11 +1337,14 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         {page === 'settings' && (
           <SettingsPage workspaceId={workspace.workspaceId} workspaceName={workspace.workspaceName} defaultCurrency={workspace.defaultCurrency} accounts={data.accounts} fxRates={data.fxRates} onSaveFxRate={saveExchangeRate} onDeleteFxRate={removeExchangeRate} />
         )}
+        {page === 'timesheet' && (
+          <TimesheetPage workspaceId={workspace.workspaceId} month={selectedMonthKey} codes={data.timeCodes} onAddCode={addTimeCode} onUpdateCode={changeTimeCode} />
+        )}
         {selectedAccount && (
           <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onPostTransfer={postBankImportAsTransfer} onRematchPayees={() => rematchBankImportPayees(selectedAccount.id)} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onAddAlternativeName={(sourceName, payeeId) => addPayeeAlternativeForReview(sourceName, payeeId, selectedAccount.id)} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingAccountId === selectedAccount.id} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
         )}
         {selectedCategory && (
-          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTransactions={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onUpdateBudget={updateBudget} onUpdateGroup={changeCategoryGroup} onEdit={() => setModal('edit-category')} onDelete={removeUnusedCategory} onSetHidden={setCategoryHidden} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
+          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} monthlyBudgetOverride={data.budgets.find((budget) => budget.month === selectedMonthKey && budget.categoryId === selectedCategory.id)?.amountMinor} monthKey={selectedMonthKey} defaultCurrency={workspace.defaultCurrency} fxRates={data.fxRates} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTransactions={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onUpdateBudget={updateBudget} onUpdateDefaultBudget={updateDefaultBudget} onRemoveBudgetOverride={removeBudgetOverride} onUpdateGroup={changeCategoryGroup} onEdit={() => setModal('edit-category')} onDelete={removeUnusedCategory} onSetHidden={setCategoryHidden} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
         )}
         {selectedPayee && (
           <PayeeDetailPage key={selectedPayee.id} payee={selectedPayee} payees={data.payees} mappings={data.payeeMappings.filter((mapping) => mapping.payeeId === selectedPayee.id)} transactions={data.transactions.filter((transaction) => transaction.payeeId === selectedPayee.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/payees')} onEditTransaction={setCategoryTarget} onRename={renamePayee} onUpdateDefaults={changePayeeDefaults} onAddMapping={addPayeeMapping} onUpdateMapping={changePayeeMapping} onRemoveMapping={removePayeeMapping} />
@@ -1463,6 +1508,155 @@ function downloadWorkspaceBackup(backup: WorkspaceBackup, prefix?: string) {
   link.click()
   link.remove()
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode }: {
+  workspaceId: string
+  month: string
+  codes: TimeCode[]
+  onAddCode: (name: string) => Promise<void>
+  onUpdateCode: (code: TimeCode) => Promise<void>
+}) {
+  const [entries, setEntries] = useState<TimeEntry[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [newCodeName, setNewCodeName] = useState('')
+  const [addingCode, setAddingCode] = useState(false)
+  const [showHidden, setShowHidden] = useState(false)
+  const saveQueue = useRef(new Map<string, Promise<void>>())
+  const monthDate = useMemo(() => fromMonthKey(month) ?? new Date(), [month])
+  const dayCount = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate()
+  const days = useMemo(() => Array.from({ length: dayCount }, (_, index) => {
+    const day = index + 1
+    const date = `${month}-${String(day).padStart(2, '0')}`
+    const value = new Date(`${date}T12:00:00`)
+    return { day, date, label: new Intl.DateTimeFormat('en', { weekday: 'short' }).format(value).slice(0, 2), weekend: value.getDay() === 0 || value.getDay() === 6 }
+  }), [dayCount, month])
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    loadTimeEntries(workspaceId, month)
+      .then((loaded) => { if (!cancelled) setEntries(loaded) })
+      .catch((cause) => { if (!cancelled) setError(getErrorMessage(cause, 'Could not load this timesheet.')) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [month, workspaceId])
+
+  const entryMap = useMemo(() => new Map(entries.map((entry) => [`${entry.codeId}:${entry.date}`, entry.hours])), [entries])
+  const visibleCodes = codes.filter((code) => !code.hiddenFromMonth || code.hiddenFromMonth > month).sort((a, b) => a.sortOrder - b.sortOrder)
+  const hiddenCodes = codes.filter((code) => code.hiddenFromMonth && code.hiddenFromMonth <= month).sort((a, b) => a.sortOrder - b.sortOrder)
+  const totalForCode = (codeId: string) => entries.filter((entry) => entry.codeId === codeId).reduce((sum, entry) => sum + entry.hours, 0)
+  const totalForDate = (date: string) => entries.reduce((sum, entry) => sum + (entry.date === date ? entry.hours : 0), 0)
+  const monthTotal = entries.reduce((sum, entry) => sum + entry.hours, 0)
+
+  function changeEntry(codeId: string, date: string, rawHours: number) {
+    const hours = Math.min(24, Math.max(0, Math.round(rawHours)))
+    const key = `${codeId}:${date}`
+    setEntries((current) => hours === 0
+      ? current.filter((entry) => entry.codeId !== codeId || entry.date !== date)
+      : [...current.filter((entry) => entry.codeId !== codeId || entry.date !== date), { codeId, date, hours }])
+    const previous = saveQueue.current.get(key) ?? Promise.resolve()
+    const request = previous.catch(() => undefined).then(() => saveTimeEntry(workspaceId, { codeId, date, hours }))
+      .catch(async (cause) => {
+        setError(getErrorMessage(cause, 'Could not save these hours.'))
+        try { setEntries(await loadTimeEntries(workspaceId, month)) } catch { /* Keep the original save error visible. */ }
+      })
+      .finally(() => { if (saveQueue.current.get(key) === request) saveQueue.current.delete(key) })
+    saveQueue.current.set(key, request)
+  }
+
+  async function addCode(event: FormEvent) {
+    event.preventDefault()
+    const name = newCodeName.trim()
+    if (!name) return
+    setAddingCode(true)
+    setError('')
+    try {
+      await onAddCode(name)
+      setNewCodeName('')
+    } catch (cause) {
+      setError(getErrorMessage(cause, 'Could not add the time code.'))
+    } finally {
+      setAddingCode(false)
+    }
+  }
+
+  async function updateCode(code: TimeCode) {
+    setError('')
+    try { await onUpdateCode(code) } catch (cause) {
+      setError(getErrorMessage(cause, 'Could not update the time code.'))
+      throw cause
+    }
+  }
+
+  return <div className="page-content timesheet-page">
+    <section className="timesheet-summary">
+      <div><span className="eyebrow">Month total</span><strong>{formatHours(monthTotal)}</strong><small>across {visibleCodes.length} visible {visibleCodes.length === 1 ? 'item' : 'items'}</small></div>
+      <div className="timesheet-item-totals">{visibleCodes.map((code) => <div key={code.id}><span>{code.name}</span><strong>{formatHours(totalForCode(code.id))}</strong></div>)}</div>
+    </section>
+
+    <section className="panel timesheet-panel">
+      <div className="timesheet-heading">
+        <div><span className="eyebrow">Daily hours</span><h2>{monthName.format(monthDate)}</h2><p>Enter whole hours directly, or use − and + to adjust one hour at a time. Weekends are shaded.</p></div>
+        <form className="time-code-add" onSubmit={(event) => void addCode(event)}><input aria-label="New time code name" value={newCodeName} onChange={(event) => setNewCodeName(event.target.value)} placeholder="Add a code…" /><button className="primary-button" disabled={addingCode || !newCodeName.trim()}><Plus size={16} />{addingCode ? 'Adding…' : 'Add code'}</button></form>
+      </div>
+
+      {loading ? <div className="timesheet-loading"><LoaderCircle size={18} />Loading hours…</div> : visibleCodes.length === 0 ? <div className="timesheet-empty"><Clock3 size={25} /><strong>No visible time codes</strong><span>Add your first code above to start reporting hours.</span></div> : <div className="timesheet-table-wrap">
+        <table className="timesheet-table">
+          <thead><tr><th className="time-code-column">Item</th>{days.map((day) => <th key={day.date} className={day.weekend ? 'weekend' : ''}><span>{day.label}</span><b>{day.day}</b></th>)}<th className="time-total-column">Total</th></tr></thead>
+          <tbody>
+            {visibleCodes.map((code) => <tr key={code.id}><th><TimeCodeEditor code={code} month={month} onSave={updateCode} /></th>{days.map((day) => <td key={day.date} className={day.weekend ? 'weekend' : ''}><TimeEntryCell codeName={code.name} date={day.date} value={entryMap.get(`${code.id}:${day.date}`) ?? 0} onChange={(hours) => changeEntry(code.id, day.date, hours)} /></td>)}<td className="time-row-total">{formatHours(totalForCode(code.id))}</td></tr>)}
+          </tbody>
+          <tfoot><tr><th>Daily total</th>{days.map((day) => <td key={day.date} className={day.weekend ? 'weekend' : ''}>{formatHours(totalForDate(day.date), true)}</td>)}<td>{formatHours(monthTotal)}</td></tr></tfoot>
+        </table>
+      </div>}
+
+      {hiddenCodes.length > 0 && <div className="hidden-time-codes"><button type="button" onClick={() => setShowHidden((current) => !current)}><EyeOff size={15} />{hiddenCodes.length} hidden {hiddenCodes.length === 1 ? 'code' : 'codes'}<ChevronDown className={showHidden ? 'expanded' : ''} size={15} /></button>{showHidden && <div>{hiddenCodes.map((code) => <TimeCodeEditor key={code.id} code={code} month={month} hidden onSave={updateCode} />)}</div>}</div>}
+      {error && <p className="timesheet-error" role="alert">{error}</p>}
+    </section>
+  </div>
+}
+
+function formatHours(hours: number, compact = false) {
+  if (compact && hours === 0) return '—'
+  return `${hours.toLocaleString(undefined, { maximumFractionDigits: 2 })}h`
+}
+
+function TimeEntryCell({ codeName, date, value, onChange }: { codeName: string; date: string; value: number; onChange: (hours: number) => void }) {
+  const [draft, setDraft] = useState(value === 0 ? '' : String(value))
+  useEffect(() => setDraft(value === 0 ? '' : String(value)), [value])
+  const commit = () => {
+    const parsed = Number(draft.replace(',', '.'))
+    if (draft.trim() === '' || !Number.isFinite(parsed)) { setDraft(value === 0 ? '' : String(value)); return }
+    onChange(parsed)
+  }
+  return <div className="time-entry-cell">
+    <button type="button" aria-label={`Subtract one hour from ${codeName} on ${date}`} disabled={value === 0} onClick={() => onChange(value - 1)}><Minus size={11} /></button>
+    <input aria-label={`${codeName} hours on ${date}`} inputMode="numeric" min="0" max="24" step="1" value={draft} placeholder="0" onChange={(event) => setDraft(event.target.value.replace(/\D/g, ''))} onBlur={commit} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }} />
+    <button type="button" aria-label={`Add one hour to ${codeName} on ${date}`} disabled={value >= 24} onClick={() => onChange(value + 1)}><Plus size={11} /></button>
+  </div>
+}
+
+function TimeCodeEditor({ code, month, hidden = false, onSave }: { code: TimeCode; month: string; hidden?: boolean; onSave: (code: TimeCode) => Promise<void> }) {
+  const [name, setName] = useState(code.name)
+  const [saving, setSaving] = useState(false)
+  useEffect(() => setName(code.name), [code.name])
+  const saveName = async () => {
+    const normalized = name.trim()
+    if (!normalized || normalized === code.name) { setName(code.name); return }
+    setSaving(true)
+    try { await onSave({ ...code, name: normalized }) } catch { setName(code.name) } finally { setSaving(false) }
+  }
+  const setHidden = async () => {
+    setSaving(true)
+    try { await onSave({ ...code, hiddenFromMonth: hidden ? undefined : month }) } finally { setSaving(false) }
+  }
+  return <div className={`time-code-editor${hidden ? ' hidden' : ''}`}>
+    <input aria-label={`Rename ${code.name}`} value={name} disabled={saving} onChange={(event) => setName(event.target.value)} onBlur={() => void saveName()} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }} />
+    <button type="button" disabled={saving} onClick={() => void setHidden()} title={hidden ? 'Show this code again' : `Hide from ${month} onward`}>{hidden ? <Eye size={14} /> : <EyeOff size={14} />}<span>{hidden ? 'Restore' : 'Hide'}</span></button>
+  </div>
 }
 
 function SettingsPage({ workspaceId, workspaceName, defaultCurrency, accounts, fxRates, onSaveFxRate, onDeleteFxRate }: {
@@ -2417,7 +2611,7 @@ function MonthlyPlanWizard({ monthKey, categories, categoryGroups, budgets, tran
   const requestedRollingKeys = completedMonthKeysBefore(monthKey, lookback)
   const earliestTransactionMonth = transactions.reduce<string | null>((earliest, transaction) => !earliest || transaction.date.slice(0, 7) < earliest ? transaction.date.slice(0, 7) : earliest, null)
   const rollingKeys = earliestTransactionMonth ? requestedRollingKeys.filter((key) => key >= earliestTransactionMonth) : []
-  const missingCarryForward = missingCategories.some((category) => !previousBudgets.has(category.id))
+  const missingCarryForward = missingCategories.some((category) => !previousBudgets.has(category.id) && category.defaultBudgetMinor <= 0)
   const needsHistory = source === 'rolling-average' || (source === 'carry-forward' && missingCarryForward)
   const historyUnavailable = needsHistory && !historyLoaded
   const categoryById = new Map(categories.map((category) => [category.id, category]))
@@ -2449,12 +2643,13 @@ function MonthlyPlanWizard({ monthKey, categories, categoryGroups, budgets, tran
     for (const category of missingCategories) {
       const previous = previousBudgets.get(category.id)
       const average = rollingAverage(category)
-      const amount = source === 'zero' ? 0 : source === 'rolling-average' ? average : previous ?? average
+      const categoryDefault = category.defaultBudgetMinor > 0 ? category.defaultBudgetMinor : undefined
+      const amount = source === 'zero' ? 0 : source === 'rolling-average' ? average : previous ?? categoryDefault ?? average
       const basis = source === 'zero'
         ? 'Starts at zero'
         : source === 'rolling-average'
           ? `${rollingKeys.length}-month average`
-          : previous !== undefined ? `Copied from ${previousMonthKey}` : `${rollingKeys.length}-month average · no previous budget`
+          : previous !== undefined ? `Copied from ${previousMonthKey}` : categoryDefault !== undefined ? 'Category default' : `${rollingKeys.length}-month average · no previous budget`
       nextDrafts[category.id] = { value: (amount / 100).toFixed(2), basis }
     }
     setDrafts(nextDrafts)
@@ -2470,6 +2665,9 @@ function MonthlyPlanWizard({ monthKey, categories, categoryGroups, budgets, tran
   const finalBudgets = [
     ...existingBudgets,
     ...parsedEntries.map((entry) => ({ id: entry.categoryId, month: monthKey, categoryId: entry.categoryId, scope: 'Personal' as const, amountMinor: entry.amountMinor })),
+    ...missingCategories
+      .filter((category) => !selectedIds.has(category.id) && category.defaultBudgetMinor > 0)
+      .map((category) => ({ id: `default-${category.id}`, month: monthKey, categoryId: category.id, scope: 'Personal' as const, amountMinor: category.defaultBudgetMinor })),
   ]
   const plannedIncome = finalBudgets.filter((budget) => isIncomeReportGroup(categoryById.get(budget.categoryId)?.reportGroup)).reduce((sum, budget) => sum + budget.amountMinor, 0)
   const plannedOutgoings = finalBudgets.filter((budget) => !isIncomeReportGroup(categoryById.get(budget.categoryId)?.reportGroup)).reduce((sum, budget) => sum + budget.amountMinor, 0)
@@ -2532,7 +2730,32 @@ function BudgetsPage({ categories, categoryGroups, defaultCurrency, categorySpen
   const hiddenSections = groupedRows(hiddenCategories).map(({ group, rows }) => <section className="budget-section" key={group.id}><div className="budget-section-heading"><h3>{group.name}</h3></div><div className="category-list roomy">{rows.map((category) => <HiddenCategoryBudgetRow key={category.id} category={category} spent={categorySpending(category.id)} budget={budgetForCategory(category.id)} onSelect={() => onSelectCategory(category.id)} onUnhide={() => onUnhideCategory(category.id)} />)}</div></section>)
   return <section className="budget-planning">
     <HiddenCategoryActivityAlert categories={categories} categorySpending={categorySpending} onSelectCategory={onSelectCategory} prominent={showHiddenActivityAlert} />
-    <div className="panel full-panel"><div className="panel-heading"><div><span className="eyebrow">Monthly plan</span><h2>{showHiddenOnly ? 'Hidden categories' : 'Budget by category group'}</h2></div><div className="budget-page-actions">{hiddenCategories.length > 0 && <button className="text-button" onClick={() => setShowHiddenOnly((current) => !current)}>{showHiddenOnly ? <EyeOff size={16} /> : <Eye size={16} />}{showHiddenOnly ? 'Show active categories' : `Show hidden only (${hiddenCategories.length})`}</button>}<button className="secondary-button" onClick={onManageGroups}><Settings size={16} />Manage groups</button><button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button><button className="primary-button" onClick={onPlanMonth}><CalendarDays size={16} />Plan month</button></div></div><div className="budget-overview-totals"><div className="budget-totals-summary"><div><span>Income budget</span><strong>{formatMoney(budgetedIncome, defaultCurrency)}</strong></div><div><span>Expense budget</span><strong>{formatMoney(budgetedExpenses, defaultCurrency)}</strong></div><div><span>Tax budget</span><strong>{formatMoney(budgetedTaxes, defaultCurrency)}</strong></div><div className="budgeted-savings"><span>Budgeted savings</span><strong className={budgetedSavings < 0 ? 'negative' : 'positive'}>{formatMoney(budgetedSavings, defaultCurrency)}</strong></div></div><div className="budget-totals-summary actual"><div><span>Actual income</span><strong>{formatMoney(actualIncome, defaultCurrency)}</strong></div><div><span>Actual expenses</span><strong>{formatMoney(actualExpenses, defaultCurrency)}</strong></div><div><span>Actual taxes</span><strong>{formatMoney(actualTaxes, defaultCurrency)}</strong></div><div className="budgeted-savings"><span>Actual savings</span><strong className={actualSavings < 0 ? 'negative' : 'positive'}>{formatMoney(actualSavings, defaultCurrency)}</strong></div></div></div>{showHiddenOnly ? hiddenSections : activeSections}</div>
+    <div className="panel full-panel">
+      <div className="panel-heading">
+        <div><span className="eyebrow">Monthly plan</span><h2>{showHiddenOnly ? 'Hidden categories' : 'Budget by category group'}</h2></div>
+        <div className="budget-page-actions">
+          {hiddenCategories.length > 0 && <button className="text-button" onClick={() => setShowHiddenOnly((current) => !current)}>{showHiddenOnly ? <EyeOff size={16} /> : <Eye size={16} />}{showHiddenOnly ? 'Show active categories' : `Show hidden only (${hiddenCategories.length})`}</button>}
+          <button className="secondary-button" onClick={onManageGroups}><Settings size={16} />Manage groups</button>
+          <button className="secondary-button" onClick={onAdd}><Plus size={17} />New category</button>
+          <button className="primary-button" onClick={onPlanMonth}><CalendarDays size={16} />Plan month</button>
+        </div>
+      </div>
+      <div className="budget-overview-totals">
+        <div className="budget-totals-summary">
+          <div><span>Income budget</span><strong>{formatMoney(budgetedIncome, defaultCurrency)}</strong></div>
+          <div><span>Expense budget</span><strong>{formatMoney(budgetedExpenses, defaultCurrency)}</strong></div>
+          <div><span>Tax budget</span><strong>{formatMoney(budgetedTaxes, defaultCurrency)}</strong></div>
+          <div className="budgeted-savings"><span>Budgeted savings</span><strong className={budgetedSavings < 0 ? 'negative' : 'positive'}>{formatMoney(budgetedSavings, defaultCurrency)}</strong></div>
+        </div>
+        <div className="budget-totals-summary actual">
+          <div><span>Actual income</span><strong>{formatMoney(actualIncome, defaultCurrency)}</strong></div>
+          <div><span>Actual expenses</span><strong>{formatMoney(actualExpenses, defaultCurrency)}</strong></div>
+          <div><span>Actual taxes</span><strong>{formatMoney(actualTaxes, defaultCurrency)}</strong></div>
+          <div className="budgeted-savings"><span>Actual savings</span><strong className={actualSavings < 0 ? 'negative' : 'positive'}>{formatMoney(actualSavings, defaultCurrency)}</strong></div>
+        </div>
+      </div>
+      {showHiddenOnly ? hiddenSections : activeSections}
+    </div>
   </section>
 }
 
@@ -2563,8 +2786,18 @@ function ReportsPage({ data, viewedMonth, defaultCurrency, view, historyLoading,
   const categoryById = new Map(data.categories.map((category) => [category.id, category]))
   const inPeriod = (date: string) => period === 'month' ? date.startsWith(monthKey) : date.startsWith(yearKey)
   const reportTransactions = data.transactions.filter((transaction) => inPeriod(transaction.date) && (transaction.type === 'expense' || transaction.type === 'income'))
-  const budgetInPeriod = (month: string) => period === 'month' ? month === monthKey : month.startsWith(yearKey)
-  const reportBudgets = data.budgets.filter((budget) => budgetInPeriod(budget.month))
+  const reportMonths = period === 'month'
+    ? [monthKey]
+    : Array.from({ length: 12 }, (_, index) => `${yearKey}-${String(index + 1).padStart(2, '0')}`)
+  const explicitBudgetByMonthAndCategory = new Map(data.budgets.map((budget) => [`${budget.month}:${budget.categoryId}`, budget]))
+  const reportBudgets: Budget[] = reportMonths.flatMap((month) => data.categories.map((category) =>
+    explicitBudgetByMonthAndCategory.get(`${month}:${category.id}`) ?? {
+      id: `default-${month}-${category.id}`,
+      month,
+      categoryId: category.id,
+      scope: 'Personal' as const,
+      amountMinor: category.defaultBudgetMinor,
+    }))
 
   const totalTransactionsForGroup = (transactions: Transaction[], group: ReportGroup) => transactions
     .filter((transaction) => categoryById.get(transaction.categoryId ?? '')?.reportGroup === group)
@@ -3221,7 +3454,7 @@ function formatSyncDiagnostic(diagnostic: NonNullable<Account['lastSyncDiagnosti
   ].filter(Boolean).join(' · ')
 }
 
-function CategoryDetailPage({ category, spent, budget, transactions, allTransactions, categories, categoryGroups, accounts, historyLoaded, historyLoading, onRequestHistory, onUpdateBudget, onUpdateGroup, onEdit, onDelete, onSetHidden, onBack, onSelectCategory, onEditTransaction }: { category: Category; spent: number; budget: number; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; categoryGroups: CategoryGroup[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onUpdateBudget: (categoryId: string, amountMinor: number) => void; onUpdateGroup: (categoryId: string, categoryGroupId: string) => Promise<void>; onEdit: () => void; onDelete: (categoryId: string) => Promise<void>; onSetHidden: (categoryId: string, hidden: boolean) => void; onBack: () => void; onSelectCategory: (id: string) => void; onEditTransaction: (transaction: Transaction) => void }) {
+function CategoryDetailPage({ category, spent, budget, monthlyBudgetOverride, monthKey, defaultCurrency, fxRates, transactions, allTransactions, categories, categoryGroups, accounts, historyLoaded, historyLoading, onRequestHistory, onUpdateBudget, onUpdateDefaultBudget, onRemoveBudgetOverride, onUpdateGroup, onEdit, onDelete, onSetHidden, onBack, onSelectCategory, onEditTransaction }: { category: Category; spent: number; budget: number; monthlyBudgetOverride?: number; monthKey: string; defaultCurrency: string; fxRates: FxRate[]; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; categoryGroups: CategoryGroup[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onUpdateBudget: (categoryId: string, amountMinor: number) => Promise<void>; onUpdateDefaultBudget: (categoryId: string, amountMinor: number) => Promise<void>; onRemoveBudgetOverride: (categoryId: string) => Promise<void>; onUpdateGroup: (categoryId: string, categoryGroupId: string) => Promise<void>; onEdit: () => void; onDelete: (categoryId: string) => Promise<void>; onSetHidden: (categoryId: string, hidden: boolean) => void; onBack: () => void; onSelectCategory: (id: string) => void; onEditTransaction: (transaction: Transaction) => void }) {
   const Icon = categoryIcons[category.icon as keyof typeof categoryIcons] ?? Sparkles
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -3240,7 +3473,7 @@ function CategoryDetailPage({ category, spent, budget, transactions, allTransact
       {confirmingDelete && !deleting && <div className="category-delete-confirmation"><span>Deleting this category will also remove its budgets and clear it from payee defaults.</span><button type="button" onClick={() => setConfirmingDelete(false)}>Cancel</button></div>}
       {deleteError && <p className="auth-error" role="alert">{deleteError}</p>}
       <CategoryGroupAssignment key={`${category.id}-${category.categoryGroupId ?? 'none'}`} category={category} groups={categoryGroups} onSubmit={onUpdateGroup} />
-      <CategoryDetail key={`${category.id}-${budget}`} category={category} spent={spent} budget={budget} transactions={transactions} allTransactions={allTransactions} categories={categories} accounts={accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={onRequestHistory} onUpdateBudget={onUpdateBudget} onEditTransaction={onEditTransaction} />
+      <CategoryDetail key={`${category.id}-${monthKey}-${category.defaultBudgetMinor}-${monthlyBudgetOverride ?? 'default'}`} category={category} spent={spent} budget={budget} monthlyBudgetOverride={monthlyBudgetOverride} monthKey={monthKey} defaultCurrency={defaultCurrency} fxRates={fxRates} transactions={transactions} allTransactions={allTransactions} categories={categories} accounts={accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={onRequestHistory} onUpdateBudget={onUpdateBudget} onUpdateDefaultBudget={onUpdateDefaultBudget} onRemoveBudgetOverride={onRemoveBudgetOverride} onEditTransaction={onEditTransaction} />
     </section>
   </div>
 }
@@ -3267,7 +3500,7 @@ function CategoryGroupAssignment({ category, groups, onSubmit }: { category: Cat
   </div>
 }
 
-function CategoryDetail({ category, spent, budget, transactions, allTransactions, categories, accounts, historyLoaded, historyLoading, onRequestHistory, onUpdateBudget, onEditTransaction }: { category: Category; spent: number; budget: number; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onUpdateBudget: (categoryId: string, amountMinor: number) => void; onEditTransaction: (transaction: Transaction) => void }) {
+function CategoryDetail({ category, spent, budget, monthlyBudgetOverride, monthKey, defaultCurrency, fxRates, transactions, allTransactions, categories, accounts, historyLoaded, historyLoading, onRequestHistory, onUpdateBudget, onUpdateDefaultBudget, onRemoveBudgetOverride, onEditTransaction }: { category: Category; spent: number; budget: number; monthlyBudgetOverride?: number; monthKey: string; defaultCurrency: string; fxRates: FxRate[]; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onUpdateBudget: (categoryId: string, amountMinor: number) => Promise<void>; onUpdateDefaultBudget: (categoryId: string, amountMinor: number) => Promise<void>; onRemoveBudgetOverride: (categoryId: string) => Promise<void>; onEditTransaction: (transaction: Transaction) => void }) {
   const [transactionPeriod, setTransactionPeriod] = useState<'month' | 'all'>('month')
   const [transactionPage, setTransactionPage] = useState(1)
   const sortedAllTransactions = useMemo(() => [...allTransactions].sort((left, right) => right.date.localeCompare(left.date)), [allTransactions])
@@ -3278,23 +3511,71 @@ function CategoryDetail({ category, spent, budget, transactions, allTransactions
     : periodTransactions
   useEffect(() => setTransactionPage(1), [category.id, transactionPeriod])
   useEffect(() => setTransactionPage((current) => Math.min(current, pageCount)), [pageCount])
-  const [budgetInput, setBudgetInput] = useState((budget / 100).toFixed(2))
+  const [defaultBudgetInput, setDefaultBudgetInput] = useState((category.defaultBudgetMinor / 100).toFixed(2))
+  const [monthlyBudgetInput, setMonthlyBudgetInput] = useState((budget / 100).toFixed(2))
+  const [savingBudget, setSavingBudget] = useState<'default' | 'month' | 'remove' | ''>('')
+  const [budgetError, setBudgetError] = useState('')
   const remaining = budget - spent
-  const saveBudget = () => {
-    const amountMinor = parseMoneyToMinor(budgetInput)
-    if (amountMinor === null) return
-    onUpdateBudget(category.id, amountMinor)
+  const selectedMonthDate = fromMonthKey(monthKey)
+  const selectedMonthLabel = selectedMonthDate ? monthName.format(selectedMonthDate) : monthKey
+  const averageFor = (count: number) => {
+    const monthKeys = completedMonthKeysBefore(monthKey, count)
+    const total = monthKeys.reduce((rollingTotal, key) => rollingTotal + allTransactions
+      .filter((transaction) => transaction.date.startsWith(key) && transaction.type !== 'transfer')
+      .reduce((monthTotal, transaction) => {
+        const direction = transaction.type === 'income' ? 1 : transaction.type === 'expense' ? -1 : 0
+        const amount = convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, fxRates) ?? 0
+        return monthTotal + (isIncomeReportGroup(category.reportGroup) ? direction : -direction) * amount
+      }, 0), 0)
+    return Math.max(0, roundToWholeEuroMinor(total / monthKeys.length))
+  }
+  const suggestions = [
+    ...(monthlyBudgetOverride === undefined ? [] : [{ label: `${selectedMonthLabel} plan`, amountMinor: monthlyBudgetOverride }]),
+    ...(historyLoaded ? [3, 6, 12].map((count) => ({ label: `${count}-month average`, amountMinor: averageFor(count) })) : []),
+  ]
+  const defaultBudgetMinor = parseMoneyToMinor(defaultBudgetInput)
+  const monthlyBudgetMinor = parseMoneyToMinor(monthlyBudgetInput)
+  const runBudgetAction = async (kind: 'default' | 'month' | 'remove', action: () => Promise<void>) => {
+    setSavingBudget(kind)
+    setBudgetError('')
+    try {
+      await action()
+    } catch (cause) {
+      setBudgetError(getErrorMessage(cause, 'Could not update the budget.'))
+    } finally {
+      setSavingBudget('')
+    }
   }
   return <div className="category-detail">
     <div className="category-detail-summary">
       <div><span>Net spent</span><strong>{formatMoney(spent)}</strong></div>
-      <div><span>Budget</span><strong>{formatMoney(budget)}</strong></div>
+      <div><span>Budget · {monthlyBudgetOverride === undefined ? 'Default' : 'Month override'}</span><strong>{formatMoney(budget)}</strong></div>
       <div><span>Remaining</span><strong className={remaining < 0 ? 'negative' : ''}>{formatMoney(remaining)}</strong></div>
     </div>
-    <div className="budget-editor">
-      <label><span>Monthly plan</span><input type="number" min="0" step="0.01" value={budgetInput} onChange={(event) => setBudgetInput(event.target.value)} /></label>
-      <button className="secondary-button" type="button" onClick={saveBudget}>Update budget</button>
-    </div>
+    <section className="category-budget-settings">
+      <div className="category-budget-settings-heading"><div><span className="eyebrow">Budget settings</span><h3>Default and monthly budget</h3></div><p>{monthlyBudgetOverride === undefined ? `${selectedMonthLabel} is using the default.` : `${selectedMonthLabel} has its own override.`}</p></div>
+      <div className="category-budget-setting-grid">
+        <div className="category-budget-setting default-setting">
+          <label><span>Default monthly budget</span><input type="number" min="0" step="0.01" value={defaultBudgetInput} onChange={(event) => setDefaultBudgetInput(event.target.value)} /></label>
+          <small>Used automatically in every month that does not have its own budget.</small>
+          <button className="secondary-button" type="button" disabled={defaultBudgetMinor === null || defaultBudgetMinor === category.defaultBudgetMinor || Boolean(savingBudget)} onClick={() => defaultBudgetMinor !== null && runBudgetAction('default', () => onUpdateDefaultBudget(category.id, defaultBudgetMinor))}>{savingBudget === 'default' ? 'Saving…' : 'Save default'}</button>
+          <div className="category-budget-helper">
+            <div><strong>Need a starting point?</strong><span>Use an existing plan or a recent monthly average.</span></div>
+            {suggestions.length > 0 && <div>{suggestions.map((suggestion) => <button className="secondary-button" type="button" key={suggestion.label} onClick={() => setDefaultBudgetInput((suggestion.amountMinor / 100).toFixed(2))}><span>{suggestion.label}</span><strong>{formatMoney(suggestion.amountMinor, defaultCurrency)}</strong></button>)}</div>}
+            {!historyLoaded && <button className="category-budget-load" type="button" disabled={historyLoading} onClick={() => void onRequestHistory()}><LoaderCircle className={historyLoading ? 'spin-icon' : ''} size={13} />{historyLoading ? 'Loading suggestions…' : 'Show recent averages'}</button>}
+          </div>
+        </div>
+        <div className="category-budget-setting month-setting">
+          <label><span>{selectedMonthLabel} budget</span><input type="number" min="0" step="0.01" value={monthlyBudgetInput} onChange={(event) => setMonthlyBudgetInput(event.target.value)} /></label>
+          <small>{monthlyBudgetOverride === undefined ? `Currently inherited from the ${formatMoney(category.defaultBudgetMinor, defaultCurrency)} default.` : 'This amount applies only to the selected month.'}</small>
+          <div className="category-budget-actions">
+            <button className="secondary-button" type="button" disabled={monthlyBudgetMinor === null || monthlyBudgetMinor === monthlyBudgetOverride || Boolean(savingBudget)} onClick={() => monthlyBudgetMinor !== null && runBudgetAction('month', () => onUpdateBudget(category.id, monthlyBudgetMinor))}>{savingBudget === 'month' ? 'Saving…' : monthlyBudgetOverride === undefined ? 'Set month override' : 'Update month'}</button>
+            {monthlyBudgetOverride !== undefined && <button className="text-button" type="button" disabled={Boolean(savingBudget)} onClick={() => runBudgetAction('remove', () => onRemoveBudgetOverride(category.id))}>{savingBudget === 'remove' ? 'Removing…' : 'Use default instead'}</button>}
+          </div>
+        </div>
+      </div>
+      {budgetError && <p className="auth-error" role="alert">{budgetError}</p>}
+    </section>
     <div className="category-detail-heading account-transaction-heading"><span>{historyLoading && transactionPeriod === 'all' && !historyLoaded ? 'Loading transaction history…' : `${periodTransactions.length} transaction${periodTransactions.length === 1 ? '' : 's'} ${transactionPeriod === 'all' ? 'across all dates' : 'in the selected month'}`}</span><div><div className="segmented account-transaction-period"><button type="button" className={transactionPeriod === 'month' ? 'active transfer' : ''} onClick={() => setTransactionPeriod('month')}>Selected month</button><button type="button" className={transactionPeriod === 'all' ? 'active transfer' : ''} onClick={() => { setTransactionPeriod('all'); void onRequestHistory() }}>{historyLoading && !historyLoaded ? 'Loading…' : 'All dates'}</button></div></div></div>
     <div className="category-detail-list">
       {displayedTransactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} categories={categories} accounts={accounts} showAccount onEditCategory={() => onEditTransaction(transaction)} />)}
@@ -3865,10 +4146,10 @@ function CategoryDetailsForm({ category, categories, onSubmit }: { category: Cat
   </form>
 }
 
-function CategoryForm({ categoryGroups, onSubmit }: { categoryGroups: CategoryGroup[]; onSubmit: (c: Omit<Category, 'id'>, budgetMinor: number) => void }) {
+function CategoryForm({ categoryGroups, onSubmit }: { categoryGroups: CategoryGroup[]; onSubmit: (c: Omit<Category, 'id'>) => void }) {
   const [name, setName] = useState(''); const [budget, setBudget] = useState(''); const [reportGroup, setReportGroup] = useState<ReportGroup>('personal_expense'); const [categoryGroupId, setCategoryGroupId] = useState(categoryGroups[0]?.id ?? '')
-  function submit(e: FormEvent) { e.preventDefault(); const budgetMinor = parseMoneyToMinor(budget || '0'); if (!name || budgetMinor === null) return; onSubmit({ name, reportGroup, categoryGroupId: categoryGroupId || undefined, color: '#5d7d91', icon: isIncomeReportGroup(reportGroup) ? 'briefcase' : 'sparkles', hidden: false }, budgetMinor) }
-  return <form className="form" onSubmit={submit}><label><span>Category name</span><input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Personal care" /></label><div className="form-grid"><label><span>Report group</span><select value={reportGroup} onChange={e => setReportGroup(e.target.value as ReportGroup)}><option value="personal_income">Personal income</option><option value="personal_expense">Personal expense</option><option value="personal_tax">Personal tax</option><option value="company_revenue">Company revenue</option><option value="company_expense">Company expense</option><option value="company_tax">Company tax</option></select></label><label><span>Category group</span><select value={categoryGroupId} onChange={e => setCategoryGroupId(e.target.value)}>{categoryGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label></div><label><span>Monthly plan</span><input type="number" min="0" step="0.01" value={budget} onChange={e => setBudget(e.target.value)} placeholder="0.00" /></label><button className="primary-button form-submit">Create category<ArrowRight size={18} /></button></form>
+  function submit(e: FormEvent) { e.preventDefault(); const defaultBudgetMinor = parseMoneyToMinor(budget || '0'); if (!name || defaultBudgetMinor === null) return; onSubmit({ name, reportGroup, categoryGroupId: categoryGroupId || undefined, defaultBudgetMinor, color: '#5d7d91', icon: isIncomeReportGroup(reportGroup) ? 'briefcase' : 'sparkles', hidden: false }) }
+  return <form className="form" onSubmit={submit}><label><span>Category name</span><input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Personal care" /></label><div className="form-grid"><label><span>Report group</span><select value={reportGroup} onChange={e => setReportGroup(e.target.value as ReportGroup)}><option value="personal_income">Personal income</option><option value="personal_expense">Personal expense</option><option value="personal_tax">Personal tax</option><option value="company_revenue">Company revenue</option><option value="company_expense">Company expense</option><option value="company_tax">Company tax</option></select></label><label><span>Category group</span><select value={categoryGroupId} onChange={e => setCategoryGroupId(e.target.value)}>{categoryGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label></div><label><span>Default monthly budget</span><input type="number" min="0" step="0.01" value={budget} onChange={e => setBudget(e.target.value)} placeholder="0.00" /><small>Used when a month has no category-specific budget.</small></label><button className="primary-button form-submit">Create category<ArrowRight size={18} /></button></form>
 }
 
 export default App
