@@ -561,13 +561,25 @@ export async function updateTimeCode(workspaceId: string, code: TimeCode) {
 }
 
 export async function saveTimeEntry(workspaceId: string, entry: TimeEntry) {
-  const { error } = await neon.rpc('save_time_entry', {
-    p_workspace_id: workspaceId,
-    p_time_code_id: entry.codeId,
-    p_work_date: entry.date,
-    p_hours: entry.hours,
-  })
-  if (error) throw error
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const { error } = await neon.rpc('save_time_entry', {
+      p_workspace_id: workspaceId,
+      p_time_code_id: entry.codeId,
+      p_work_date: entry.date,
+      p_hours: entry.hours,
+    })
+    if (!error) return
+
+    const transientAuthorizationFailure = error.code === '42501'
+      && error.message.includes('access to this workspace')
+    if (!transientAuthorizationFailure || attempt === 2) throw error
+
+    // Neon injects the session token lazily for each Data API request. A
+    // session refresh plus a short retry handles the occasional request that
+    // reaches Postgres without its user context, without retrying other errors.
+    await neon.auth.getSession()
+    await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)))
+  }
 }
 
 export async function createAccount(workspaceId: string, account: Account, sortOrder: number, openingBalance?: Transaction) {
