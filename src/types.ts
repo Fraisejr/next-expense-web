@@ -151,6 +151,12 @@ export type TimeEntry = {
   hours: number
 }
 
+export type TimeComment = {
+  codeId: string
+  month: string
+  comment: string
+}
+
 export type Transaction = {
   id: string
   date: string

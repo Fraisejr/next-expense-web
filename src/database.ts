@@ -1,6 +1,6 @@
 import { neon } from './neon'
 import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
-import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankImportCandidate, BankRateLimit, BankSyncDiagnostic, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, TimeCode, TimeEntry, Transaction, YearlyFinancialPlan } from './types'
+import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankImportCandidate, BankRateLimit, BankSyncDiagnostic, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, TimeCode, TimeComment, TimeEntry, Transaction, YearlyFinancialPlan } from './types'
 
 type Row = Record<string, unknown>
 
@@ -538,6 +538,19 @@ export async function loadTimeEntries(workspaceId: string, month: string): Promi
   }))
 }
 
+export async function loadTimeComments(workspaceId: string, month: string): Promise<TimeComment[]> {
+  const { data, error } = await neon.from('time_code_month_comments')
+    .select('time_code_id,month_start,comment')
+    .eq('workspace_id', workspaceId)
+    .eq('month_start', `${month}-01`)
+  if (error) throw error
+  return ((data ?? []) as unknown as Row[]).map((row) => ({
+    codeId: String(row.time_code_id),
+    month: String(row.month_start).slice(0, 7),
+    comment: String(row.comment),
+  }))
+}
+
 export async function createTimeCode(workspaceId: string, code: TimeCode) {
   const { error } = await neon.from('time_codes').insert({
     id: code.id,
@@ -558,6 +571,38 @@ export async function updateTimeCode(workspaceId: string, code: TimeCode) {
   }).eq('workspace_id', workspaceId).eq('id', code.id).select('id')
   if (error) throw error
   if (!data?.length) throw new Error('The time code could not be updated.')
+}
+
+export async function saveTimeCodeOrder(workspaceId: string, timeCodeIds: string[]) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const { error } = await neon.rpc('save_time_code_order', {
+      p_workspace_id: workspaceId,
+      p_time_code_ids: timeCodeIds,
+    })
+    if (!error) return
+    const transientAuthorizationFailure = error.code === '42501'
+      && error.message.includes('access to this workspace')
+    if (!transientAuthorizationFailure || attempt === 2) throw error
+    await neon.auth.getSession()
+    await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)))
+  }
+}
+
+export async function saveTimeComment(workspaceId: string, value: TimeComment) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const { error } = await neon.rpc('save_time_code_month_comment', {
+      p_workspace_id: workspaceId,
+      p_time_code_id: value.codeId,
+      p_month_start: `${value.month}-01`,
+      p_comment: value.comment,
+    })
+    if (!error) return
+    const transientAuthorizationFailure = error.code === '42501'
+      && error.message.includes('access to this workspace')
+    if (!transientAuthorizationFailure || attempt === 2) throw error
+    await neon.auth.getSession()
+    await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)))
+  }
 }
 
 export async function saveTimeEntry(workspaceId: string, entry: TimeEntry) {

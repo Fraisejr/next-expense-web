@@ -1025,13 +1025,38 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .timesheet-item-totals span, .timesheet-item-totals strong { display: block; }
 .timesheet-item-totals span { overflow: hidden; color: #c2d3cd; font-size: 8.5px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .timesheet-item-totals strong { margin-top: 6px; font-family: 'DM Mono', monospace; font-size: 16px; font-weight: 500; }
+.timesheet-weekly-summary { min-width: 0; display: grid; grid-template-columns: 230px minmax(0, 1fr); overflow: hidden; background: #fff; border: 1px solid #dfe3dc; border-radius: 10px; box-shadow: 0 5px 17px rgba(36, 77, 69, .06); }
+.timesheet-weekly-heading { display: flex; align-items: center; gap: 10px; padding: 16px 20px; background: #f0f3ee; }
+.timesheet-weekly-heading > svg { flex: 0 0 auto; color: #47766b; }
+.timesheet-weekly-heading span, .timesheet-weekly-heading small { display: block; }
+.timesheet-weekly-heading small { margin-top: 3px; color: var(--muted); font-size: 7.5px; }
+.timesheet-weekly-totals { min-width: 0; display: flex; overflow-x: auto; }
+.timesheet-weekly-totals > div { min-width: 112px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-content: center; padding: 12px 16px; border-left: 1px solid #e5e8e1; }
+.timesheet-weekly-totals span { color: #59655f; font-size: 8.5px; font-weight: 800; }
+.timesheet-weekly-totals small { grid-column: 1; margin-top: 3px; color: #8b918b; font-size: 7.5px; }
+.timesheet-weekly-totals strong { grid-column: 2; grid-row: 1 / span 2; align-self: center; margin-left: 13px; color: #294f46; font-family: 'DM Mono', monospace; font-size: 14px; font-weight: 600; }
 .timesheet-panel { min-width: 0; padding: 0; overflow: hidden; }
 .timesheet-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 22px 24px 19px; }
 .timesheet-heading h2 { margin-top: 4px; font-size: 25px; }
 .timesheet-heading p { margin-top: 6px; color: var(--muted); font-size: 9px; }
+.timesheet-heading-actions { display: flex; align-items: center; gap: 8px; }
 .time-code-add { min-width: 340px; display: flex; gap: 8px; }
 .time-code-add input { min-width: 0; flex: 1; height: 38px; padding: 0 11px; color: var(--ink); background: #fff; border: 1px solid #d9dbd4; border-radius: 7px; font-size: 10.5px; }
 .time-code-add .primary-button { height: 38px; padding-inline: 12px; white-space: nowrap; }
+.timesheet-reorder-button { height: 38px; padding-inline: 11px; }
+.time-code-reorder-panel { padding: 0 24px 19px; }
+.time-code-reorder-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; background: #edf1ec; border: 1px solid #dce2da; border-radius: 8px 8px 0 0; }
+.time-code-reorder-heading p { display: flex; align-items: center; gap: 7px; color: #617169; font-size: 8.5px; font-weight: 700; }
+.time-code-reorder-heading > div { display: flex; gap: 7px; }
+.time-code-reorder-heading button { height: 32px; padding: 6px 10px; font-size: 8.5px; }
+.time-code-reorder-list { border: 1px solid #dce2da; border-top: 0; border-radius: 0 0 8px 8px; overflow: hidden; }
+.time-code-reorder-list > div { display: grid; grid-template-columns: 22px minmax(0, 1fr) 30px 30px; align-items: center; gap: 7px; min-height: 46px; padding: 6px 10px; background: #fff; border-bottom: 1px solid #e6e8e2; cursor: grab; transition: opacity .15s, background .15s; }
+.time-code-reorder-list > div:last-child { border-bottom: 0; }
+.time-code-reorder-list > div:hover { background: #fafaf6; }
+.time-code-reorder-list > div.dragging { opacity: .42; background: #e5ece8; }
+.time-code-reorder-list > div > svg { color: #8b928b; }
+.time-code-reorder-list strong { font-size: 10px; }
+.time-code-reorder-list .icon-button { width: 28px; height: 28px; background: #f7f7f2; }
 .timesheet-table-wrap { max-width: 100%; overflow-x: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .timesheet-table { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; background: #fff; }
 .timesheet-table th, .timesheet-table td { height: 62px; padding: 5px; border-right: 1px solid #e7e8e2; border-bottom: 1px solid #e7e8e2; text-align: center; }
@@ -1051,6 +1076,19 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .timesheet-table tfoot th, .timesheet-table tfoot td { height: 42px; color: #35594f; background: #e9eee9; border-bottom: 0; font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 600; }
 .timesheet-table tfoot th { font-family: 'Manrope', sans-serif; font-size: 8px; letter-spacing: .06em; text-transform: uppercase; }
 .timesheet-table tfoot td.weekend { background: #e8e5df; }
+.time-comments { margin: 20px 24px 4px; padding: 18px; background: #f2f3ee; border: 1px solid #dfe2da; border-radius: 9px; }
+.time-comments-heading { display: flex; align-items: flex-start; gap: 11px; }
+.time-comments-heading > svg { flex: 0 0 auto; margin-top: 2px; color: #47766b; }
+.time-comments-heading h3 { margin-top: 3px; font-family: 'Newsreader', serif; font-size: 19px; }
+.time-comments-heading p { margin-top: 4px; color: var(--muted); font-size: 8.5px; }
+.time-comment-list { display: grid; gap: 10px; margin-top: 14px; }
+.time-comment-field { display: grid; grid-template-columns: 180px minmax(0, 1fr); align-items: start; gap: 12px; }
+.time-comment-field > span { min-width: 0; padding-top: 9px; }
+.time-comment-field strong, .time-comment-field small { display: block; }
+.time-comment-field strong { overflow: hidden; font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.time-comment-field small { margin-top: 4px; color: #7e867f; font-size: 7.5px; }
+.time-comment-field textarea { width: 100%; min-height: 58px; padding: 9px 10px; resize: vertical; color: var(--ink); background: #fff; border: 1px solid #d7dbd3; border-radius: 7px; outline: 0; font: inherit; font-size: 9.5px; line-height: 1.5; }
+.time-comment-field textarea:focus { border-color: #7d9d93; box-shadow: 0 0 0 2px rgb(99 143 131 / 12%); }
 .time-entry-cell { display: grid; grid-template-columns: 17px 32px 17px; align-items: center; justify-content: center; gap: 1px; }
 .time-entry-cell button { width: 17px; height: 25px; display: grid; place-items: center; padding: 0; color: #678078; background: transparent; border: 0; border-radius: 4px; cursor: pointer; opacity: .55; transition: opacity .15s, background .15s; }
 .time-entry-cell:hover button, .time-entry-cell:focus-within button { opacity: 1; }
@@ -1186,8 +1224,16 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .settings-backup-grid { grid-template-columns: 1fr; }
   .timesheet-summary { grid-template-columns: 1fr; }
   .timesheet-item-totals > div:first-child { border-left: 0; }
+  .timesheet-weekly-summary { grid-template-columns: 1fr; }
+  .timesheet-weekly-totals > div:first-child { border-left: 0; }
   .timesheet-heading { align-items: stretch; flex-direction: column; }
+  .timesheet-heading-actions { align-items: stretch; flex-direction: column; }
   .time-code-add { min-width: 0; }
+  .timesheet-reorder-button { width: 100%; }
+  .time-code-reorder-heading { align-items: flex-start; flex-direction: column; }
+  .time-code-reorder-heading > div { width: 100%; }
+  .time-code-reorder-heading > div button { flex: 1; }
+  .time-comment-field { grid-template-columns: 135px minmax(0, 1fr); }
   .fx-rate-add { grid-template-columns: 1fr 1fr; }
   .fx-rate-add label:nth-child(3) { grid-column: 1 / -1; }
   .fx-rate-add > .primary-button { grid-column: 1 / -1; }
@@ -1291,6 +1337,11 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .panel { padding: 16px; }
   .timesheet-panel { padding: 0; }
   .timesheet-heading { padding: 18px 16px 15px; }
+  .time-code-reorder-panel { padding: 0 16px 15px; }
+  .time-comments { margin: 16px 16px 3px; padding: 14px; }
+  .time-comment-field { grid-template-columns: 1fr; gap: 5px; }
+  .time-comment-field > span { display: flex; align-items: center; justify-content: space-between; padding-top: 0; }
+  .time-comment-field small { margin-top: 0; }
   .time-code-add { display: grid; grid-template-columns: 1fr auto; }
   .time-code-add .primary-button { padding-inline: 10px; font-size: 0; gap: 0; }
   .category-appearance-row { grid-template-columns: 1fr; }

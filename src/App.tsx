@@ -2,14 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import {
   ArrowLeftRight, ArrowRight, Banknote, BriefcaseBusiness,
   BarChart3, BriefcaseMedical, CalendarDays, CarFront, ChevronDown, ChevronLeft, ChevronRight, CircleHelp,
-  ArrowDown, ArrowUp, Check, CircleAlert, CircleCheck, Clock3, CreditCard, Download, Dumbbell, Eye, EyeOff, FileCheck2, GripVertical, HeartHandshake, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, Minus, Pencil, Plane, Plus, ReceiptText, Search, Settings, Trash2, Upload,
+  ArrowDown, ArrowUp, Check, CircleAlert, CircleCheck, Clock3, CreditCard, Download, Dumbbell, Eye, EyeOff, FileCheck2, GripVertical, HeartHandshake, House, LayoutDashboard, Link2, LoaderCircle, LogOut, Menu, MessageSquareText, Minus, Pencil, Plane, Plus, ReceiptText, Search, Settings, Trash2, Upload,
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTimeCode, createTransaction, deleteAllUnusedPayees, deleteBudget, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTimeEntries, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveTimeEntry, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTimeCode, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
+import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTimeCode, createTransaction, deleteAllUnusedPayees, deleteBudget, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTimeComments, loadTimeEntries, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBankSync, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveTimeCodeOrder, saveTimeComment, saveTimeEntry, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTimeCode, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type BankSyncPayload, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
 import { convertMinor } from './currency'
-import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, TimeCode, TimeEntry, Transaction, YearlyFinancialPlan } from './types'
+import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, TimeCode, TimeComment, TimeEntry, Transaction, YearlyFinancialPlan } from './types'
 
 type Page = 'overview' | 'transactions' | 'payees' | 'reports' | 'accounts' | 'timesheet' | 'settings'
 type ReportView = 'profit-loss' | 'net-worth'
@@ -497,6 +497,19 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   async function changeTimeCode(code: TimeCode) {
     await updateTimeCode(workspace.workspaceId, code)
     setData((current) => ({ ...current, timeCodes: current.timeCodes.map((item) => item.id === code.id ? code : item) }))
+  }
+
+  async function reorderTimeCodes(timeCodeIds: string[]) {
+    const requestedIds = new Set(timeCodeIds)
+    const reordered = [
+      ...timeCodeIds.flatMap((id) => {
+        const code = data.timeCodes.find((item) => item.id === id)
+        return code ? [code] : []
+      }),
+      ...data.timeCodes.filter((code) => !requestedIds.has(code.id)),
+    ].map((code, sortOrder) => ({ ...code, sortOrder }))
+    await saveTimeCodeOrder(workspace.workspaceId, reordered.map((code) => code.id))
+    setData((current) => ({ ...current, timeCodes: reordered }))
   }
 
   function selectMonth(month: string) {
@@ -1338,7 +1351,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <SettingsPage workspaceId={workspace.workspaceId} workspaceName={workspace.workspaceName} defaultCurrency={workspace.defaultCurrency} accounts={data.accounts} fxRates={data.fxRates} onSaveFxRate={saveExchangeRate} onDeleteFxRate={removeExchangeRate} />
         )}
         {page === 'timesheet' && (
-          <TimesheetPage workspaceId={workspace.workspaceId} month={selectedMonthKey} codes={data.timeCodes} onAddCode={addTimeCode} onUpdateCode={changeTimeCode} />
+          <TimesheetPage workspaceId={workspace.workspaceId} month={selectedMonthKey} codes={data.timeCodes} onAddCode={addTimeCode} onUpdateCode={changeTimeCode} onReorderCodes={reorderTimeCodes} />
         )}
         {selectedAccount && (
           <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onPostTransfer={postBankImportAsTransfer} onRematchPayees={() => rematchBankImportPayees(selectedAccount.id)} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onAddAlternativeName={(sourceName, payeeId) => addPayeeAlternativeForReview(sourceName, payeeId, selectedAccount.id)} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingAccountId === selectedAccount.id} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
@@ -1510,19 +1523,25 @@ function downloadWorkspaceBackup(backup: WorkspaceBackup, prefix?: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
-function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode }: {
+function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode, onReorderCodes }: {
   workspaceId: string
   month: string
   codes: TimeCode[]
   onAddCode: (name: string) => Promise<void>
   onUpdateCode: (code: TimeCode) => Promise<void>
+  onReorderCodes: (timeCodeIds: string[]) => Promise<void>
 }) {
   const [entries, setEntries] = useState<TimeEntry[]>([])
+  const [comments, setComments] = useState<TimeComment[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [newCodeName, setNewCodeName] = useState('')
   const [addingCode, setAddingCode] = useState(false)
   const [showHidden, setShowHidden] = useState(false)
+  const [reordering, setReordering] = useState(false)
+  const [orderedIds, setOrderedIds] = useState<string[]>([])
+  const [draggedId, setDraggedId] = useState('')
+  const [savingOrder, setSavingOrder] = useState(false)
   const saveQueue = useRef(new Map<string, Promise<void>>())
   const monthDate = useMemo(() => fromMonthKey(month) ?? new Date(), [month])
   const dayCount = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate()
@@ -1530,26 +1549,90 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode }: {
     const day = index + 1
     const date = `${month}-${String(day).padStart(2, '0')}`
     const value = new Date(`${date}T12:00:00`)
-    return { day, date, label: new Intl.DateTimeFormat('en', { weekday: 'short' }).format(value).slice(0, 2), weekend: value.getDay() === 0 || value.getDay() === 6 }
+    const week = isoWeekForDate(date)
+    return { day, date, label: new Intl.DateTimeFormat('en', { weekday: 'short' }).format(value).slice(0, 2), weekend: value.getDay() === 0 || value.getDay() === 6, ...week }
   }), [dayCount, month])
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError('')
-    loadTimeEntries(workspaceId, month)
-      .then((loaded) => { if (!cancelled) setEntries(loaded) })
+    Promise.all([loadTimeEntries(workspaceId, month), loadTimeComments(workspaceId, month)])
+      .then(([loadedEntries, loadedComments]) => {
+        if (cancelled) return
+        setEntries(loadedEntries)
+        setComments(loadedComments)
+      })
       .catch((cause) => { if (!cancelled) setError(getErrorMessage(cause, 'Could not load this timesheet.')) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [month, workspaceId])
 
   const entryMap = useMemo(() => new Map(entries.map((entry) => [`${entry.codeId}:${entry.date}`, entry.hours])), [entries])
+  const commentMap = useMemo(() => new Map(comments.map((comment) => [comment.codeId, comment.comment])), [comments])
   const visibleCodes = codes.filter((code) => !code.hiddenFromMonth || code.hiddenFromMonth > month).sort((a, b) => a.sortOrder - b.sortOrder)
   const hiddenCodes = codes.filter((code) => code.hiddenFromMonth && code.hiddenFromMonth <= month).sort((a, b) => a.sortOrder - b.sortOrder)
+  const displayedCodes = reordering ? orderedIds.flatMap((id) => {
+    const code = visibleCodes.find((item) => item.id === id)
+    return code ? [code] : []
+  }) : visibleCodes
   const totalForCode = (codeId: string) => entries.filter((entry) => entry.codeId === codeId).reduce((sum, entry) => sum + entry.hours, 0)
   const totalForDate = (date: string) => entries.reduce((sum, entry) => sum + (entry.date === date ? entry.hours : 0), 0)
   const monthTotal = entries.reduce((sum, entry) => sum + entry.hours, 0)
+  const weeklyTotals = useMemo(() => {
+    const totals = new Map<string, { weekNumber: number; weekYear: number; startDay: number; endDay: number; hours: number }>()
+    for (const day of days) {
+      const current = totals.get(day.weekKey) ?? { weekNumber: day.weekNumber, weekYear: day.weekYear, startDay: day.day, endDay: day.day, hours: 0 }
+      current.endDay = day.day
+      current.hours += entries.reduce((sum, entry) => sum + (entry.date === day.date ? entry.hours : 0), 0)
+      totals.set(day.weekKey, current)
+    }
+    return [...totals.values()]
+  }, [days, entries])
+
+  function beginReordering() {
+    setOrderedIds(visibleCodes.map((code) => code.id))
+    setReordering(true)
+  }
+
+  function moveCode(codeId: string, offset: number) {
+    setOrderedIds((current) => {
+      const from = current.indexOf(codeId)
+      const to = from + offset
+      if (from < 0 || to < 0 || to >= current.length) return current
+      const next = [...current]
+      next.splice(from, 1)
+      next.splice(to, 0, codeId)
+      return next
+    })
+  }
+
+  function dropCode(targetId: string) {
+    if (!draggedId || draggedId === targetId) return
+    setOrderedIds((current) => {
+      const from = current.indexOf(draggedId)
+      const to = current.indexOf(targetId)
+      if (from < 0 || to < 0) return current
+      const next = [...current]
+      next.splice(from, 1)
+      next.splice(to, 0, draggedId)
+      return next
+    })
+    setDraggedId('')
+  }
+
+  async function saveOrder() {
+    setSavingOrder(true)
+    setError('')
+    try {
+      await onReorderCodes(orderedIds)
+      setReordering(false)
+    } catch (cause) {
+      setError(getErrorMessage(cause, 'Could not save the time code order.'))
+    } finally {
+      setSavingOrder(false)
+    }
+  }
 
   function changeEntry(codeId: string, date: string, rawHours: number) {
     const hours = Math.min(24, Math.max(0, Math.round(rawHours)))
@@ -1592,27 +1675,59 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode }: {
     }
   }
 
+  async function changeComment(codeId: string, comment: string) {
+    const normalized = comment.normalize('NFKC').trim()
+    setError('')
+    try {
+      await saveTimeComment(workspaceId, { codeId, month, comment: normalized })
+      setComments((current) => normalized
+        ? [...current.filter((item) => item.codeId !== codeId), { codeId, month, comment: normalized }]
+        : current.filter((item) => item.codeId !== codeId))
+    } catch (cause) {
+      setError(getErrorMessage(cause, 'Could not save the monthly comment.'))
+      throw cause
+    }
+  }
+
   return <div className="page-content timesheet-page">
     <section className="timesheet-summary">
       <div><span className="eyebrow">Month total</span><strong>{formatHours(monthTotal)}</strong><small>across {visibleCodes.length} visible {visibleCodes.length === 1 ? 'item' : 'items'}</small></div>
-      <div className="timesheet-item-totals">{visibleCodes.map((code) => <div key={code.id}><span>{code.name}</span><strong>{formatHours(totalForCode(code.id))}</strong></div>)}</div>
+      <div className="timesheet-item-totals">{displayedCodes.map((code) => <div key={code.id}><span>{code.name}</span><strong>{formatHours(totalForCode(code.id))}</strong></div>)}</div>
+    </section>
+
+    <section className="timesheet-weekly-summary" aria-label="Weekly hour totals">
+      <div className="timesheet-weekly-heading"><CalendarDays size={17} /><div><span className="eyebrow">Weekly totals</span><small>Monday–Sunday · selected month only</small></div></div>
+      <div className="timesheet-weekly-totals">{weeklyTotals.map((week) => <div key={`${week.weekYear}-${week.weekNumber}`}><span>Week {week.weekNumber}</span><small>{week.startDay === week.endDay ? week.startDay : `${week.startDay}–${week.endDay}`} {new Intl.DateTimeFormat('en', { month: 'short' }).format(monthDate)}</small><strong>{formatHours(week.hours)}</strong></div>)}</div>
     </section>
 
     <section className="panel timesheet-panel">
       <div className="timesheet-heading">
         <div><span className="eyebrow">Daily hours</span><h2>{monthName.format(monthDate)}</h2><p>Enter whole hours directly, or use − and + to adjust one hour at a time. Weekends are shaded.</p></div>
-        <form className="time-code-add" onSubmit={(event) => void addCode(event)}><input aria-label="New time code name" value={newCodeName} onChange={(event) => setNewCodeName(event.target.value)} placeholder="Add a code…" /><button className="primary-button" disabled={addingCode || !newCodeName.trim()}><Plus size={16} />{addingCode ? 'Adding…' : 'Add code'}</button></form>
+        <div className="timesheet-heading-actions">
+          <form className="time-code-add" onSubmit={(event) => void addCode(event)}><input aria-label="New time code name" value={newCodeName} onChange={(event) => setNewCodeName(event.target.value)} placeholder="Add a code…" /><button className="primary-button" disabled={addingCode || !newCodeName.trim()}><Plus size={16} />{addingCode ? 'Adding…' : 'Add code'}</button></form>
+          {!reordering && visibleCodes.length > 1 && <button type="button" className="secondary-button timesheet-reorder-button" onClick={beginReordering}><GripVertical size={16} />Reorder</button>}
+        </div>
       </div>
+
+      {reordering && <div className="time-code-reorder-panel">
+        <div className="time-code-reorder-heading"><p><GripVertical size={15} />Drag items into place, or use the arrow buttons.</p><div><button type="button" className="secondary-button" disabled={savingOrder} onClick={() => { setReordering(false); setDraggedId('') }}>Cancel</button><button type="button" className="primary-button" disabled={savingOrder} onClick={() => void saveOrder()}><Check size={16} />{savingOrder ? 'Saving…' : 'Save order'}</button></div></div>
+        <div className="time-code-reorder-list">{displayedCodes.map((code, index) => <div key={code.id} className={draggedId === code.id ? 'dragging' : ''} draggable onDragStart={() => setDraggedId(code.id)} onDragEnd={() => setDraggedId('')} onDragOver={(event) => event.preventDefault()} onDrop={() => dropCode(code.id)}><GripVertical size={17} aria-hidden="true" /><strong>{code.name}</strong><button type="button" className="icon-button" disabled={index === 0 || savingOrder} onClick={() => moveCode(code.id, -1)} aria-label={`Move ${code.name} earlier`}><ArrowUp size={14} /></button><button type="button" className="icon-button" disabled={index === displayedCodes.length - 1 || savingOrder} onClick={() => moveCode(code.id, 1)} aria-label={`Move ${code.name} later`}><ArrowDown size={14} /></button></div>)}</div>
+      </div>}
 
       {loading ? <div className="timesheet-loading"><LoaderCircle size={18} />Loading hours…</div> : visibleCodes.length === 0 ? <div className="timesheet-empty"><Clock3 size={25} /><strong>No visible time codes</strong><span>Add your first code above to start reporting hours.</span></div> : <div className="timesheet-table-wrap">
         <table className="timesheet-table">
           <thead><tr><th className="time-code-column">Item</th>{days.map((day) => <th key={day.date} className={day.weekend ? 'weekend' : ''}><span>{day.label}</span><b>{day.day}</b></th>)}<th className="time-total-column">Total</th></tr></thead>
           <tbody>
-            {visibleCodes.map((code) => <tr key={code.id}><th><TimeCodeEditor code={code} month={month} onSave={updateCode} /></th>{days.map((day) => <td key={day.date} className={day.weekend ? 'weekend' : ''}><TimeEntryCell codeName={code.name} date={day.date} value={entryMap.get(`${code.id}:${day.date}`) ?? 0} onChange={(hours) => changeEntry(code.id, day.date, hours)} /></td>)}<td className="time-row-total">{formatHours(totalForCode(code.id))}</td></tr>)}
+            {displayedCodes.map((code) => <tr key={code.id}><th><TimeCodeEditor code={code} month={month} onSave={updateCode} /></th>{days.map((day) => <td key={day.date} className={day.weekend ? 'weekend' : ''}><TimeEntryCell codeName={code.name} date={day.date} value={entryMap.get(`${code.id}:${day.date}`) ?? 0} onChange={(hours) => changeEntry(code.id, day.date, hours)} /></td>)}<td className="time-row-total">{formatHours(totalForCode(code.id))}</td></tr>)}
           </tbody>
           <tfoot><tr><th>Daily total</th>{days.map((day) => <td key={day.date} className={day.weekend ? 'weekend' : ''}>{formatHours(totalForDate(day.date), true)}</td>)}<td>{formatHours(monthTotal)}</td></tr></tfoot>
         </table>
       </div>}
+
+      {!loading && displayedCodes.length > 0 && <section className="time-comments">
+        <div className="time-comments-heading"><MessageSquareText size={18} /><div><span className="eyebrow">Monthly comments</span><h3>What did you work on?</h3><p>These notes belong only to this item in {monthName.format(monthDate)}.</p></div></div>
+        <div className="time-comment-list">{displayedCodes.map((code) => <TimeCommentField key={code.id} code={code} value={commentMap.get(code.id) ?? ''} onSave={(comment) => changeComment(code.id, comment)} />)}</div>
+      </section>}
 
       {hiddenCodes.length > 0 && <div className="hidden-time-codes"><button type="button" onClick={() => setShowHidden((current) => !current)}><EyeOff size={15} />{hiddenCodes.length} hidden {hiddenCodes.length === 1 ? 'code' : 'codes'}<ChevronDown className={showHidden ? 'expanded' : ''} size={15} /></button>{showHidden && <div>{hiddenCodes.map((code) => <TimeCodeEditor key={code.id} code={code} month={month} hidden onSave={updateCode} />)}</div>}</div>}
       {error && <p className="timesheet-error" role="alert">{error}</p>}
@@ -1623,6 +1738,17 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode }: {
 function formatHours(hours: number, compact = false) {
   if (compact && hours === 0) return '—'
   return `${hours.toLocaleString(undefined, { maximumFractionDigits: 2 })}h`
+}
+
+function isoWeekForDate(date: string) {
+  const [year, month, day] = date.split('-').map(Number)
+  const value = new Date(Date.UTC(year, month - 1, day))
+  const weekday = value.getUTCDay() || 7
+  value.setUTCDate(value.getUTCDate() + 4 - weekday)
+  const weekYear = value.getUTCFullYear()
+  const yearStart = new Date(Date.UTC(weekYear, 0, 1))
+  const weekNumber = Math.ceil((((value.getTime() - yearStart.getTime()) / 86_400_000) + 1) / 7)
+  return { weekKey: `${weekYear}-W${String(weekNumber).padStart(2, '0')}`, weekNumber, weekYear }
 }
 
 function TimeEntryCell({ codeName, date, value, onChange }: { codeName: string; date: string; value: number; onChange: (hours: number) => void }) {
@@ -1658,6 +1784,28 @@ function TimeCodeEditor({ code, month, hidden = false, onSave }: { code: TimeCod
     <input aria-label={`Rename ${code.name}`} value={name} disabled={saving} onChange={(event) => setName(event.target.value)} onBlur={() => void saveName()} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }} />
     <button type="button" disabled={saving} onClick={() => void setHidden()} title={hidden ? 'Show this code again' : `Hide from ${month} onward`}>{hidden ? <Eye size={14} /> : <EyeOff size={14} />}<span>{hidden ? 'Restore' : 'Hide'}</span></button>
   </div>
+}
+
+function TimeCommentField({ code, value, onSave }: { code: TimeCode; value: string; onSave: (comment: string) => Promise<void> }) {
+  const [draft, setDraft] = useState(value)
+  const [status, setStatus] = useState<'saving' | 'saved' | ''>('')
+  useEffect(() => setDraft(value), [value])
+
+  async function commit() {
+    const normalized = draft.normalize('NFKC').trim()
+    if (normalized === value) return
+    setStatus('saving')
+    try {
+      await onSave(normalized)
+      setDraft(normalized)
+      setStatus('saved')
+      window.setTimeout(() => setStatus(''), 1400)
+    } catch {
+      setStatus('')
+    }
+  }
+
+  return <label className="time-comment-field"><span><strong>{code.name}</strong><small>{status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved' : `${draft.length}/5000`}</small></span><textarea maxLength={5000} value={draft} onChange={(event) => { setDraft(event.target.value); setStatus('') }} onBlur={() => void commit()} placeholder="DevOps codes, tickets, or a short summary…" /></label>
 }
 
 function SettingsPage({ workspaceId, workspaceName, defaultCurrency, accounts, fxRates, onSaveFxRate, onDeleteFxRate }: {
