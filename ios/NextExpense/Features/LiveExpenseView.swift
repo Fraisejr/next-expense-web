@@ -67,10 +67,20 @@ struct LiveExpenseView: View {
             Form {
                 Section {
                     Label("Next Expense", systemImage: "chart.bar.fill").font(.title2.bold())
-                    Text("Sign in with the email and password you use on the web to review your bank transactions.")
+                    Text("Sign in with the same account you use on the web to review your bank transactions.")
                         .foregroundStyle(.secondary)
                 }
-                Section("Your account") {
+                Section {
+                    Button {
+                        Task { await store.signInWithGoogle() }
+                    } label: {
+                        Text("Continue with Google")
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity, minHeight: 32)
+                    }
+                    .disabled(store.busy)
+                }
+                Section("Or use email and password") {
                     TextField("Email", text: $email).textContentType(.username).keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                     SecureField("Password", text: $password).textContentType(.password)
@@ -84,7 +94,7 @@ struct LiveExpenseView: View {
                 if store.busy { ProgressView("Connecting…") }
                 if let error = store.errorMessage { Text(error).foregroundStyle(.red) }
                 Section {
-                    Text("Use an existing email/password account. Google sign-in and bank linking are available in the web app.")
+                    Text("Use the same Google account as the website. You don’t need to create a password.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

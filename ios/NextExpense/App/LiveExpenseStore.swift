@@ -1,3 +1,4 @@
+import AuthenticationServices
 import Combine
 import Foundation
 
@@ -56,6 +57,20 @@ final class LiveExpenseStore: ObservableObject {
             try await api.signIn(email: email.trimmingCharacters(in: .whitespacesAndNewlines), password: password)
             signedIn = true
             try await loadWorkspaces()
+        } catch { handle(error) }
+    }
+
+    func signInWithGoogle() async {
+        guard !busy else { return }
+        busy = true
+        errorMessage = nil
+        defer { busy = false }
+        do {
+            try await api.signInWithGoogle(using: GoogleAuthenticationBrowser())
+            signedIn = true
+            try await loadWorkspaces()
+        } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
+            // Closing the system sign-in sheet is a normal cancellation.
         } catch { handle(error) }
     }
 

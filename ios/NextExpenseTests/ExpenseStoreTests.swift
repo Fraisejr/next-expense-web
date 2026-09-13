@@ -287,3 +287,105 @@ final class LiveReviewTests: XCTestCase {
         XCTAssertEqual(requests.count, before)
     }
 }
+
+@MainActor
+private final class MockGoogleBrowser: GoogleAuthenticating {
+    var callback: (() -> URL)!
+    func authenticate(_ url: URL, callbackScheme: String) async throws -> URL {
+        XCTAssertEqual(url.host, "accounts.google.com")
+        XCTAssertEqual(callbackScheme, GoogleSignInAttempt.scheme)
+        return callback()
+    }
+}
+
+@MainActor
+final class GoogleSignInTests: XCTestCase {
+    func testRejectedCallbackReportsSetupProblemWithoutOpeningGoogle() async throws {
+        let vault = MemoryVault()
+        let options = URLSessionConfiguration.ephemeral
+        options.protocolClasses = [MockNeonProtocol.self]
+        MockNeonProtocol.respond = { request in
+            XCTAssertEqual(request.url?.lastPathComponent, "social")
+            return (403, [:], ["code": "INVALID_CALLBACKURL"])
+        }
+        let api = NeonAPI(session: URLSession(configuration: options), vault: vault)
+        let browser = MockGoogleBrowser()
+        browser.callback = { XCTFail("Browser must not open after a rejected callback"); return URL(string: "https://example.com")! }
+        do {
+            try await api.signInWithGoogle(using: browser)
+            XCTFail("Expected callback setup failure")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("do not need to create a password"))
+        }
+        XCTAssertNil(vault.saved)
+    }
+
+    func testCallbackRequiresMatchingStateHostAndSingleVerifier() throws {
+        let attempt = GoogleSignInAttempt()
+        let good = attempt.callbackURL.absoluteString + "&neon_auth_session_verifier=one-time-verifier"
+        XCTAssertEqual(try attempt.verifier(from: URL(string: good)!), "one-time-verifier")
+        for invalid in [
+            good.replacingOccurrences(of: attempt.state, with: "wrong-state"),
+            good.replacingOccurrences(of: "://auth/", with: "://other/"),
+            good + "&state=" + attempt.state,
+            good + "&neon_auth_session_verifier=another",
+            good + "&error=access_denied",
+            attempt.callbackURL.absoluteString,
+        ] {
+            XCTAssertThrowsError(try attempt.verifier(from: URL(string: invalid)!))
+        }
+        XCTAssertNotEqual(attempt.state, GoogleSignInAttempt().state)
+    }
+
+    func testGoogleVerifierExchangedWithOriginalChallengeThenRestores() async throws {
+        let vault = MemoryVault()
+        let options = URLSessionConfiguration.ephemeral
+        options.protocolClasses = [MockNeonProtocol.self]
+        options.httpShouldSetCookies = false
+        var returnURL: URL?
+        var exchanges = 0
+        MockNeonProtocol.respond = { request in
+            switch request.url!.lastPathComponent {
+            case "social":
+                var data = request.httpBody ?? Data()
+                if let stream = request.httpBodyStream {
+                    stream.open(); defer { stream.close() }
+                    var buffer = [UInt8](repeating: 0, count: 1024)
+                    while stream.hasBytesAvailable {
+                        let count = stream.read(&buffer, maxLength: buffer.count)
+                        if count <= 0 { break }
+                        data.append(buffer, count: count)
+                    }
+                }
+                let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                XCTAssertEqual(body["provider"] as? String, "google")
+                XCTAssertEqual(body["disableRedirect"] as? Bool, true)
+                let callback = try XCTUnwrap(body["callbackURL"] as? String)
+                XCTAssertEqual(body["errorCallbackURL"] as? String, callback)
+                returnURL = URL(string: callback + "&neon_auth_session_verifier=one-use-code")
+                return (200, ["Set-Cookie": "neon-auth.session_challenge=challenge; Secure; Path=/; Max-Age=600"], ["url": "https://accounts.google.com/o/oauth2/v2/auth?state=provider-state"])
+            case "get-session":
+                let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                if query.contains(where: { $0.name == "neon_auth_session_verifier" }) {
+                    exchanges += 1
+                    XCTAssertEqual(query.first?.value, "one-use-code")
+                    XCTAssertTrue(request.value(forHTTPHeaderField: "Cookie")?.contains("neon-auth.session_challenge=challenge") == true)
+                } else {
+                    XCTAssertTrue(request.value(forHTTPHeaderField: "Cookie")?.contains("session=restored-session") == true)
+                }
+                return (200, ["Set-Cookie": "session=restored-session; Secure; Path=/; Max-Age=86400", "set-auth-jwt": "google-jwt"], ["session": ["id": "same-web-user"]])
+            default: XCTFail("Unexpected endpoint"); return (404, [:], [:])
+            }
+        }
+        let api = NeonAPI(session: URLSession(configuration: options), vault: vault)
+        let browser = MockGoogleBrowser()
+        browser.callback = { returnURL! }
+        try await api.signInWithGoogle(using: browser)
+        XCTAssertEqual(exchanges, 1)
+        XCTAssertNotNil(vault.saved)
+        let restored = NeonAPI(session: URLSession(configuration: options), vault: vault)
+        XCTAssertTrue(try restored.restore())
+        try await restored.refreshToken()
+        XCTAssertEqual(exchanges, 1, "One-time verifiers must not be replayed during restoration")
+    }
+}

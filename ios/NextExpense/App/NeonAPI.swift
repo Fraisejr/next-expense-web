@@ -1,3 +1,5 @@
+import AuthenticationServices
+import UIKit
 import Foundation
 import Security
 
@@ -88,6 +90,31 @@ final class NeonAPI {
         try await refreshToken()
     }
 
+    func signInWithGoogle(using browser: GoogleAuthenticating) async throws {
+        try clearSession()
+        let attempt = GoogleSignInAttempt()
+        do {
+            let (data, _) = try await auth("sign-in/social", method: "POST", body: [
+                "provider": "google", "callbackURL": attempt.callbackURL.absoluteString,
+                "errorCallbackURL": attempt.callbackURL.absoluteString, "disableRedirect": true
+            ])
+            struct Authorization: Decodable { let url: URL }
+            let authorization = try JSONDecoder().decode(Authorization.self, from: data).url
+            guard authorization.scheme == "https",
+                  authorization.host == "accounts.google.com" || authorization.host == configuration.authURL.host else {
+                throw MobileAPIError(message: "The sign-in server returned an unexpected Google address.", status: 0)
+            }
+            let callback = try await browser.authenticate(authorization, callbackScheme: GoogleSignInAttempt.scheme)
+            let verifier = try attempt.verifier(from: callback)
+            // The verifier is bound to the challenge cookie from sign-in/social.
+            // Exchange through the same client; the browser's cookies are not copied.
+            try await refreshToken(verifier: verifier)
+        } catch {
+            try? clearSession()
+            throw error
+        }
+    }
+
     func clearSession() throws {
         cookies = []
         jwt = nil
@@ -101,8 +128,9 @@ final class NeonAPI {
         if let failure { throw failure }
     }
 
-    func refreshToken() async throws {
-        let (data, response) = try await auth("get-session")
+    func refreshToken(verifier: String? = nil) async throws {
+        let query = verifier.map { [URLQueryItem(name: "neon_auth_session_verifier", value: $0)] } ?? []
+        let (data, response) = try await auth("get-session", query: query)
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any], object["session"] is [String: Any] else {
             try clearSession()
             throw MobileAPIError(message: "Your session expired. Sign in again.", status: 401)
@@ -139,8 +167,10 @@ final class NeonAPI {
         return try decoder.decode(T.self, from: data)
     }
 
-    private func auth(_ path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> (Data, HTTPURLResponse) {
-        var request = URLRequest(url: configuration.authURL.appendingPathComponent(path))
+    private func auth(_ path: String, query: [URLQueryItem] = [], method: String = "GET", body: [String: Any]? = nil) async throws -> (Data, HTTPURLResponse) {
+        var components = URLComponents(url: configuration.authURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
+        components.queryItems = query.isEmpty ? nil : query
+        var request = URLRequest(url: components.url!)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("https://\(configuration.authURL.host!)", forHTTPHeaderField: "Origin")
@@ -170,8 +200,79 @@ final class NeonAPI {
         guard let response = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         guard (200..<300).contains(response.statusCode) else {
             let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            throw MobileAPIError(message: object?["message"] as? String ?? "The server could not complete the request (\(response.statusCode)).", status: response.statusCode)
+            let message: String
+            if object?["code"] as? String == "INVALID_CALLBACKURL" {
+                message = "Google sign-in needs the iOS callback enabled in the server settings. You do not need to create a password."
+            } else {
+                message = object?["message"] as? String ?? object?["code"] as? String ?? "The server could not complete the request (\(response.statusCode))."
+            }
+            throw MobileAPIError(message: message, status: response.statusCode)
         }
         return (data, response)
     }
+}
+
+/// A fresh callback state prevents accepting a callback from another sign-in attempt.
+struct GoogleSignInAttempt {
+    static let scheme = "com.fraisejr.nextexpense"
+    let state = UUID().uuidString
+    var callbackURL: URL {
+        var url = URLComponents(string: "\(Self.scheme)://auth/callback")!
+        url.queryItems = [.init(name: "state", value: state)]
+        return url.url!
+    }
+    func verifier(from callback: URL) throws -> String {
+        let url = URLComponents(url: callback, resolvingAgainstBaseURL: false)
+        let items = url?.queryItems ?? []
+        let states = items.filter { $0.name == "state" }
+        guard url?.scheme == Self.scheme, url?.host == "auth", url?.path == "/callback",
+              url?.user == nil, url?.password == nil, url?.port == nil,
+              states.count == 1, states.first?.value == state else {
+            throw MobileAPIError(message: "This sign-in response does not match your request. Please try again.", status: 0)
+        }
+        guard !items.contains(where: { $0.name == "error" }) else {
+            throw MobileAPIError(message: "Google sign-in was not completed. Please try again.", status: 0)
+        }
+        let verifiers = items.filter { $0.name == "neon_auth_session_verifier" }
+        guard verifiers.count == 1, let verifier = verifiers.first?.value, !verifier.isEmpty else {
+            throw MobileAPIError(message: "The sign-in server did not return a session. Please try again.", status: 0)
+        }
+        return verifier
+    }
+}
+
+@MainActor
+protocol GoogleAuthenticating {
+    func authenticate(_ url: URL, callbackScheme: String) async throws -> URL
+}
+
+@MainActor
+final class GoogleAuthenticationBrowser: NSObject, GoogleAuthenticating, ASWebAuthenticationPresentationContextProviding {
+    private var session: ASWebAuthenticationSession?
+    private var anchor: UIWindow?
+
+    func authenticate(_ url: URL, callbackScheme: String) async throws -> URL {
+        guard session == nil else { throw MobileAPIError(message: "Sign-in is already open.", status: 0) }
+        guard let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+            .filter({ $0.activationState == .foregroundActive }).flatMap({ $0.windows }).first(where: { $0.isKeyWindow }) else {
+            throw MobileAPIError(message: "Open the app to continue signing in.", status: 0)
+        }
+        anchor = window
+        defer { session = nil; anchor = nil }
+        return try await withCheckedThrowingContinuation { continuation in
+            let session = ASWebAuthenticationSession(url: url, callbackURLScheme: callbackScheme) { callback, error in
+                if let error { continuation.resume(throwing: error) }
+                else if let callback { continuation.resume(returning: callback) }
+                else { continuation.resume(throwing: URLError(.badServerResponse)) }
+            }
+            session.presentationContextProvider = self
+            // Reuse the user's Safari Google login, with the standard iOS consent prompt.
+            session.prefersEphemeralWebBrowserSession = false
+            self.session = session
+            if !session.start() {
+                continuation.resume(throwing: MobileAPIError(message: "Could not open Google sign-in. Please try again.", status: 0))
+            }
+        }
+    }
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor { anchor! }
 }
