@@ -160,4 +160,9 @@ Zero-value bank entries are retained as rejected review records with
 `decision_reason=zero_amount`. Their provider IDs and raw payload remain intact.
 A later nonzero update with the same ID reopens the entry for review; manual
 rejections remain rejected. Apply migration 065 before deploying this behavior.
+After applying schema migrations, use **Data API → Refresh schema cache** in
+Neon before deploying clients that reference new columns. The SQL
+`NOTIFY pgrst` alone did not refresh the managed Data API cache for migration
+065. Verify new columns through the Data API, including write-schema validation,
+before considering a migration deployed.
 Verify the transition policy with `npm run test:bank-policy`.

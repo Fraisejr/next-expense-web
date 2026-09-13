@@ -11,3 +11,6 @@ where status = 'pending' and amount_minor = 0
 
 notify pgrst, 'reload schema';
 commit;
+
+-- Deployment step: refresh the schema cache from Neon Data API controls.
+-- NOTIFY alone may not refresh the managed Data API; verify before deploying.
