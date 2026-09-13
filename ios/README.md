@@ -108,3 +108,8 @@ For a live acceptance check, use your own linked account and an intended pending
 transaction, then follow the five steps above. This requires an interactive
 sign-in; mocked integration tests do not establish production authentication or
 prove a particular live transaction was saved.
+
+The first report emphasizes spending pace: actual year-to-date expenses versus
+the combined annual goal prorated by calendar days elapsed, including today.
+It highlights the amount above or below this target and shows actual and target
+bars on the same scale. Leap years use 366 days. Net worth appears below it.

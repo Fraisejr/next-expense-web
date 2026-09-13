@@ -458,3 +458,27 @@ final class LiveReportsTests: XCTestCase {
         XCTAssertEqual(plan.combinedGoal, 60000)
     }
 }
+
+final class SpendingPaceTests: XCTestCase {
+    func testPaceUsesCalendarDaysIncludingToday() throws {
+        let first = try XCTUnwrap(SpendingPace(throughDate: "2026-01-01", annualGoal: 365000, expenses: 1500))
+        XCTAssertEqual(first.elapsedDays, 1)
+        XCTAssertEqual(first.daysInYear, 365)
+        XCTAssertEqual(first.target, 1000)
+        XCTAssertEqual(first.variance, 500)
+        let end = try XCTUnwrap(SpendingPace(throughDate: "2026-12-31", annualGoal: 365000, expenses: 350000))
+        XCTAssertEqual(end.target, 365000)
+        XCTAssertEqual(end.variance, -15000)
+    }
+    func testLeapYearAndZeroGoal() throws {
+        let leap = try XCTUnwrap(SpendingPace(throughDate: "2024-02-29", annualGoal: 366000, expenses: 60000))
+        XCTAssertEqual(leap.daysInYear, 366)
+        XCTAssertEqual(leap.elapsedDays, 60)
+        XCTAssertEqual(leap.target, 60000)
+        XCTAssertEqual(leap.variance, 0)
+        let zero = try XCTUnwrap(SpendingPace(throughDate: "2026-09-13", annualGoal: 0, expenses: 500))
+        XCTAssertEqual(zero.target, 0)
+        XCTAssertEqual(zero.variance, 500)
+        XCTAssertNil(SpendingPace(throughDate: "invalid", annualGoal: 100, expenses: 0))
+    }
+}

@@ -50,6 +50,42 @@ struct LiveExpenseView: View {
                 if let report = store.reports {
                     Section {
                         VStack(alignment: .leading, spacing: 12) {
+                            Text("Expenses so far this year").font(.headline)
+                            if let goal = report.goal, let pace = SpendingPace(throughDate: report.throughDate, annualGoal: goal, expenses: report.expenses) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(pace.variance > 0 ? "Above year-to-date target" : pace.variance < 0 ? "Below year-to-date target" : "On year-to-date target")
+                                        .font(.headline)
+                                    Text(formattedMoney(abs(pace.variance), currency: report.currency))
+                                        .font(.system(.largeTitle, design: .rounded).bold()).minimumScaleFactor(0.6)
+                                }
+                                .foregroundStyle(pace.variance > 0 ? Color.orange : Color.teal)
+                                Text("\(pace.elapsedDays) of \(pace.daysInYear) days · \(pace.yearFraction * 100, specifier: "%.1f")% of the year")
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                                VStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        LabeledContent("Actual spending", value: formattedMoney(report.expenses, currency: report.currency))
+                                        ProgressView(value: Double(max(report.expenses, 0)), total: Double(max(goal, report.expenses, 1)))
+                                            .tint(pace.variance > 0 ? .orange : .teal)
+                                    }
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        LabeledContent("Year-to-date target", value: formattedMoney(pace.target, currency: report.currency))
+                                        ProgressView(value: Double(pace.target), total: Double(max(goal, report.expenses, 1))).tint(.secondary)
+                                    }
+                                }
+                                LabeledContent("Combined spending goal", value: formattedMoney(goal, currency: report.currency))
+                                Text("Target = annual goal × days elapsed ÷ days in the year, including today.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            } else {
+                                Text(formattedMoney(report.expenses, currency: report.currency)).font(.title.bold())
+                                Text("Set your annual spending goal in the web app.").foregroundStyle(.secondary)
+                            }
+                        }.padding(.vertical, 8)
+                        LabeledContent("Personal expenses", value: formattedMoney(report.personalExpenses, currency: report.currency))
+                        LabeledContent("Company expenses", value: formattedMoney(report.companyExpenses, currency: report.currency))
+                    } header: { Text("Year to date · \(String(report.throughDate.prefix(4)))") }
+                    footer: { Text("Through \(report.throughDate). Personal + company expenses, net of refunds. Taxes, transfers and unapproved imports are excluded. Uses saved exchange rates, as on the web.") }
+                    Section {
+                        VStack(alignment: .leading, spacing: 12) {
                             Label("Current net worth", systemImage: "chart.pie.fill").foregroundStyle(.secondary)
                             Text(formattedMoney(report.netWorth, currency: report.currency))
                                 .font(.system(.largeTitle, design: .rounded).bold()).minimumScaleFactor(0.6)
@@ -63,28 +99,6 @@ struct LiveExpenseView: View {
                             if let amount = report.groups[group] { LabeledContent(group, value: formattedMoney(amount, currency: report.currency)) }
                         }
                     } footer: { Text("Balances across open accounts, including property and pensions, less liabilities.") }
-                    Section {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Expenses so far this year").font(.headline)
-                            Text(formattedMoney(report.expenses, currency: report.currency))
-                                .font(.system(.largeTitle, design: .rounded).bold()).minimumScaleFactor(0.6)
-                            if let goal = report.goal {
-                                LabeledContent("Combined spending goal", value: formattedMoney(goal, currency: report.currency))
-                                if goal > 0 {
-                                    ProgressView(value: min(max(Double(report.expenses) / Double(goal), 0), 1))
-                                        .tint(report.expenses > goal ? .orange : .teal)
-                                    Text("\(Int((Double(report.expenses) / Double(goal) * 100).rounded()))% of annual goal")
-                                        .font(.caption).foregroundStyle(.secondary)
-                                }
-                                LabeledContent(report.expenses > goal ? "Over goal" : "Remaining", value: formattedMoney(abs(goal - report.expenses), currency: report.currency))
-                            } else {
-                                Text("Set your annual spending goal in the web app.").foregroundStyle(.secondary)
-                            }
-                        }.padding(.vertical, 8)
-                        LabeledContent("Personal expenses", value: formattedMoney(report.personalExpenses, currency: report.currency))
-                        LabeledContent("Company expenses", value: formattedMoney(report.companyExpenses, currency: report.currency))
-                    } header: { Text("Year to date · \(String(report.throughDate.prefix(4)))") }
-                    footer: { Text("Through \(report.throughDate). Personal + company expenses, net of refunds. Taxes, transfers and unapproved imports are excluded. Uses saved exchange rates, as on the web.") }
                 } else if !store.busy && store.errorMessage == nil {
                     ContentUnavailableView("Reports unavailable", systemImage: "chart.bar", description: Text("Pull to refresh your workspace."))
                 }

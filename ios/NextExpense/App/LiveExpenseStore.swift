@@ -293,3 +293,27 @@ struct LiveReports {
         return LiveReports(currency: config.defaultCurrency, throughDate: today, netWorth: assets - liabilities, assets: assets, liabilities: liabilities, groups: groups, expenses: personal + company, personalExpenses: personal, companyExpenses: company, goal: config.yearlySpendingGoals?[String(today.prefix(4))]?.combinedGoal)
     }
 }
+
+struct SpendingPace {
+    let elapsedDays: Int
+    let daysInYear: Int
+    let target: Int
+    let variance: Int
+    var yearFraction: Double { Double(elapsedDays) / Double(daysInYear) }
+
+    init?(throughDate: String, annualGoal: Int, expenses: Int) {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let formatter = DateFormatter()
+        formatter.calendar = calendar; formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "yyyy-MM-dd"
+        formatter.isLenient = false
+        guard annualGoal >= 0, let date = formatter.date(from: throughDate),
+              let elapsed = calendar.ordinality(of: .day, in: .year, for: date),
+              let days = calendar.range(of: .day, in: .year, for: date)?.count else { return nil }
+        elapsedDays = elapsed; daysInYear = days
+        // Include today; calendar days keep leap years and DST unambiguous.
+        target = Int((Double(annualGoal) * Double(elapsed) / Double(days)).rounded())
+        variance = expenses - target
+    }
+}
