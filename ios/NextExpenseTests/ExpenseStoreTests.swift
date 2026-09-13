@@ -194,15 +194,17 @@ final class LiveReviewTests: XCTestCase {
             XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"), "Auth cookies must never go to the Data API")
             if expiredOnce { expiredOnce = false; return (expiryStatus, [:], ["message": "JWT token has expired"]) }
             let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
-            if !["workspaces", "workspace_members", "approve_bank_import_candidate"].contains(path) {
+            if !["workspaces", "workspace_members", "approve_bank_import_candidate", "workspace_account_balances"].contains(path) {
                 XCTAssertEqual(query.first(where: { $0.name == "workspace_id" })?.value, "eq.\(workspace)")
             }
             switch path {
             case "workspace_members": return (200, [:], [["workspace_id": workspace.uuidString]])
-            case "workspaces": return (200, [:], [["id": workspace.uuidString, "name": "Test workspace"]])
-            case "categories": return (200, [:], [["id": category.uuidString, "name": "Food"]])
+            case "workspaces": return (200, [:], [["id": workspace.uuidString, "name": "Test workspace", "default_currency": "SEK", "yearly_spending_goals": [:]]])
+            case "categories": return (200, [:], [["id": category.uuidString, "name": "Food", "report_group": "personal_expense"]])
+            case "workspace_account_balances": return (200, [:], [["account_id": account.uuidString, "balance_minor": 10000]])
+            case "fx_rates": return (200, [:], [])
             case "payees": return (200, [:], [])
-            case "accounts": return (200, [:], [["id": account.uuidString, "name": "Main"]])
+            case "accounts": return (200, [:], [["id": account.uuidString, "name": "Main", "currency": "SEK", "closed": false, "scope": "Personal"]])
             case "bank_import_candidates":
                 if request.httpMethod == "PATCH" {
                     return (rejectStatus, [:], rejectStatus == 200 ? (rejectRows ? [["id": candidate.uuidString]] : []) : ["message": "Write failed"])
@@ -251,12 +253,12 @@ final class LiveReviewTests: XCTestCase {
         XCTAssertEqual(store.candidates.count, 1)
         return store
     }
-    func testSignInApproveAndReadSharedLedger() async throws {
+    func testSignInApproveAndRefreshReports() async throws {
         let store = await signedInStore()
         try await store.approve(XCTUnwrap(store.candidates.first), payeeId: nil, categoryId: category)
         XCTAssertTrue(store.candidates.isEmpty)
-        XCTAssertEqual(store.ledger.first?.id, transaction)
-        XCTAssertEqual(store.ledger.first?.currency, "SEK")
+        XCTAssertEqual(store.reports?.netWorth, 10000)
+        XCTAssertEqual(store.reports?.currency, "SEK")
         XCTAssertNotNil(vault.saved)
     }
     func testFailedApprovalKeepsCandidateAndDoesNotRetryMutation() async throws {
@@ -265,9 +267,9 @@ final class LiveReviewTests: XCTestCase {
         do { try await store.approve(XCTUnwrap(store.candidates.first), payeeId: nil, categoryId: category); XCTFail("Expected failure") }
         catch { XCTAssertEqual(store.candidates.count, 1) }
         XCTAssertEqual(requests.filter { $0.url?.lastPathComponent == "approve_bank_import_candidate" }.count, 1)
-        XCTAssertTrue(store.ledger.isEmpty)
+        XCTAssertNotNil(store.reports)
     }
-    func testCommittedApprovalSurvivesLedgerRefreshFailure() async throws {
+    func testCommittedApprovalSurvivesReportRefreshFailure() async throws {
         let store = await signedInStore()
         ledgerFails = true
         try await store.approve(XCTUnwrap(store.candidates.first), payeeId: nil, categoryId: category)
@@ -413,5 +415,46 @@ final class GoogleSignInTests: XCTestCase {
         XCTAssertTrue(try restored.restore())
         try await restored.refreshToken()
         XCTAssertEqual(exchanges, 1, "One-time verifiers must not be replayed during restoration")
+    }
+}
+
+@MainActor
+final class LiveReportsTests: XCTestCase {
+    func testNetWorthSpendingRefundsAndCurrencyMatchWebRules() throws {
+        let personal = UUID(), company = UUID(), tax = UUID()
+        let euro = UUID(), sek = UUID(), closed = UUID()
+        let accounts = [
+            ReportAccount(id: euro, name: "Cash", currency: "EUR", closed: false, scope: "Personal", balanceSheetGroup: "Personal", pension: false),
+            ReportAccount(id: sek, name: "Loan", currency: "SEK", closed: false, scope: "Company", balanceSheetGroup: "Company", pension: false),
+            ReportAccount(id: closed, name: "Closed", currency: "EUR", closed: true, scope: "Personal", balanceSheetGroup: nil, pension: false)
+        ]
+        let balances = [ReportBalance(accountId: euro, balanceMinor: 100000), ReportBalance(accountId: sek, balanceMinor: -200000), ReportBalance(accountId: closed, balanceMinor: 900000)]
+        let categories = [ReportCategory(id: personal, reportGroup: "personal_expense"), ReportCategory(id: company, reportGroup: "company_expense"), ReportCategory(id: tax, reportGroup: "personal_tax")]
+        func item(_ amount: Int, _ currency: String, _ type: String, _ category: UUID, _ date: String = "2026-06-15") -> ReportActivity {
+            ReportActivity(transactionDate: date, amountMinor: amount, currency: currency, transactionType: type, categoryId: category)
+        }
+        let activity = [item(10000, "EUR", "expense", personal), item(2000, "EUR", "income", personal), item(50000, "SEK", "expense", company), item(9000, "EUR", "expense", tax), item(99000, "EUR", "transfer", personal), item(999, "EUR", "expense", personal, "2025-12-31"), item(999, "EUR", "expense", personal, "2026-10-01")]
+        let rates = [ReportRate(baseCurrency: "EUR", quoteCurrency: "SEK", rateHundredths: 1000, rateDate: "2026-06-30"), ReportRate(baseCurrency: "EUR", quoteCurrency: "SEK", rateHundredths: 2000, rateDate: "2026-10-01")]
+        var plan = ReportPlan(); plan.personalSpendingMinor = 100000; plan.companySpendingMinor = 50000
+        let config = ReportWorkspace(defaultCurrency: "EUR", yearlySpendingGoals: ["2026": plan])
+        let report = try LiveReports.calculate(config: config, accounts: accounts, balances: balances, categories: categories, activity: activity, rates: rates, today: "2026-09-13")
+        XCTAssertEqual(report.netWorth, 80000)
+        XCTAssertEqual(report.assets, 100000)
+        XCTAssertEqual(report.liabilities, 20000)
+        XCTAssertEqual(report.expenses, 13000)
+        XCTAssertEqual(report.personalExpenses, 8000)
+        XCTAssertEqual(report.companyExpenses, 5000)
+        XCTAssertEqual(report.goal, 150000)
+        XCTAssertThrowsError(try LiveReports.calculate(config: config, accounts: accounts, balances: balances, categories: categories, activity: activity, rates: [], today: "2026-09-13"))
+        XCTAssertThrowsError(try LiveReports.calculate(config: config, accounts: accounts, balances: [], categories: categories, activity: activity, rates: rates, today: "2026-09-13"))
+    }
+    func testMissingZeroAndLegacyGoalsAreDistinct() {
+        var plan = ReportPlan()
+        XCTAssertNil(plan.combinedGoal)
+        plan.companySpendingMinor = 0; plan.personalSpendingMinor = 0
+        XCTAssertEqual(plan.combinedGoal, 0)
+        plan.personalSpendingMinor = nil; plan.companySpendingMinor = 20000
+        plan.projectedIncomeMinor = 100000; plan.projectedTaxesMinor = 10000; plan.savingsGoalMinor = 30000
+        XCTAssertEqual(plan.combinedGoal, 60000)
     }
 }

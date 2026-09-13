@@ -36,20 +36,24 @@ key, or GoCardless secret to the app.
 4. Approve. iOS calls the same `approve_bank_import_candidate` RPC as the web
    app. The database atomically creates/promotes the ledger transaction and
    marks the candidate approved. The inbox changes only after acknowledgement.
-5. The saved transaction is fetched by its returned ID and appears in **Ledger**.
-   Refresh the web ledger to see the same record there.
+5. Reports refresh after the approval commits. Refresh the web app to see the
+   same saved result there.
 
 Rejection saves a server-side tombstone, preserving bank-sync deduplication.
-The ledger normally displays the latest 50 transactions; a newly approved item
-is shown immediately even when its date is older. Amounts retain their source
-currency and transaction type; no mixed-currency totals are calculated.
+Reports show current net worth and year-to-date personal plus company expenses
+against the saved combined annual spending goal. Net worth uses the same balance
+RPC as the web, including balance checkpoints and liabilities, and excludes
+closed accounts. Expenses use expense report groups, net of refunds, excluding
+taxes, transfers and unapproved imports. Currency conversion follows the latest
+saved rate from the transaction month or earlier; missing rates produce an error
+instead of silently understating totals. The reporting year uses Europe/Paris.
 
 Payee selection follows the web app's existing two-request contract: update the
 pending candidate's payee, then approve. If approval fails, that payee change
 may already be saved. Retrying uses the idempotent approval RPC; an ambiguous
 network failure never triggers an automatic mutation retry. A server 401 or explicit JWT-expired response causes
 one session renewal and retry. The client also renews JWTs within 30 seconds
-of expiry before sending a data request. A ledger reload failure after approval reports
+of expiry before sending a data request. A report reload failure after approval reports
 that the approval was saved, rather than inviting duplicate submission.
 
 ## Authentication and scope
@@ -78,10 +82,10 @@ the Auth endpoint; only the JWT goes to the Data API. Redirects are refused.
 Sign-out clears in-memory data and local credentials even if server revocation
 fails, and reports that failure. RLS remains authoritative for workspace access.
 
-The shipped UI contains real Review and Ledger tabs. The original Overview,
+The shipped UI contains real Reports and Review tabs. The original Overview,
 Accounts, and demo store remain available for SwiftUI previews and unit tests;
 they are not presented as live financial data. Mobile bank sync,
-bank linking, new payee entry, transfers, and overview reporting remain outside
+bank linking, new payee entry, and transfers remain outside
 this integration. Google-only accounts do not need to create a password.
 
 ## Verification
@@ -95,7 +99,7 @@ xcodebuild -project ios/NextExpense.xcodeproj -scheme NextExpense \
 The Node check validates project structure only. XCTest exercises the demo
 calculations and the live HTTP workflow through URLProtocol fixtures, including
 workspace filters, cookie/JWT separation, token renewal, restoration, rejection,
-failed approval, and a committed approval followed by a failed ledger fetch.
+failed approval, and a committed approval followed by a failed report fetch.
 Google tests also cover callback state/host validation, duplicate parameters,
 challenge-bound verifier exchange, and restoration without replaying the verifier.
 Tests never approve or reject production transactions.

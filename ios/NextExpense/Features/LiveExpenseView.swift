@@ -13,6 +13,7 @@ struct LiveExpenseView: View {
             else if store.workspace == nil { workspacePicker }
             else {
                 TabView {
+                    reportsTab
                     NavigationStack {
                         List {
                             messages
@@ -31,26 +32,6 @@ struct LiveExpenseView: View {
                     .tabItem { Label("Review", systemImage: "tray.full.fill") }
                     .badge(store.candidates.count)
 
-                    NavigationStack {
-                        List {
-                            messages
-                            Section("Recent 50 transactions") {
-                                if store.ledger.isEmpty { Text("No transactions yet.").foregroundStyle(.secondary) }
-                                ForEach(store.ledger) { transaction in
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        row(transaction)
-                                        if let category = store.categories.first(where: { $0.id == transaction.categoryId }) {
-                                            Text(category.name).font(.caption).foregroundStyle(.secondary)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        .navigationTitle("Ledger")
-                        .refreshable { await store.refresh() }
-                        .toolbar { toolbar }
-                    }
-                    .tabItem { Label("Ledger", systemImage: "list.bullet.rectangle") }
                 }
             }
         }
@@ -62,12 +43,65 @@ struct LiveExpenseView: View {
         .sheet(item: $selected) { candidate in LiveCandidateView(store: store, candidate: candidate) }
     }
 
+    private var reportsTab: some View {
+        NavigationStack {
+            List {
+                messages
+                if let report = store.reports {
+                    Section {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Label("Current net worth", systemImage: "chart.pie.fill").foregroundStyle(.secondary)
+                            Text(formattedMoney(report.netWorth, currency: report.currency))
+                                .font(.system(.largeTitle, design: .rounded).bold()).minimumScaleFactor(0.6)
+                            HStack {
+                                VStack(alignment: .leading) { Text("Assets").font(.caption); Text(formattedMoney(report.assets, currency: report.currency)).fontWeight(.semibold) }
+                                Spacer()
+                                VStack(alignment: .trailing) { Text("Liabilities").font(.caption); Text(formattedMoney(report.liabilities, currency: report.currency)).fontWeight(.semibold) }
+                            }.foregroundStyle(.secondary)
+                        }.padding(.vertical, 8)
+                        ForEach(["Personal", "Company", "Real estate", "Pension"], id: \.self) { group in
+                            if let amount = report.groups[group] { LabeledContent(group, value: formattedMoney(amount, currency: report.currency)) }
+                        }
+                    } footer: { Text("Balances across open accounts, including property and pensions, less liabilities.") }
+                    Section {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Expenses so far this year").font(.headline)
+                            Text(formattedMoney(report.expenses, currency: report.currency))
+                                .font(.system(.largeTitle, design: .rounded).bold()).minimumScaleFactor(0.6)
+                            if let goal = report.goal {
+                                LabeledContent("Combined spending goal", value: formattedMoney(goal, currency: report.currency))
+                                if goal > 0 {
+                                    ProgressView(value: min(max(Double(report.expenses) / Double(goal), 0), 1))
+                                        .tint(report.expenses > goal ? .orange : .teal)
+                                    Text("\(Int((Double(report.expenses) / Double(goal) * 100).rounded()))% of annual goal")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                LabeledContent(report.expenses > goal ? "Over goal" : "Remaining", value: formattedMoney(abs(goal - report.expenses), currency: report.currency))
+                            } else {
+                                Text("Set your annual spending goal in the web app.").foregroundStyle(.secondary)
+                            }
+                        }.padding(.vertical, 8)
+                        LabeledContent("Personal expenses", value: formattedMoney(report.personalExpenses, currency: report.currency))
+                        LabeledContent("Company expenses", value: formattedMoney(report.companyExpenses, currency: report.currency))
+                    } header: { Text("Year to date · \(String(report.throughDate.prefix(4)))") }
+                    footer: { Text("Through \(report.throughDate). Personal + company expenses, net of refunds. Taxes, transfers and unapproved imports are excluded. Uses saved exchange rates, as on the web.") }
+                } else if !store.busy && store.errorMessage == nil {
+                    ContentUnavailableView("Reports unavailable", systemImage: "chart.bar", description: Text("Pull to refresh your workspace."))
+                }
+            }
+            .navigationTitle("Reports")
+            .refreshable { await store.refresh() }
+            .toolbar { toolbar }
+        }
+        .tabItem { Label("Reports", systemImage: "chart.bar.fill") }
+    }
+
     private var signIn: some View {
         NavigationStack {
             Form {
                 Section {
                     Label("Next Expense", systemImage: "chart.bar.fill").font(.title2.bold())
-                    Text("Sign in with the same account you use on the web to review your bank transactions.")
+                    Text("Sign in with the same account you use on the web to see your reports and review bank imports.")
                         .foregroundStyle(.secondary)
                 }
                 Section {

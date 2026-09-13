@@ -44,7 +44,7 @@ expectText('NextExpense/Features/AccountsView.swift', ['Sync now', 'Last synced'
 expectText('NextExpense/App/NextExpenseApp.swift', ['LiveExpenseView'])
 expectText('NextExpense/App/NeonAPI.swift', ['set-auth-jwt', 'kSecAttrAccessibleWhenUnlockedThisDeviceOnly'])
 expectText('NextExpense/App/LiveExpenseStore.swift', ['rpc/approve_bank_import_candidate', 'workspace_id'])
-expectText('NextExpense/Features/LiveExpenseView.swift', ['Sign in', 'Continue with Google', 'Ledger'])
+expectText('NextExpense/Features/LiveExpenseView.swift', ['Sign in', 'Continue with Google', 'Reports', 'Combined spending goal', 'Current net worth'])
 expectText('NextExpense.xcodeproj/project.pbxproj', [
   'productType = "com.apple.product-type.application";',
   'NextExpenseTests',
