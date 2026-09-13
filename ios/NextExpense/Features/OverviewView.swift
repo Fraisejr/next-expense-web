@@ -31,7 +31,11 @@ struct OverviewView: View {
                             value: min(Double(store.yearSpentMinor), Double(store.yearSpendingGoalMinor)),
                             total: Double(max(store.yearSpendingGoalMinor, 1))
                         )
-                        Text("\(formattedMoney(store.yearSpendingGoalMinor - store.yearSpentMinor, currency: currency)) remaining of this year’s goal")
+                        Text(
+                            store.yearSpentMinor > store.yearSpendingGoalMinor
+                                ? "Over by \(formattedMoney(store.yearSpentMinor - store.yearSpendingGoalMinor, currency: currency))"
+                                : "\(formattedMoney(store.yearSpendingGoalMinor - store.yearSpentMinor, currency: currency)) remaining of this year’s goal"
+                        )
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

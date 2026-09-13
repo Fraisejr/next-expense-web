@@ -12,6 +12,7 @@ final class ExpenseStore: ObservableObject {
     @Published private(set) var categories: [BudgetCategory]
     @Published private(set) var accounts: [ExpenseAccount]
     @Published private(set) var candidates: [BankImportCandidate]
+    @Published private(set) var approvedTransactions: [BankImportCandidate] = []
     @Published private(set) var syncingAccountID: UUID?
 
     let yearSpendingGoalMinor: Int
@@ -42,13 +43,13 @@ final class ExpenseStore: ObservableObject {
     func approve(
         candidateID: UUID,
         payee: String,
-        categoryID: UUID?,
-        rememberCategory: Bool
+        categoryID: UUID?
     ) async throws {
-        guard candidates.contains(where: { $0.id == candidateID }) else {
+        guard let candidateIndex = candidates.firstIndex(where: { $0.id == candidateID }) else {
             throw StoreError.candidateNotFound
         }
-        guard !payee.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let trimmedPayee = payee.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPayee.isEmpty else {
             throw StoreError.missingPayee
         }
         guard let categoryID, let categoryIndex = categories.firstIndex(where: { $0.id == categoryID }) else {
@@ -57,11 +58,12 @@ final class ExpenseStore: ObservableObject {
 
         // The first cut uses local demo data. This is the seam where the hosted
         // approve_bank_import_candidate endpoint will be called next.
-        if let candidate = candidates.first(where: { $0.id == candidateID }) {
-            categories[categoryIndex].spentMinor += candidate.amountMinor
-        }
-        candidates.removeAll { $0.id == candidateID }
-        _ = rememberCategory
+        var approved = candidates[candidateIndex]
+        approved.payee = trimmedPayee
+        approved.categoryID = categoryID
+        categories[categoryIndex].spentMinor += approved.amountMinor
+        approvedTransactions.append(approved)
+        candidates.remove(at: candidateIndex)
     }
 
     func reject(candidateID: UUID) {
@@ -69,11 +71,23 @@ final class ExpenseStore: ObservableObject {
     }
 
     func sync(accountID: UUID) async {
-        guard let index = accounts.firstIndex(where: { $0.id == accountID && $0.isConnected }) else { return }
+        guard syncingAccountID == nil else { return }
+        guard accounts.contains(where: { $0.id == accountID && $0.isConnected }) else { return }
         syncingAccountID = accountID
-        try? await Task.sleep(nanoseconds: syncDelayNanoseconds)
+        defer {
+            if syncingAccountID == accountID {
+                syncingAccountID = nil
+            }
+        }
+
+        do {
+            try await Task.sleep(nanoseconds: syncDelayNanoseconds)
+        } catch {
+            return
+        }
+
+        guard let index = accounts.firstIndex(where: { $0.id == accountID }) else { return }
         accounts[index].lastSyncedAt = Date()
-        syncingAccountID = nil
     }
 
     static func demo(syncDelayNanoseconds: UInt64 = 650_000_000) -> ExpenseStore {

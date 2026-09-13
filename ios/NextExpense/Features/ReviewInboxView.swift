@@ -57,15 +57,15 @@ private struct CandidateReviewView: View {
 
     @State private var payee: String
     @State private var categoryID: UUID?
-    @State private var rememberCategory = true
     @State private var errorMessage: String?
     @State private var approving = false
+    @State private var showsRejectConfirmation = false
 
     init(store: ExpenseStore, candidate: BankImportCandidate) {
         self.store = store
         self.candidate = candidate
         _payee = State(initialValue: candidate.payee)
-        _categoryID = State(initialValue: candidate.categoryID ?? store.categories.first?.id)
+        _categoryID = State(initialValue: candidate.categoryID)
     }
 
     var body: some View {
@@ -80,11 +80,11 @@ private struct CandidateReviewView: View {
                 Section("Modify before approval") {
                     TextField("Payee", text: $payee)
                     Picker("Category", selection: $categoryID) {
+                        Text("Select category").tag(nil as UUID?)
                         ForEach(store.categories) { category in
                             Text(category.name).tag(Optional(category.id))
                         }
                     }
-                    Toggle("Remember category", isOn: $rememberCategory)
                 }
 
                 if let errorMessage {
@@ -102,8 +102,7 @@ private struct CandidateReviewView: View {
                                 try await store.approve(
                                     candidateID: candidate.id,
                                     payee: payee,
-                                    categoryID: categoryID,
-                                    rememberCategory: rememberCategory
+                                    categoryID: categoryID
                                 )
                                 dismiss()
                             } catch {
@@ -121,13 +120,23 @@ private struct CandidateReviewView: View {
                     .disabled(approving)
 
                     Button("Reject", role: .destructive) {
-                        store.reject(candidateID: candidate.id)
-                        dismiss()
+                        showsRejectConfirmation = true
                     }
                 }
             }
             .navigationTitle("Review transaction")
             .navigationBarTitleDisplayMode(.inline)
+            .confirmationDialog(
+                "Reject this imported transaction?",
+                isPresented: $showsRejectConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Reject transaction", role: .destructive) {
+                    store.reject(candidateID: candidate.id)
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) {}
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

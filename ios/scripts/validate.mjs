@@ -11,6 +11,7 @@ const requiredFiles = [
   'NextExpense/Features/ReviewInboxView.swift',
   'NextExpense/Features/AccountsView.swift',
   'NextExpense/Resources/Assets.xcassets/Contents.json',
+  'NextExpense/Resources/Assets.xcassets/AppIcon.appiconset/Contents.json',
   'NextExpenseTests/ExpenseStoreTests.swift',
   'README.md',
 ]
@@ -35,10 +36,14 @@ expectText('NextExpense/App/ExpenseStore.swift', [
   'func sync(',
 ])
 expectText('NextExpense/Features/OverviewView.swift', ['Budget', 'Net worth', 'Year spending'])
-expectText('NextExpense/Features/ReviewInboxView.swift', ['Approve', 'Reject', 'Remember category'])
+expectText('NextExpense/Features/ReviewInboxView.swift', ['Approve', 'Reject transaction', 'Select category'])
 expectText('NextExpense/Features/AccountsView.swift', ['Sync now', 'Last synced'])
 expectText('NextExpense/App/NextExpenseApp.swift', ['TabView', 'OverviewView', 'ReviewInboxView', 'AccountsView'])
-expectText('NextExpense.xcodeproj/project.pbxproj', ['productType = "com.apple.product-type.application";', 'NextExpenseTests'])
+expectText('NextExpense.xcodeproj/project.pbxproj', [
+  'productType = "com.apple.product-type.application";',
+  'NextExpenseTests',
+  'ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;',
+])
 
 const productionSources = [
   'NextExpense/App/NextExpenseApp.swift',
