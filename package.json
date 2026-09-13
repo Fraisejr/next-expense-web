@@ -11,7 +11,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test:server": "node --experimental-transform-types --test server/*.test.ts",
-    "test:ios-callback": "node scripts/test-ios-callback.mjs"
+    "test:ios-callback": "node scripts/test-ios-callback.mjs",
+    "test:auth": "node --experimental-strip-types scripts/test-auth-bootstrap.mjs"
   },
   "dependencies": {
     "@neondatabase/neon-js": "^0.7.0-beta",
