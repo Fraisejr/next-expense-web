@@ -47,8 +47,9 @@ currency and transaction type; no mixed-currency totals are calculated.
 Payee selection follows the web app's existing two-request contract: update the
 pending candidate's payee, then approve. If approval fails, that payee change
 may already be saved. Retrying uses the idempotent approval RPC; an ambiguous
-network failure never triggers an automatic mutation retry. A server 401 causes
-one session renewal and retry. A ledger reload failure after approval reports
+network failure never triggers an automatic mutation retry. A server 401 or explicit JWT-expired response causes
+one session renewal and retry. The client also renews JWTs within 30 seconds
+of expiry before sending a data request. A ledger reload failure after approval reports
 that the approval was saved, rather than inviting duplicate submission.
 
 ## Authentication and scope

@@ -167,6 +167,7 @@ final class LiveReviewTests: XCTestCase {
     private var approvalStatus = 200
     private var ledgerFails = false
     private var expiredOnce = false
+    private var expiryStatus = 401
     private var sessionCalls = 0
     private var rejectStatus = 200
     private var rejectRows = true
@@ -191,7 +192,7 @@ final class LiveReviewTests: XCTestCase {
             if path == "sign-out" { return (200, [:], ["success": true]) }
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer data-jwt")
             XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"), "Auth cookies must never go to the Data API")
-            if expiredOnce { expiredOnce = false; return (401, [:], ["message": "Expired token"]) }
+            if expiredOnce { expiredOnce = false; return (expiryStatus, [:], ["message": "JWT token has expired"]) }
             let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
             if !["workspaces", "workspace_members", "approve_bank_import_candidate"].contains(path) {
                 XCTAssertEqual(query.first(where: { $0.name == "workspace_id" })?.value, "eq.\(workspace)")
@@ -217,6 +218,26 @@ final class LiveReviewTests: XCTestCase {
         }
         return NeonAPI(session: URLSession(configuration: configuration), vault: vault)
     }
+    func testNeon400ExpiryRenewsInsteadOfFailing() async throws {
+        let api = makeAPI()
+        try await api.signIn(email: "test@example.com", password: "fixture")
+        expiredOnce = true
+        expiryStatus = 400
+        let _: [[String: String]] = try await api.data("workspace_members")
+        XCTAssertEqual(sessionCalls, 2)
+        XCTAssertEqual(requests.filter { $0.url?.lastPathComponent == "workspace_members" }.count, 2)
+    }
+
+    func testJWTExpiryHintAndNonAuthErrors() throws {
+        let data = try JSONSerialization.data(withJSONObject: ["exp": 1000])
+        let payload = data.base64EncodedString().replacingOccurrences(of: "=", with: "")
+        let token = "header." + payload + ".signature"
+        XCTAssertTrue(NeonAPI.expiresSoon(token, now: Date(timeIntervalSince1970: 980)))
+        XCTAssertFalse(NeonAPI.expiresSoon(token, now: Date(timeIntervalSince1970: 900)))
+        XCTAssertFalse(MobileAPIError(message: "Invalid amount", status: 400).isExpiredJWT)
+        XCTAssertFalse(MobileAPIError(message: "JWT token has expired", status: 500).isExpiredJWT)
+    }
+
     private func row(_ id: UUID) -> [String: Any] {
         ["id": id.uuidString, "account_id": account.uuidString, "transaction_date": "2026-09-12",
          "amount_minor": 2450, "currency": "SEK", "transaction_type": "expense", "payee_name": "Market",

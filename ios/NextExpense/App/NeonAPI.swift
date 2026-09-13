@@ -7,6 +7,9 @@ struct MobileAPIError: LocalizedError {
     let message: String
     let status: Int
     var errorDescription: String? { message }
+    var isExpiredJWT: Bool {
+        [400, 401, 403].contains(status) && ["jwt token has expired", "jwt expired", "token has expired"].contains(message.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))
+    }
 }
 
 /// Only public endpoints belong in the app. Database and bank credentials stay on the server.
@@ -136,20 +139,32 @@ final class NeonAPI {
             throw MobileAPIError(message: "Your session expired. Sign in again.", status: 401)
         }
         // Neon exposes the Data API JWT in this header; the session cookie is not a JWT.
-        if let token = response.value(forHTTPHeaderField: "set-auth-jwt"), !token.isEmpty { jwt = token; return }
+        if let token = response.value(forHTTPHeaderField: "set-auth-jwt"), !token.isEmpty, !Self.expiresSoon(token) { jwt = token; return }
         let (tokenData, _) = try await auth("token")
         struct Token: Decodable { let token: String }
         jwt = try JSONDecoder().decode(Token.self, from: tokenData).token
     }
 
     func data<T: Decodable>(_ path: String, query: [URLQueryItem] = [], method: String = "GET", body: [String: Any]? = nil) async throws -> T {
-        if jwt == nil { try await refreshToken() }
+        if jwt == nil || Self.expiresSoon(jwt!) { try await refreshToken() }
         do { return try await dataRequest(path, query: query, method: method, body: body) }
-        catch let error as MobileAPIError where error.status == 401 {
+        catch let error as MobileAPIError where error.status == 401 || error.isExpiredJWT {
             // One renewal only; never retry a mutation on a transport failure.
             try await refreshToken()
             return try await dataRequest(path, query: query, method: method, body: body)
         }
+    }
+
+    // This is a refresh hint only; the server verifies the token signature.
+    static func expiresSoon(_ token: String, now: Date = Date()) -> Bool {
+        let parts = token.split(separator: ".")
+        guard parts.count == 3 else { return false }
+        var payload = String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        payload += String(repeating: "=", count: (4 - payload.count % 4) % 4)
+        guard let data = Data(base64Encoded: payload),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let expiry = object["exp"] as? Double else { return false }
+        return expiry <= now.timeIntervalSince1970 + 30
     }
 
     private func dataRequest<T: Decodable>(_ path: String, query: [URLQueryItem], method: String, body: [String: Any]?) async throws -> T {
