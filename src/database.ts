@@ -1,3 +1,4 @@
+import { zeroAmountAction, zeroAmountReason } from './bank-import-policy'
 import { neon } from './neon'
 import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankImportCandidate, BankRateLimit, BankSyncDiagnostic, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, TimeCode, TimeComment, TimeEntry, Transaction, YearlyFinancialPlan } from './types'
@@ -1588,7 +1589,7 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
       .eq('transaction_type', 'transfer')
       .or(`account_id.eq.${account.id},destination_account_id.eq.${account.id}`),
     neon.from('bank_import_candidates')
-      .select('id,status,transaction_id,provider_transaction_id,bank_transaction_id,posted')
+      .select('id,status,decision_reason,transaction_id,provider_transaction_id,bank_transaction_id,posted')
       .eq('workspace_id', workspaceId)
       .eq('provider', 'gocardless_bank_account_data')
       .eq('account_id', account.id),
@@ -1678,11 +1679,43 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
     if (page.length < pageSize) break
   }
 
+  let zeroIgnored = 0
+  let zeroReopened = 0
   for (const transaction of unique.values()) {
     const candidate = candidateFor(transaction)
+    const action = zeroAmountAction(amountToMinor(transaction.amount, transaction.currency), candidate)
+    if (action === 'ignore') {
+      // Keep a reversible tombstone with the original provider payload. Never
+      // replace a user's rejection, an approved item, or a matched ledger row.
+      const values = {
+        transaction_date: transaction.date, amount_minor: 0, currency: transaction.currency,
+        transaction_type: transaction.type, payee_name: transaction.payee,
+        memo: transaction.note || null, posted: transaction.status === 'booked',
+        fetched_at: sync.fetchedAt, raw_payload: transaction.rawPayload ?? null,
+        provider_transaction_id: transaction.providerTransactionId,
+        bank_transaction_id: transaction.bankTransactionId ?? null,
+        status: 'rejected', decision_reason: zeroAmountReason, decided_at: sync.fetchedAt,
+      }
+      if (candidate?.status === 'pending' || (candidate?.status === 'rejected' && candidate.decision_reason === zeroAmountReason)) {
+        const result = await neon.from('bank_import_candidates').update(values)
+          .eq('workspace_id', workspaceId).eq('id', candidate.id).eq('status', candidate.status)
+        if (result.error) throw result.error
+      } else if (!candidate && !existingIds.has(transaction.providerTransactionId)
+        && (!transaction.bankTransactionId || !existingBankIds.has(transaction.bankTransactionId))) {
+        const result = await neon.from('bank_import_candidates').insert({
+          ...values, id: crypto.randomUUID(), workspace_id: workspaceId,
+          account_id: account.id, provider: 'gocardless_bank_account_data',
+        })
+        if (result.error) throw result.error
+      }
+      unique.delete(transaction.providerTransactionId)
+      zeroIgnored += 1
+      continue
+    }
     if (!candidate || candidate.status === 'approved') continue
-    if (candidate.status === 'pending') {
+    if (candidate.status === 'pending' || action === 'reopen') {
       const candidateUpdate = await neon.from('bank_import_candidates').update({
+        ...(action === 'reopen' ? { status: 'pending', decision_reason: null, decided_at: null } : {}),
         transaction_date: transaction.date,
         amount_minor: amountToMinor(transaction.amount, transaction.currency),
         currency: transaction.currency,
@@ -1694,8 +1727,9 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
         raw_payload: transaction.rawPayload ?? null,
         provider_transaction_id: transaction.providerTransactionId,
         bank_transaction_id: transaction.bankTransactionId ?? null,
-      }).eq('workspace_id', workspaceId).eq('id', candidate.id)
+      }).eq('workspace_id', workspaceId).eq('id', candidate.id).eq('status', candidate.status)
       if (candidateUpdate.error) throw candidateUpdate.error
+      if (action === 'reopen') zeroReopened += 1
     }
     existingIds.add(transaction.providerTransactionId)
     if (transaction.bankTransactionId) existingBankIds.add(transaction.bankTransactionId)
@@ -2035,13 +2069,14 @@ export async function saveBankSync(workspaceId: string, account: Account, sync: 
     pendingReturned: sync.providerDiagnostics?.pendingReturned ?? sync.transactions.filter((transaction) => transaction.status === 'pending').length,
     malformedIgnored: sync.providerDiagnostics?.malformedIgnored ?? 0,
     imported: rows.length,
-    staged: candidateRowsToInsert.length + pendingStaged,
+    staged: candidateRowsToInsert.length + pendingStaged + zeroReopened,
     bookedImported,
     pendingImported,
     duplicates,
     transfersMatched,
     pendingPromoted,
     cutoffIgnored,
+    zeroIgnored,
     futureIgnored,
     balanceType: sync.balance?.type || undefined,
     transactionError: sync.errors?.transactions || undefined,

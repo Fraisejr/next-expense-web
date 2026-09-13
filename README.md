@@ -155,3 +155,9 @@ npm run import:ios -- /path/to/transactions.txt /path/to/budgets.txt 2026-08
 ```
 
 It generates `public/imported-data.local.json` and an audit report under `data/private/`. Both locations are ignored by Git because they contain personal financial data. When the local import is absent, the app starts with sanitized demo data.
+
+Zero-value bank entries are retained as rejected review records with
+`decision_reason=zero_amount`. Their provider IDs and raw payload remain intact.
+A later nonzero update with the same ID reopens the entry for review; manual
+rejections remain rejected. Apply migration 065 before deploying this behavior.
+Verify the transition policy with `npm run test:bank-policy`.

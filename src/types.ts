@@ -52,6 +52,7 @@ export type BankSyncDiagnostic = {
   duplicates: number
   transfersMatched: number
   pendingPromoted: number
+  zeroIgnored?: number
   cutoffIgnored: number
   futureIgnored: number
   balanceType?: string
