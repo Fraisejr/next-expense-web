@@ -322,7 +322,9 @@ final class GoogleSignInTests: XCTestCase {
 
     func testCallbackRequiresMatchingStateHostAndSingleVerifier() throws {
         let attempt = GoogleSignInAttempt()
-        let good = attempt.callbackURL.absoluteString + "&neon_auth_session_verifier=one-time-verifier"
+        XCTAssertEqual(attempt.callbackURL.host, "next-expense-web.vercel.app")
+        XCTAssertEqual(attempt.callbackURL.path, "/auth/ios/callback")
+        let good = "com.fraisejr.nextexpense://auth/callback?state=\(attempt.state)&neon_auth_session_verifier=one-time-verifier"
         XCTAssertEqual(try attempt.verifier(from: URL(string: good)!), "one-time-verifier")
         for invalid in [
             good.replacingOccurrences(of: attempt.state, with: "wrong-state"),
@@ -362,7 +364,10 @@ final class GoogleSignInTests: XCTestCase {
                 XCTAssertEqual(body["disableRedirect"] as? Bool, true)
                 let callback = try XCTUnwrap(body["callbackURL"] as? String)
                 XCTAssertEqual(body["errorCallbackURL"] as? String, callback)
-                returnURL = URL(string: callback + "&neon_auth_session_verifier=one-use-code")
+                let relay = try XCTUnwrap(URLComponents(string: callback))
+                XCTAssertEqual(relay.scheme, "https")
+                XCTAssertEqual(relay.host, "next-expense-web.vercel.app")
+                returnURL = URL(string: "com.fraisejr.nextexpense://auth/callback?" + (relay.percentEncodedQuery ?? "") + "&neon_auth_session_verifier=one-use-code")
                 return (200, ["Set-Cookie": "neon-auth.session_challenge=challenge; Secure; Path=/; Max-Age=600"], ["url": "https://accounts.google.com/o/oauth2/v2/auth?state=provider-state"])
             case "get-session":
                 let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []

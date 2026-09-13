@@ -17,3 +17,5 @@ data/import-report.json
 # Local Xcode state and build products.
 **/xcuserdata/
 **/DerivedData/
+
+.vercel/

@@ -1249,7 +1249,8 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          providerAccountId: account.providerAccountId,
+          workspaceId: workspace.workspaceId,
+          accountId: account.id,
           dateFrom: lastSync?.toISOString().slice(0, 10),
         }),
       })
@@ -3774,7 +3775,11 @@ type GoCardlessAccount = { id: string; name: string; iban: string; currency: str
 type PendingBankLink = { workspaceId: string; accountId: string; requisitionId: string; institutionId: string; country: string }
 
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init)
+  const token = (await neon.auth.getSession()).data?.session.token
+  if (!token) throw new Error('Sign in before accessing bank connections.')
+  const headers = new Headers(init?.headers)
+  headers.set('Authorization', `Bearer ${token}`)
+  const response = await fetch(url, { ...init, headers })
   const payload = await response.json().catch(() => ({})) as { error?: string }
   if (!response.ok) throw new Error(payload.error ?? 'The bank connection request failed.')
   return payload as T
@@ -3805,7 +3810,7 @@ function BankLinkForm({ account, workspaceId, onComplete }: { account: Account; 
     setError('')
 
     if (pendingLink) {
-      apiJson<{ accounts: GoCardlessAccount[]; status: string }>(`/api/gocardless/requisition?id=${encodeURIComponent(pendingLink.requisitionId)}`)
+      apiJson<{ accounts: GoCardlessAccount[]; status: string }>(`/api/gocardless/requisition?id=${encodeURIComponent(pendingLink.requisitionId)}&workspaceId=${encodeURIComponent(workspaceId)}&accountId=${encodeURIComponent(account.id)}`)
         .then((result) => {
           if (cancelled) return
           setProviderAccounts(result.accounts)
@@ -3817,7 +3822,7 @@ function BankLinkForm({ account, workspaceId, onComplete }: { account: Account; 
       return () => { cancelled = true }
     }
 
-    apiJson<GoCardlessInstitution[]>(`/api/gocardless/institutions?country=${encodeURIComponent(country)}`)
+    apiJson<GoCardlessInstitution[]>(`/api/gocardless/institutions?country=${encodeURIComponent(country)}&workspaceId=${encodeURIComponent(workspaceId)}`)
       .then((items) => {
         if (cancelled) return
         const sorted = [...items].sort((left, right) => left.name.localeCompare(right.name))
@@ -3827,7 +3832,7 @@ function BankLinkForm({ account, workspaceId, onComplete }: { account: Account; 
       .catch((caught) => { if (!cancelled) setError(caught instanceof Error ? caught.message : 'Could not load banks.') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [country, pendingLink])
+  }, [country, pendingLink, workspaceId, account.id])
 
   async function beginLink(event: FormEvent) {
     event.preventDefault()
@@ -3841,7 +3846,7 @@ function BankLinkForm({ account, workspaceId, onComplete }: { account: Account; 
       const result = await apiJson<{ id: string; link: string }>('/api/gocardless/requisitions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ institutionId, redirect: redirect.toString() }),
+        body: JSON.stringify({ workspaceId, accountId: account.id, institutionId, redirect: redirect.toString() }),
       })
       const pending: PendingBankLink = { workspaceId, accountId: account.id, requisitionId: result.id, institutionId, country }
       sessionStorage.setItem(BANK_LINK_STORAGE_KEY, JSON.stringify(pending))

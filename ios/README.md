@@ -5,21 +5,15 @@ Neon workspace as the web app. Requires Xcode 16+ and iOS 17+.
 
 ## Google rollout status
 
-The native Google flow is implemented and covered by fixture tests. Production
-activation is still blocked: on September 13, 2026, the Neon console did not
-persist either `com.fraisejr.nextexpense://auth` or the full callback URI, and
-`sign-in/social` returned `403 INVALID_CALLBACKURL`. Do not treat the button as
-production-verified until callback registration succeeds and an interactive
-Google sign-in completes. The application reports this setup issue explicitly.
+The HTTPS callback is deployed at
+`https://next-expense-web.vercel.app/auth/ios/callback`, and its origin is
+registered in Neon Auth. The live `sign-in/social` endpoint accepts this callback
+and issues a session challenge. The native app and callback validation tests
+pass. Full interactive Google sign-in still needs a user acceptance check;
+fixture tests do not establish that an individual account can complete login.
 
-An HTTPS callback alternative has been built and saved privately in Sites but
-has not been published or connected to the app. Its origin is
-`https://next-expense-ios-auth.rainy-ibex-1088.chatgpt.site`; Neon accepted this
-HTTPS origin. Publishing it and routing the one-time verifier through that
-host requires the user's approval. Site ID:
-`appgprj_6aa6e0e600e48191872c7ba1b00580c2`; saved version:
-`appgprj_6aa6e0e600e48191872c7ba1b00580c2~appgver_dfdce4f7a9f881919b9d09cccb62e552`.
-The prepared checkout is `/tmp/next-expense-auth-callback`.
+Rebuild the app to use this HTTPS callback, then choose **Continue with Google**.
+Google-only accounts do not need to create a password.
 
 ## Run
 
@@ -66,11 +60,13 @@ with the exact callback scheme, host, and path. The returned one-time
 from `sign-in/social`; browser cookies and Google passwords are never copied
 into the app. Cancellation leaves the user signed out without an error alert.
 
-Neon Auth must allow the trusted redirect origin
-`com.fraisejr.nextexpense://auth`. The callback path is `/callback`. The system
-authentication session receives this scheme directly; no browser login page or
-new Google client secret is hosted in the app. Keep this allowed origin when
-configuring a new Neon branch.
+Neon Auth must trust `https://next-expense-web.vercel.app`. Its
+`/auth/ios/callback` page forwards the one-time verifier and state to
+`com.fraisejr.nextexpense://auth/callback`, which the system authentication
+session receives. The callback destination is fixed, its query is immediately
+removed from browser history, and it uses no storage or analytics. The native
+app exchanges the verifier with its original challenge cookie. Keep the HTTPS
+origin registered when configuring a new Neon branch.
 
 The client uses Neon Auth sessions and the `set-auth-jwt`
 response header (with `/token` fallback), matching the installed web SDK.

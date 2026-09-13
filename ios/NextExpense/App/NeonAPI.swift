@@ -217,7 +217,7 @@ struct GoogleSignInAttempt {
     static let scheme = "com.fraisejr.nextexpense"
     let state = UUID().uuidString
     var callbackURL: URL {
-        var url = URLComponents(string: "\(Self.scheme)://auth/callback")!
+        var url = URLComponents(string: "https://next-expense-web.vercel.app/auth/ios/callback")!
         url.queryItems = [.init(name: "state", value: state)]
         return url.url!
     }

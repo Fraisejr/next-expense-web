@@ -1,0 +1,10 @@
+.git
+node_modules
+dist
+.env
+.env.*
+/data
+/ios
+public/*.local.json
+**/xcuserdata
+*.tsbuildinfo

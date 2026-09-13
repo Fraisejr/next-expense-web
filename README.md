@@ -82,9 +82,36 @@ Transactions retain both GoCardless's `internalTransactionId` as the canonical
 provider identifier and the financial institution's `transactionId` as a
 secondary audit and deduplication identifier.
 
-The Vite middleware in `server/gocardless.ts` supports localhost development.
-Before hosting the app, move the same handlers to the chosen host's server-side
-functions and configure `GOCARDLESS_SECRET_ID` and `GOCARDLESS_SECRET_KEY` there.
+## Vercel deployment
+
+Production: https://next-expense-web.vercel.app
+
+`api/gocardless/[action].ts` runs the shared bank handler on Vercel;
+`server/gocardless-dev.ts` exposes it in local Vite development. Both require a
+Neon bearer JWT and workspace membership. Bank reads also verify the account
+against the provider's signed authorization reference, because account and
+connection rows are editable by workspace members. Older bank links must be
+reconnected once using **Reconnect** before hosted sync can run. Existing ledger
+and imported transactions are preserved.
+
+Vercel production environment variables:
+- `VITE_NEON_AUTH_URL` and `VITE_NEON_DATA_API_URL`: public Neon endpoints.
+- `GOCARDLESS_SECRET_ID` and `GOCARDLESS_SECRET_KEY`: server-only secrets.
+- `APP_URL`: `https://next-expense-web.vercel.app`, used for bank return URLs.
+
+Deploy source with `vercel deploy --prod` from the linked project. GitHub is
+connected for subsequent pushes. The build excludes local finance archives;
+`.vercelignore` also excludes `.env`, local imports, and the native project.
+Only the public authentication assets are copied from `public` into production.
+
+Neon Auth must trust the production HTTPS origin. `/auth/ios/callback` forwards
+only the one-time verifier and validated state to the iOS app's fixed callback
+scheme. The page uses no storage or analytics and sends no-referrer/no-store
+headers. See `ios/README.md` for the native authentication flow.
+
+Verification: `npm run build`, `npm run lint`, `npm run test:server`, and
+`npm run test:ios-callback`. Server tests use fixtures, never real bank reads or
+production transaction approvals.
 
 ## Full iOS archive imports
 
