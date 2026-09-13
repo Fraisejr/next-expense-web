@@ -13,3 +13,7 @@ public/*.local.json
 data/private/
 src/imported-data.json
 data/import-report.json
+
+# Local Xcode state and build products.
+**/xcuserdata/
+**/DerivedData/

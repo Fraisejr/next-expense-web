@@ -6,6 +6,9 @@ const requiredFiles = [
   'NextExpense.xcodeproj/project.pbxproj',
   'NextExpense/App/NextExpenseApp.swift',
   'NextExpense/App/ExpenseStore.swift',
+  'NextExpense/App/NeonAPI.swift',
+  'NextExpense/App/LiveExpenseStore.swift',
+  'NextExpense/Features/LiveExpenseView.swift',
   'NextExpense/Models/ExpenseModels.swift',
   'NextExpense/Features/OverviewView.swift',
   'NextExpense/Features/ReviewInboxView.swift',
@@ -38,7 +41,10 @@ expectText('NextExpense/App/ExpenseStore.swift', [
 expectText('NextExpense/Features/OverviewView.swift', ['Budget', 'Net worth', 'Year spending'])
 expectText('NextExpense/Features/ReviewInboxView.swift', ['Approve', 'Reject transaction', 'Select category'])
 expectText('NextExpense/Features/AccountsView.swift', ['Sync now', 'Last synced'])
-expectText('NextExpense/App/NextExpenseApp.swift', ['TabView', 'OverviewView', 'ReviewInboxView', 'AccountsView'])
+expectText('NextExpense/App/NextExpenseApp.swift', ['LiveExpenseView'])
+expectText('NextExpense/App/NeonAPI.swift', ['set-auth-jwt', 'kSecAttrAccessibleWhenUnlockedThisDeviceOnly'])
+expectText('NextExpense/App/LiveExpenseStore.swift', ['rpc/approve_bank_import_candidate', 'workspace_id'])
+expectText('NextExpense/Features/LiveExpenseView.swift', ['Sign in', 'Ledger'])
 expectText('NextExpense.xcodeproj/project.pbxproj', [
   'productType = "com.apple.product-type.application";',
   'NextExpenseTests',
@@ -48,6 +54,9 @@ expectText('NextExpense.xcodeproj/project.pbxproj', [
 const productionSources = [
   'NextExpense/App/NextExpenseApp.swift',
   'NextExpense/App/ExpenseStore.swift',
+  'NextExpense/App/NeonAPI.swift',
+  'NextExpense/App/LiveExpenseStore.swift',
+  'NextExpense/Features/LiveExpenseView.swift',
   'NextExpense/Models/ExpenseModels.swift',
   'NextExpense/Features/OverviewView.swift',
   'NextExpense/Features/ReviewInboxView.swift',
