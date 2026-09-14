@@ -7,7 +7,7 @@ import {
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTimeCode, createTransaction, deleteAllUnusedPayees, deleteBudget, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTimeComments, loadTimeEntries, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveTimeCodeOrder, saveTimeComment, saveTimeEntry, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupAssignment, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTimeCode, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type LoadedWorkspace, type WorkspaceBackup } from './database'
+import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTimeCode, createTransaction, deleteAllUnusedPayees, deleteBudget, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTimeComments, loadTimeEntries, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveTimeCodeOrder, saveTimeComment, saveTimeEntry, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTimeCode, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
 import { convertMinor } from './currency'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, TimeCode, TimeComment, TimeEntry, Transaction, YearlyFinancialPlan } from './types'
@@ -700,7 +700,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
-  async function editCategory(categoryId: string, changes: Pick<Category, 'name' | 'reportGroup' | 'icon' | 'color'>) {
+  async function editCategory(categoryId: string, changes: Pick<Category, 'name' | 'reportGroup' | 'icon' | 'color' | 'categoryGroupId'>) {
     const normalizedName = changes.name.normalize('NFKC').trim()
     try {
       setSyncError('')
@@ -708,7 +708,12 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       if (data.categories.some((category) => category.id !== categoryId && category.name.localeCompare(normalizedName, undefined, { sensitivity: 'accent' }) === 0)) {
         throw new Error(`A category named “${normalizedName}” already exists.`)
       }
-      const normalizedChanges = { ...changes, name: normalizedName }
+      const previousCategory = data.categories.find((category) => category.id === categoryId)
+      const groupChanged = changes.categoryGroupId !== previousCategory?.categoryGroupId
+      const sortOrder = groupChanged
+        ? Math.max(-10, ...data.categories.filter((category) => category.id !== categoryId && category.categoryGroupId === changes.categoryGroupId).map((category) => category.sortOrder ?? 0)) + 10
+        : previousCategory?.sortOrder ?? 0
+      const normalizedChanges = { ...changes, name: normalizedName, sortOrder }
       await updateCategoryDetails(workspace.workspaceId, categoryId, normalizedChanges)
       setData((current) => ({
         ...current,
@@ -717,22 +722,6 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       setModal(null)
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not update the category.'))
-      throw error
-    }
-  }
-
-  async function changeCategoryGroup(categoryId: string, categoryGroupId: string) {
-    const normalizedGroupId = categoryGroupId || undefined
-    const sortOrder = Math.max(-10, ...data.categories.filter((category) => category.id !== categoryId && category.categoryGroupId === normalizedGroupId).map((category) => category.sortOrder ?? 0)) + 10
-    try {
-      setSyncError('')
-      await updateCategoryGroupAssignment(workspace.workspaceId, categoryId, categoryGroupId || null, sortOrder)
-      setData((current) => ({
-        ...current,
-        categories: current.categories.map((category) => category.id === categoryId ? { ...category, categoryGroupId: normalizedGroupId, sortOrder } : category),
-      }))
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not change the category group.'))
       throw error
     }
   }
@@ -1355,7 +1344,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onPostTransfer={postBankImportAsTransfer} onRematchPayees={() => rematchBankImportPayees(selectedAccount.id)} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onAddAlternativeName={(sourceName, payeeId) => addPayeeAlternativeForReview(sourceName, payeeId, selectedAccount.id)} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingAccountId === selectedAccount.id} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
         )}
         {selectedCategory && (
-          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} monthlyBudgetOverride={data.budgets.find((budget) => budget.month === selectedMonthKey && budget.categoryId === selectedCategory.id)?.amountMinor} monthKey={selectedMonthKey} defaultCurrency={workspace.defaultCurrency} fxRates={data.fxRates} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTransactions={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onUpdateBudget={updateBudget} onUpdateDefaultBudget={updateDefaultBudget} onRemoveBudgetOverride={removeBudgetOverride} onUpdateGroup={changeCategoryGroup} onEdit={() => setModal('edit-category')} onDelete={removeUnusedCategory} onSetHidden={setCategoryHidden} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
+          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} monthlyBudgetOverride={data.budgets.find((budget) => budget.month === selectedMonthKey && budget.categoryId === selectedCategory.id)?.amountMinor} monthKey={selectedMonthKey} defaultCurrency={workspace.defaultCurrency} fxRates={data.fxRates} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTransactions={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onUpdateBudget={updateBudget} onUpdateDefaultBudget={updateDefaultBudget} onRemoveBudgetOverride={removeBudgetOverride} onEdit={() => setModal('edit-category')} onDelete={removeUnusedCategory} onSetHidden={setCategoryHidden} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
         )}
         {selectedPayee && (
           <PayeeDetailPage key={selectedPayee.id} payee={selectedPayee} payees={data.payees} mappings={data.payeeMappings.filter((mapping) => mapping.payeeId === selectedPayee.id)} transactions={data.transactions.filter((transaction) => transaction.payeeId === selectedPayee.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/payees')} onEditTransaction={setCategoryTarget} onRename={renamePayee} onUpdateDefaults={changePayeeDefaults} onAddMapping={addPayeeMapping} onUpdateMapping={changePayeeMapping} onRemoveMapping={removePayeeMapping} />
@@ -1369,7 +1358,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           {modal === 'edit-account' && accountTarget && <AccountForm account={accountTarget} onSubmit={(changes) => editAccount({ ...accountTarget, ...changes })} />}
           {modal === 'balance-adjustment' && accountTarget && <BalanceAdjustmentForm account={accountTarget} onSubmit={(date, balance, reason, memo) => saveBalanceAdjustment(accountTarget, date, balance, reason, memo)} />}
           {modal === 'category' && <CategoryForm categoryGroups={data.categoryGroups} onSubmit={addCategory} />}
-          {modal === 'edit-category' && selectedCategory && <CategoryDetailsForm category={selectedCategory} categories={data.categories} onSubmit={editCategory} />}
+          {modal === 'edit-category' && selectedCategory && <CategoryDetailsForm category={selectedCategory} categories={data.categories} categoryGroups={data.categoryGroups} onSubmit={editCategory} />}
           {modal === 'category-groups' && <CategoryGroupsForm groups={data.categoryGroups} categories={data.categories} onAdd={addCategoryGroup} onRename={renameCategoryGroup} onReorder={reorderCategoryGroups} onReorderCategories={reorderCategories} onRemove={removeCategoryGroup} />}
           {modal === 'monthly-plan' && <MonthlyPlanWizard monthKey={selectedMonthKey} categories={data.categories} categoryGroups={data.categoryGroups} budgets={data.budgets} transactions={data.transactions} fxRates={data.fxRates} defaultCurrency={workspace.defaultCurrency} historyLoaded={historyLoaded} historyLoading={historyLoading} onSave={addMissingMonthlyBudgets} />}
           {modal === 'bank' && bankTarget && <BankLinkForm account={bankTarget} workspaceId={workspace.workspaceId} onComplete={() => window.location.reload()} />}
@@ -3601,8 +3590,9 @@ function formatSyncDiagnostic(diagnostic: NonNullable<Account['lastSyncDiagnosti
   ].filter(Boolean).join(' · ')
 }
 
-function CategoryDetailPage({ category, spent, budget, monthlyBudgetOverride, monthKey, defaultCurrency, fxRates, transactions, allTransactions, categories, categoryGroups, accounts, historyLoaded, historyLoading, onRequestHistory, onUpdateBudget, onUpdateDefaultBudget, onRemoveBudgetOverride, onUpdateGroup, onEdit, onDelete, onSetHidden, onBack, onSelectCategory, onEditTransaction }: { category: Category; spent: number; budget: number; monthlyBudgetOverride?: number; monthKey: string; defaultCurrency: string; fxRates: FxRate[]; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; categoryGroups: CategoryGroup[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onUpdateBudget: (categoryId: string, amountMinor: number) => Promise<void>; onUpdateDefaultBudget: (categoryId: string, amountMinor: number) => Promise<void>; onRemoveBudgetOverride: (categoryId: string) => Promise<void>; onUpdateGroup: (categoryId: string, categoryGroupId: string) => Promise<void>; onEdit: () => void; onDelete: (categoryId: string) => Promise<void>; onSetHidden: (categoryId: string, hidden: boolean) => void; onBack: () => void; onSelectCategory: (id: string) => void; onEditTransaction: (transaction: Transaction) => void }) {
+function CategoryDetailPage({ category, spent, budget, monthlyBudgetOverride, monthKey, defaultCurrency, fxRates, transactions, allTransactions, categories, categoryGroups, accounts, historyLoaded, historyLoading, onRequestHistory, onUpdateBudget, onUpdateDefaultBudget, onRemoveBudgetOverride, onEdit, onDelete, onSetHidden, onBack, onSelectCategory, onEditTransaction }: { category: Category; spent: number; budget: number; monthlyBudgetOverride?: number; monthKey: string; defaultCurrency: string; fxRates: FxRate[]; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; categoryGroups: CategoryGroup[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onUpdateBudget: (categoryId: string, amountMinor: number) => Promise<void>; onUpdateDefaultBudget: (categoryId: string, amountMinor: number) => Promise<void>; onRemoveBudgetOverride: (categoryId: string) => Promise<void>; onEdit: () => void; onDelete: (categoryId: string) => Promise<void>; onSetHidden: (categoryId: string, hidden: boolean) => void; onBack: () => void; onSelectCategory: (id: string) => void; onEditTransaction: (transaction: Transaction) => void }) {
   const Icon = categoryIcons[category.icon as keyof typeof categoryIcons] ?? Sparkles
+  const categoryGroupName = categoryGroups.find((group) => group.id === category.categoryGroupId)?.name
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState('')
@@ -3612,38 +3602,15 @@ function CategoryDetailPage({ category, spent, budget, monthlyBudgetOverride, mo
       <label><span>Category</span><select value={category.id} onChange={(event) => onSelectCategory(event.target.value)}>{categories.map((option) => <option key={option.id} value={option.id}>{option.name}{option.hidden ? ' (hidden)' : ''}</option>)}</select></label>
     </div>
     <section className="panel entity-detail-panel">
-      <div className="entity-heading"><div className="entity-heading-icon" style={{ color: category.color, background: `${category.color}18` }}><Icon size={20} /></div><div><span className="eyebrow">{category.reportGroup.replace('_', ' ')}{category.hidden ? ' · Hidden' : ''}</span><h2>{category.name}</h2></div><div className="entity-heading-actions"><button className="secondary-button" type="button" onClick={onEdit}><Pencil size={16} />Edit</button><button className="secondary-button" type="button" onClick={() => onSetHidden(category.id, !category.hidden)}>{category.hidden ? <Eye size={16} /> : <EyeOff size={16} />}{category.hidden ? 'Unhide category' : 'Hide category'}</button>{allTransactions.length === 0 && <button className={confirmingDelete ? 'danger-button confirming' : 'danger-button'} type="button" disabled={deleting} onClick={async () => {
+      <div className="entity-heading"><div className="entity-heading-icon" style={{ color: category.color, background: `${category.color}18` }}><Icon size={20} /></div><div><span className="eyebrow">{category.reportGroup.replace('_', ' ')}{categoryGroupName ? ` · ${categoryGroupName}` : ''}{category.hidden ? ' · Hidden' : ''}</span><h2>{category.name}</h2></div><div className="entity-heading-actions"><button className="secondary-button" type="button" onClick={onEdit}><Pencil size={16} />Edit</button><button className="secondary-button" type="button" onClick={() => onSetHidden(category.id, !category.hidden)}>{category.hidden ? <Eye size={16} /> : <EyeOff size={16} />}{category.hidden ? 'Unhide category' : 'Hide category'}</button>{allTransactions.length === 0 && <button className={confirmingDelete ? 'danger-button confirming' : 'danger-button'} type="button" disabled={deleting} onClick={async () => {
         if (!confirmingDelete) { setConfirmingDelete(true); setDeleteError(''); return }
         setDeleting(true)
         try { await onDelete(category.id) } catch (cause) { setDeleteError(getErrorMessage(cause, 'Could not delete the category.')); setDeleting(false); setConfirmingDelete(false) }
       }}><Trash2 size={16} />{deleting ? 'Deleting…' : confirmingDelete ? 'Confirm delete' : 'Delete'}</button>}</div></div>
       {confirmingDelete && !deleting && <div className="category-delete-confirmation"><span>Deleting this category will also remove its budgets and clear it from payee defaults.</span><button type="button" onClick={() => setConfirmingDelete(false)}>Cancel</button></div>}
       {deleteError && <p className="auth-error" role="alert">{deleteError}</p>}
-      <CategoryGroupAssignment key={`${category.id}-${category.categoryGroupId ?? 'none'}`} category={category} groups={categoryGroups} onSubmit={onUpdateGroup} />
       <CategoryDetail key={`${category.id}-${monthKey}-${category.defaultBudgetMinor}-${monthlyBudgetOverride ?? 'default'}`} category={category} spent={spent} budget={budget} monthlyBudgetOverride={monthlyBudgetOverride} monthKey={monthKey} defaultCurrency={defaultCurrency} fxRates={fxRates} transactions={transactions} allTransactions={allTransactions} categories={categories} accounts={accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={onRequestHistory} onUpdateBudget={onUpdateBudget} onUpdateDefaultBudget={onUpdateDefaultBudget} onRemoveBudgetOverride={onRemoveBudgetOverride} onEditTransaction={onEditTransaction} />
     </section>
-  </div>
-}
-
-function CategoryGroupAssignment({ category, groups, onSubmit }: { category: Category; groups: CategoryGroup[]; onSubmit: (categoryId: string, categoryGroupId: string) => Promise<void> }) {
-  const [categoryGroupId, setCategoryGroupId] = useState(category.categoryGroupId ?? '')
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const changed = categoryGroupId !== (category.categoryGroupId ?? '')
-  return <div className="category-group-assignment">
-    <label><span>Category group</span><select value={categoryGroupId} onChange={(event) => setCategoryGroupId(event.target.value)}><option value="">No group</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label>
-    <button className="secondary-button" type="button" disabled={!changed || saving} onClick={async () => {
-      setSaving(true)
-      setError('')
-      try {
-        await onSubmit(category.id, categoryGroupId)
-      } catch (cause) {
-        setError(getErrorMessage(cause, 'Could not change the category group.'))
-      } finally {
-        setSaving(false)
-      }
-    }}>{saving ? 'Saving…' : 'Save group'}</button>
-    {error && <p className="auth-error" role="alert">{error}</p>}
   </div>
 }
 
@@ -4264,9 +4231,10 @@ function CategoryGroupManagerRow({ group, categoryCount, first, last, onRename, 
   </div>
 }
 
-function CategoryDetailsForm({ category, categories, onSubmit }: { category: Category; categories: Category[]; onSubmit: (categoryId: string, changes: Pick<Category, 'name' | 'reportGroup' | 'icon' | 'color'>) => Promise<void> }) {
+function CategoryDetailsForm({ category, categories, categoryGroups, onSubmit }: { category: Category; categories: Category[]; categoryGroups: CategoryGroup[]; onSubmit: (categoryId: string, changes: Pick<Category, 'name' | 'reportGroup' | 'icon' | 'color' | 'categoryGroupId'>) => Promise<void> }) {
   const [name, setName] = useState(category.name)
   const [reportGroup, setReportGroup] = useState<ReportGroup>(category.reportGroup)
+  const [categoryGroupId, setCategoryGroupId] = useState(category.categoryGroupId ?? '')
   const [icon, setIcon] = useState(category.icon in categoryIcons ? category.icon : 'sparkles')
   const [color, setColor] = useState(category.color)
   const [saving, setSaving] = useState(false)
@@ -4274,7 +4242,8 @@ function CategoryDetailsForm({ category, categories, onSubmit }: { category: Cat
   const normalizedName = name.normalize('NFKC').trim()
   const duplicate = categories.some((item) => item.id !== category.id && item.name.localeCompare(normalizedName, undefined, { sensitivity: 'accent' }) === 0)
   const validColor = /^#[0-9a-f]{6}$/i.test(color)
-  const unchanged = normalizedName === category.name && reportGroup === category.reportGroup && icon === category.icon && color.toLocaleLowerCase('en') === category.color.toLocaleLowerCase('en')
+  const normalizedCategoryGroupId = categoryGroupId || undefined
+  const unchanged = normalizedName === category.name && reportGroup === category.reportGroup && normalizedCategoryGroupId === category.categoryGroupId && icon === category.icon && color.toLocaleLowerCase('en') === category.color.toLocaleLowerCase('en')
   const PreviewIcon = categoryIcons[icon as keyof typeof categoryIcons] ?? Sparkles
   return <form className="form" onSubmit={async (event) => {
     event.preventDefault()
@@ -4282,14 +4251,14 @@ function CategoryDetailsForm({ category, categories, onSubmit }: { category: Cat
     setSaving(true)
     setError('')
     try {
-      await onSubmit(category.id, { name: normalizedName, reportGroup, icon, color })
+      await onSubmit(category.id, { name: normalizedName, reportGroup, categoryGroupId: normalizedCategoryGroupId, icon, color })
     } catch (cause) {
       setError(getErrorMessage(cause, 'Could not update the category.'))
       setSaving(false)
     }
   }}>
     <label><span>Category name</span><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} /></label>
-    <label><span>Report group</span><select value={reportGroup} onChange={(event) => setReportGroup(event.target.value as ReportGroup)}><option value="personal_income">Personal income</option><option value="personal_expense">Personal expense</option><option value="personal_tax">Personal tax</option><option value="company_revenue">Company revenue</option><option value="company_expense">Company expense</option><option value="company_tax">Company tax</option></select></label>
+    <div className="form-grid"><label><span>Report group</span><select value={reportGroup} onChange={(event) => setReportGroup(event.target.value as ReportGroup)}><option value="personal_income">Personal income</option><option value="personal_expense">Personal expense</option><option value="personal_tax">Personal tax</option><option value="company_revenue">Company revenue</option><option value="company_expense">Company expense</option><option value="company_tax">Company tax</option></select></label><label><span>Category group</span><select value={categoryGroupId} onChange={(event) => setCategoryGroupId(event.target.value)}><option value="">No group</option>{categoryGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label></div>
     <div className="category-appearance-row">
       <div className="category-appearance-preview"><span style={{ color, background: `${color}18` }}><PreviewIcon size={22} /></span><div><small>Preview</small><strong>{normalizedName || 'Category'}</strong></div></div>
       <label className="category-color-field"><span>Color</span><div><input type="color" value={validColor ? color : '#5d7d91'} onChange={(event) => setColor(event.target.value)} /><input aria-label="Category color hex value" value={color} onChange={(event) => setColor(event.target.value)} maxLength={7} /></div></label>

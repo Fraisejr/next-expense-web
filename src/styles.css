@@ -561,10 +561,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .danger-button:disabled { cursor: not-allowed; opacity: .55; }
 .category-delete-confirmation { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin: -4px 0 14px; color: #865143; font-size: 9px; }
 .category-delete-confirmation button { border: 0; padding: 2px; color: #52645d; background: transparent; font-size: 9px; font-weight: 800; cursor: pointer; }
-.category-group-assignment { display: grid; grid-template-columns: minmax(180px, 280px) auto; align-items: end; justify-content: start; gap: 10px; padding: 14px 0; border-bottom: 1px solid var(--line); }
-.category-group-assignment label > span, .category-group-manager-row label > span, .category-group-add label > span { display: block; margin-bottom: 7px; color: var(--muted); font-size: 9.5px; font-weight: 700; }
-.category-group-assignment select { width: 100%; height: 38px; padding: 0 10px; border: 1px solid #d9dbd4; border-radius: 7px; background: #fff; color: var(--ink); font-size: 11.5px; }
-.category-group-assignment .auth-error { grid-column: 1 / -1; }
+.category-group-manager-row label > span, .category-group-add label > span { display: block; margin-bottom: 7px; color: var(--muted); font-size: 9.5px; font-weight: 700; }
 .spin-icon { animation: spin .9s linear infinite; }
 .bank-sync-status { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 14px; margin-top: 14px; border: 1px solid #dce5df; border-radius: 8px; background: #f2f6f3; color: var(--muted); font-size: 9.5px; }
 .bank-sync-status div { display: grid; gap: 3px; }
@@ -1313,7 +1310,6 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .account-transaction-pagination { gap: 7px; }
   .account-transaction-pagination button { min-width: 0; padding-inline: 9px; }
   .account-transaction-pagination span { min-width: 0; flex: 1; }
-  .category-group-assignment { grid-template-columns: 1fr auto; }
   .category-group-manager-row { grid-template-columns: 1fr auto; }
   .category-group-manager-row > label, .category-group-manager-row .unmatched-error { grid-column: 1 / -1; }
   .category-group-manager-row > small { justify-self: start; }
@@ -1373,8 +1369,8 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .budget-summary { grid-template-columns: 1fr 1fr 1fr; }
   .summary-rule { display: none; }
   .form-grid { grid-template-columns: 1fr; }
-  .category-group-assignment, .category-group-add { grid-template-columns: 1fr; }
-  .category-group-assignment .secondary-button, .category-group-add .secondary-button { width: 100%; }
+  .category-group-add { grid-template-columns: 1fr; }
+  .category-group-add .secondary-button { width: 100%; }
   .modal { padding: 19px; }
   .category-detail-summary { grid-template-columns: repeat(3, 1fr); }
   .category-budget-settings-heading { align-items: flex-start; flex-direction: column; gap: 7px; }
