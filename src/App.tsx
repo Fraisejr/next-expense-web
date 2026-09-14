@@ -3700,7 +3700,7 @@ function CategoryDetail({ category, spent, budget, monthlyBudgetOverride, monthK
       <div><span>Remaining</span><strong className={remaining < 0 ? 'negative' : ''}>{formatMoney(remaining)}</strong></div>
     </div>
     <section className="category-budget-settings">
-      <div className="category-budget-settings-heading"><div><span className="eyebrow">Budget settings</span><h3>Default and monthly budget</h3></div><p>{monthlyBudgetOverride === undefined ? `${selectedMonthLabel} is using the default.` : `${selectedMonthLabel} has its own override.`}</p></div>
+      <div className="category-budget-settings-heading"><h3>Default and monthly budget</h3><p>{monthlyBudgetOverride === undefined ? `${selectedMonthLabel} is using the default.` : `${selectedMonthLabel} has its own override.`}</p></div>
       <div className="category-budget-setting-grid">
         <div className="category-budget-setting default-setting">
           <label><span>Default monthly budget</span><input type="number" min="0" step="0.01" value={defaultBudgetInput} onChange={(event) => setDefaultBudgetInput(event.target.value)} /></label>
