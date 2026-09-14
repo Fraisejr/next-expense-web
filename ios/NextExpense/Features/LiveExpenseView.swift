@@ -3,6 +3,8 @@ import SwiftUI
 struct LiveExpenseView: View {
     @StateObject private var store = LiveExpenseStore()
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("showBankSyncResults") private var showBankSyncResults = true
+    @State private var showHiddenBudget = false
     @State private var email = ""
     @State private var password = ""
     @State private var selected: ReviewTransaction?
@@ -13,6 +15,7 @@ struct LiveExpenseView: View {
             else if store.workspace == nil { workspacePicker }
             else {
                 TabView {
+                    budgetTab
                     reportsTab
                     NavigationStack {
                         List {
@@ -41,6 +44,48 @@ struct LiveExpenseView: View {
             if phase == .active && store.signedIn { Task { await store.refresh() } }
         }
         .sheet(item: $selected) { candidate in LiveCandidateView(store: store, candidate: candidate) }
+    }
+
+    private var budgetTab: some View {
+        NavigationStack {
+            List {
+                messages
+                if let budget = store.budget {
+                    Section {
+                        Text(budget.monthTitle).font(.headline)
+                        Text("Current month · budgets managed on the web").font(.caption).foregroundStyle(.secondary)
+                        if budget.groups.flatMap({ $0.categories }).contains(where: { $0.category.hidden == true }) {
+                            Toggle("Show hidden categories", isOn: $showHiddenBudget)
+                        }
+                    }
+                    ForEach(budget.groups) { group in
+                        let rows = group.categories.filter { showHiddenBudget || $0.category.hidden != true }
+                        if !rows.isEmpty {
+                            Section(group.name) {
+                                ForEach(rows) { item in
+                                    NavigationLink {
+                                        LiveBudgetCategoryView(store: store, categoryId: item.id)
+                                    } label: {
+                                        LiveBudgetRow(item: item, currency: budget.currency)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if budget.groups.isEmpty {
+                        ContentUnavailableView("No categories yet", systemImage: "square.grid.2x2", description: Text("Set up categories and budgets in the web app."))
+                    }
+                } else if let error = store.budgetError {
+                    Text(error).foregroundStyle(.red)
+                } else if !store.busy {
+                    ContentUnavailableView("Budget unavailable", systemImage: "chart.bar", description: Text("Pull to refresh your workspace."))
+                }
+            }
+            .navigationTitle("Budget")
+            .refreshable { await store.refresh() }
+            .toolbar { toolbar }
+        }
+        .tabItem { Label("Budget", systemImage: "chart.pie.fill") }
     }
 
     private var reportsTab: some View {
@@ -166,14 +211,16 @@ struct LiveExpenseView: View {
 
     @ViewBuilder private var messages: some View {
         if store.busy { ProgressView(store.syncingBanks ? "Syncing banks…" : "Updating…") }
-        if !store.bankSyncResults.isEmpty {
-            Section("Bank sync") {
+        if showBankSyncResults && !store.bankSyncResults.isEmpty {
+            Section {
                 ForEach(store.bankSyncResults) { result in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(result.name).font(.headline)
                         Text(result.message).font(.footnote).foregroundStyle(result.failed ? Color.orange : Color.secondary)
                     }
                 }
+            } header: {
+                HStack { Text("Bank sync"); Spacer(); Button("Hide") { showBankSyncResults = false }.textCase(nil) }
             }
         }
         if let error = store.errorMessage {
@@ -189,6 +236,7 @@ struct LiveExpenseView: View {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 Text(store.workspace?.name ?? "")
+                Toggle("Show bank sync results", isOn: $showBankSyncResults)
                 Button("Refresh") { Task { await store.refresh() } }
                 ForEach(store.workspaces) { workspace in
                     Button("Switch to \(workspace.name)") { Task { await store.select(workspace) } }
@@ -280,5 +328,69 @@ private struct LiveCandidateView: View {
             }
             .onChange(of: store.signedIn) { _, value in if !value { dismiss() } }
         }
+    }
+}
+
+private struct LiveBudgetRow: View {
+    let item: LiveBudget.Category
+    let currency: String
+    private var color: Color {
+        let raw = (item.category.color ?? "").trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#", with: "")
+        let hex = raw.count == 6 ? UInt32(raw, radix: 16) ?? 0x5D7D91 : 0x5D7D91
+        return Color(red: Double((hex >> 16) & 255) / 255, green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255)
+    }
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: item.category.symbol).font(.title3).foregroundStyle(color)
+                .frame(width: 36, height: 36).background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(item.category.name).font(.headline).foregroundStyle(.primary)
+                Text("\(formattedMoney(item.spent, currency: currency)) of \(formattedMoney(item.budget, currency: currency))")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                ProgressView(value: min(max(item.fraction, 0), 1))
+                    .tint(!item.category.isIncome && item.spent > item.budget ? .orange : color)
+                if item.budget > 0 {
+                    Text("\(item.fraction * 100, specifier: "%.0f")% \(item.category.isIncome ? "received" : "used") · \(formattedMoney(abs(item.budget - item.spent), currency: currency)) \(item.spent > item.budget ? "over budget" : "remaining")")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text(item.spent > 0 ? "No budget · \(formattedMoney(item.spent, currency: currency)) \(item.category.isIncome ? "received" : "spent")" : "No budget")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if item.category.hidden == true { Text("Hidden category").font(.caption).foregroundStyle(.secondary) }
+            }
+        }.padding(.vertical, 6)
+    }
+}
+
+private struct LiveBudgetCategoryView: View {
+    @ObservedObject var store: LiveExpenseStore
+    let categoryId: UUID
+    private var item: LiveBudget.Category? { store.budget?.groups.flatMap { $0.categories }.first { $0.id == categoryId } }
+    var body: some View {
+        List {
+            if let item, let budget = store.budget {
+                Section(budget.monthTitle) { LiveBudgetRow(item: item, currency: budget.currency) }
+                Section("Transactions this month") {
+                    if item.transactions.isEmpty { Text("No transactions this month.").foregroundStyle(.secondary) }
+                    ForEach(item.transactions) { transaction in
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(alignment: .top) {
+                                Text(store.payees.first { $0.id == transaction.payeeId }?.name ?? transaction.payeeName ?? "Unknown payee").font(.headline)
+                                Spacer()
+                                Text("\(transaction.transactionType == "income" ? "+" : "−")\(formattedMoney(transaction.amountMinor, currency: transaction.currency))").monospacedDigit()
+                            }
+                            Text("\(transaction.transactionDate) · \(store.accounts.first { $0.id == transaction.accountId }?.name ?? "Account")").font(.caption).foregroundStyle(.secondary)
+                            if let memo = transaction.memo, !memo.isEmpty { Text(memo).font(.caption).foregroundStyle(.secondary) }
+                        }.padding(.vertical, 4)
+                    }
+                }
+            } else {
+                Text(store.budgetError ?? "This category is no longer available. Pull to refresh.")
+            }
+        }
+        .navigationTitle(item?.category.name ?? "Category")
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshable { await store.refresh() }
     }
 }

@@ -83,7 +83,15 @@ the Auth endpoint; only the JWT goes to the Data API. Redirects are refused.
 Sign-out clears in-memory data and local credentials even if server revocation
 fails, and reports that failure. RLS remains authoritative for workspace access.
 
-The shipped UI contains real Reports and Review tabs. The original Overview,
+The app opens on a read-only Budget tab, followed by Reports and Review.
+Budget shows the current month by saved category group and category order, with
+saved colors/icons, net spending, monthly overrides (or default budgets), and
+uncapped usage percentages. Tap a category to see its current-month transactions;
+there are no editing controls. Hidden categories can be shown with a toggle.
+Bank sync results can be hidden using **Hide** and restored using **Show bank sync
+results** in the account menu; this preference persists across launches.
+
+The shipped UI contains real Budget, Reports and Review tabs. The original Overview,
 Accounts, and demo store remain available for SwiftUI previews and unit tests;
 they are not presented as live financial data. Bank linking/reconnection,
 new payee entry, and transfers remain outside

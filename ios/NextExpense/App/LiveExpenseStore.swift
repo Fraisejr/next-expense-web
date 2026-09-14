@@ -40,6 +40,8 @@ final class LiveExpenseStore: ObservableObject {
     @Published private(set) var workspace: ReviewWorkspace?
     @Published private(set) var candidates: [ReviewTransaction] = []
     @Published private(set) var reports: LiveReports?
+    @Published private(set) var budget: LiveBudget?
+    @Published private(set) var budgetError: String?
     @Published private(set) var categories: [ReviewChoice] = []
     @Published private(set) var payees: [ReviewChoice] = []
     @Published private(set) var accounts: [ReviewChoice] = []
@@ -192,8 +194,8 @@ final class LiveExpenseStore: ObservableObject {
             candidates.removeAll { $0.id == candidate.id }
             notice = "Approved and saved."
             // The approval is committed even if refreshing the reports fails.
-            do { reports = try await loadReports(workspace.id) }
-            catch { errorMessage = "Approval saved. Could not refresh reports: \(error.localizedDescription)" }
+            do { budget = try await loadBudget(workspace.id); reports = try await loadReports(workspace.id) }
+            catch { errorMessage = "Approval saved. Could not refresh Budget and Reports: \(error.localizedDescription)" }
         } catch { handle(error); throw error }
     }
 
@@ -240,9 +242,28 @@ final class LiveExpenseStore: ObservableObject {
         let newCandidates: [ReviewTransaction] = try await all("bank_import_candidates", query: scope + [.init(name: "select", value: columns), .init(name: "status", value: "eq.pending"), .init(name: "order", value: "transaction_date.desc,id")])
         categories = newCategories; payees = newPayees; accounts = newAccounts
         candidates = newCandidates
+        budget = nil; budgetError = nil
+        do { budget = try await loadBudget(id) } catch { budgetError = error.localizedDescription }
         reports = nil
         reports = try await loadReports(id)
     }
+    private func loadBudget(_ id: UUID) async throws -> LiveBudget {
+        let month = String(LiveReports.today().prefix(7))
+        let nextMonth = LiveBudget.nextMonth(month)
+        let configs: [ReportWorkspace] = try await api.data("workspaces", query: [.init(name: "id", value: "eq.\(id)"), .init(name: "select", value: "default_currency,yearly_spending_goals")])
+        guard let config = configs.first else { throw MobileAPIError(message: "Budget settings could not be loaded.", status: 0) }
+        let groups: [MobileBudgetGroup] = try await all("category_groups", query: scoped(id) + [.init(name: "select", value: "id,name,sort_order"), .init(name: "order", value: "sort_order,name,id")])
+        let categories: [MobileBudgetCategory] = try await all("categories", query: scoped(id) + [.init(name: "select", value: "id,name,category_group_id,sort_order,default_budget_minor,color,icon,report_group,hidden"), .init(name: "order", value: "sort_order,name,id")])
+        let periods: [ReviewID] = try await api.data("periods", query: scoped(id) + [.init(name: "select", value: "id"), .init(name: "year", value: "eq.\(month.prefix(4))"), .init(name: "month", value: "eq.\(Int(month.suffix(2))!)")])
+        var overrides: [MobileBudgetOverride] = []
+        if !periods.isEmpty {
+            overrides = try await all("budgets", query: scoped(id) + [.init(name: "select", value: "category_id,amount_minor"), .init(name: "period_id", value: "in.(\(periods.map { $0.id.uuidString }.joined(separator: ",")))"), .init(name: "order", value: "id")])
+        }
+        let rates: [ReportRate] = try await all("fx_rates", query: scoped(id) + [.init(name: "select", value: "base_currency,quote_currency,rate_hundredths,rate_date"), .init(name: "order", value: "rate_date,id")])
+        let activity: [ReviewTransaction] = try await all("transactions", query: scoped(id) + [.init(name: "select", value: columns), .init(name: "transaction_date", value: "gte.\(month)-01"), .init(name: "and", value: "(transaction_date.lt.\(nextMonth)-01)"), .init(name: "transaction_type", value: "in.(income,expense)"), .init(name: "order", value: "transaction_date.desc,id")])
+        return try LiveBudget.calculate(month: month, currency: config.defaultCurrency, groups: groups, categories: categories, overrides: overrides, activity: activity, rates: rates)
+    }
+
     private func loadReports(_ id: UUID) async throws -> LiveReports {
         let today = LiveReports.today()
         let year = String(today.prefix(4))
@@ -270,7 +291,7 @@ final class LiveExpenseStore: ObservableObject {
         errorMessage = error.localizedDescription
     }
     private func clearWorkspace() {
-        workspace = nil; candidates = []; reports = nil; categories = []; payees = []; accounts = []; notice = nil; bankSyncResults = []
+        workspace = nil; candidates = []; reports = nil; budget = nil; budgetError = nil; categories = []; payees = []; accounts = []; notice = nil; bankSyncResults = []
     }
     private func reset() { signedIn = false; workspaces = []; clearWorkspace() }
 }
@@ -325,19 +346,20 @@ struct LiveReports {
         formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = TimeZone(identifier: "Europe/Paris"); formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: Date())
     }
-    static func calculate(config: ReportWorkspace, accounts: [ReportAccount], balances: [ReportBalance], categories: [ReportCategory], activity: [ReportActivity], rates: [ReportRate], today: String) throws -> LiveReports {
-        func converted(_ amount: Int, _ currency: String, _ date: String) throws -> Int {
-            if currency == config.defaultCurrency { return amount }
-            guard let rate = rates.filter({ $0.rateDate.prefix(7) <= date.prefix(7) && (($0.baseCurrency == currency && $0.quoteCurrency == config.defaultCurrency) || ($0.quoteCurrency == currency && $0.baseCurrency == config.defaultCurrency)) }).sorted(by: { $0.rateDate > $1.rateDate }).first, rate.rateHundredths > 0 else {
-                throw MobileAPIError(message: "Add a saved \(currency)/\(config.defaultCurrency) exchange rate in the web app to show complete reports.", status: 0)
+    static func converted(_ amount: Int, _ currency: String, _ date: String, target: String, rates: [ReportRate]) throws -> Int {
+            if currency == target { return amount }
+            guard let rate = rates.filter({ $0.rateDate.prefix(7) <= date.prefix(7) && (($0.baseCurrency == currency && $0.quoteCurrency == target) || ($0.quoteCurrency == currency && $0.baseCurrency == target)) }).sorted(by: { $0.rateDate > $1.rateDate }).first, rate.rateHundredths > 0 else {
+                throw MobileAPIError(message: "Add a saved \(currency)/\(target) exchange rate in the web app to show complete reports.", status: 0)
             }
             let value = rate.baseCurrency == currency ? Double(amount) * rate.rateHundredths / 100 : Double(amount) * 100 / rate.rateHundredths
             return Int(floor(value + 0.5))
         }
+
+    static func calculate(config: ReportWorkspace, accounts: [ReportAccount], balances: [ReportBalance], categories: [ReportCategory], activity: [ReportActivity], rates: [ReportRate], today: String) throws -> LiveReports {
         var groups: [String: Int] = [:]; var assets = 0; var liabilities = 0
         for account in accounts where !account.closed {
             guard let balance = balances.first(where: { $0.accountId == account.id }) else { throw MobileAPIError(message: "Account balances are incomplete. Pull to refresh.", status: 0) }
-            let value = try converted(balance.balanceMinor, account.currency, today)
+            let value = try converted(balance.balanceMinor, account.currency, today, target: config.defaultCurrency, rates: rates)
             groups[account.group, default: 0] += value
             if value >= 0 { assets += value } else { liabilities -= value }
         }
@@ -345,7 +367,7 @@ struct LiveReports {
         for item in activity where item.transactionDate >= "\(today.prefix(4))-01-01" && item.transactionDate <= today && ["income", "expense"].contains(item.transactionType) {
             guard let group = categories.first(where: { $0.id == item.categoryId })?.reportGroup,
                   ["personal_expense", "company_expense"].contains(group) else { continue }
-            let amount = try converted(item.amountMinor, item.currency, item.transactionDate) * (item.transactionType == "income" ? -1 : 1)
+            let amount = try converted(item.amountMinor, item.currency, item.transactionDate, target: config.defaultCurrency, rates: rates) * (item.transactionType == "income" ? -1 : 1)
             if group == "personal_expense" { personal += amount } else { company += amount }
         }
         return LiveReports(currency: config.defaultCurrency, throughDate: today, netWorth: assets - liabilities, assets: assets, liabilities: liabilities, groups: groups, expenses: personal + company, personalExpenses: personal, companyExpenses: company, goal: config.yearlySpendingGoals?[String(today.prefix(4))]?.combinedGoal)
@@ -373,5 +395,64 @@ struct SpendingPace {
         // Include today; calendar days keep leap years and DST unambiguous.
         target = Int((Double(annualGoal) * Double(elapsed) / Double(days)).rounded())
         variance = expenses - target
+    }
+}
+
+struct MobileBudgetGroup: Decodable, Identifiable {
+    let id: UUID; let name: String; let sortOrder: Int?
+}
+struct MobileBudgetCategory: Decodable, Identifiable {
+    let id: UUID; let name: String; let categoryGroupId: UUID?
+    let sortOrder: Int?; let defaultBudgetMinor: Int?
+    let color: String?; let icon: String?; let reportGroup: String?; let hidden: Bool?
+    var isIncome: Bool { ["personal_income", "company_revenue"].contains(reportGroup ?? "") }
+    var symbol: String {
+        let symbols = ["banknote": "banknote.fill", "basket": "cart.fill", "briefcase": "briefcase.fill", "car": "car.fill", "credit-card": "creditcard.fill", "dumbbell": "dumbbell.fill", "heart": "heart.fill", "house": "house.fill", "medical": "cross.case.fill", "plane": "airplane", "receipt": "receipt", "shield": "exclamationmark.shield.fill", "shopping-bag": "bag.fill", "sparkles": "sparkles", "target": "target", "tv": "play.tv.fill", "utensils": "fork.knife", "wine": "wineglass.fill", "zap": "bolt.fill"]
+        let key = (icon ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let symbol = symbols[key] { return symbol }
+        if symbols.values.contains(key) { return key }
+        let rules: [(String, String)] = [("salary|business", "briefcase"), ("income|saving|dividend|investment|emergency fund", "banknote"), ("grocer", "basket"), ("going out|per diem", "utensils"), ("leisure", "tv"), ("transport|car", "car"), ("apartment|rent", "house"), ("insurance", "shield"), ("shopping", "shopping-bag"), ("utilit", "zap"), ("cleaning", "target"), ("gym", "dumbbell"), ("medical", "medical"), ("subscription", "credit-card"), ("travel", "plane"), ("tax|fee|expense", "receipt"), ("charity", "heart")]
+        return rules.first { name.lowercased().range(of: $0.0, options: .regularExpression) != nil }.flatMap { symbols[$0.1] } ?? "sparkles"
+    }
+}
+struct MobileBudgetOverride: Decodable { let categoryId: UUID; let amountMinor: Int }
+struct LiveBudget {
+    struct Category: Identifiable {
+        let category: MobileBudgetCategory; let spent: Int; let budget: Int; let transactions: [ReviewTransaction]
+        var id: UUID { category.id }
+        var fraction: Double { budget > 0 ? Double(spent) / Double(budget) : 0 }
+    }
+    struct Group: Identifiable { let id: String; let name: String; let categories: [Category] }
+    let month: String; let currency: String; let groups: [Group]
+    var monthTitle: String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.dateFormat = "yyyy-MM-dd"
+        guard let date = formatter.date(from: month + "-01") else { return month }
+        formatter.locale = .current; formatter.dateFormat = "LLLL yyyy"
+        return formatter.string(from: date)
+    }
+    static func nextMonth(_ month: String) -> String {
+        let year = Int(month.prefix(4))!; let number = Int(month.suffix(2))!
+        return number == 12 ? "\(year + 1)-01" : String(format: "%04d-%02d", year, number + 1)
+    }
+    static func calculate(month: String, currency: String, groups: [MobileBudgetGroup], categories: [MobileBudgetCategory], overrides: [MobileBudgetOverride], activity: [ReviewTransaction], rates: [ReportRate]) throws -> LiveBudget {
+        let rows = try categories.sorted { ($0.sortOrder ?? 0, $0.name, $0.id.uuidString) < ($1.sortOrder ?? 0, $1.name, $1.id.uuidString) }.map { category in
+            let transactions = activity.filter { $0.categoryId == category.id && $0.transactionDate.hasPrefix(month + "-") && ["income", "expense"].contains($0.transactionType) }.sorted { ($0.transactionDate, $0.id.uuidString) > ($1.transactionDate, $1.id.uuidString) }
+            let spent = try transactions.reduce(0) { sum, transaction in
+                let amount = try LiveReports.converted(transaction.amountMinor, transaction.currency, transaction.transactionDate, target: currency, rates: rates)
+                let income = transaction.transactionType == "income"
+                return sum + amount * (category.isIncome == income ? 1 : -1)
+            }
+            return Category(category: category, spent: spent, budget: overrides.first { $0.categoryId == category.id }?.amountMinor ?? category.defaultBudgetMinor ?? 0, transactions: transactions)
+        }
+        var sections = groups.sorted { ($0.sortOrder ?? 0, $0.name) < ($1.sortOrder ?? 0, $1.name) }.map { group in
+            Group(id: group.id.uuidString, name: group.name, categories: rows.filter { $0.category.categoryGroupId == group.id })
+        }.filter { !$0.categories.isEmpty }
+        let known = Set(groups.map { $0.id })
+        let other = rows.filter { $0.category.categoryGroupId.map { !known.contains($0) } ?? true }
+        if !other.isEmpty { sections.append(Group(id: "other", name: "Other", categories: other)) }
+        return LiveBudget(month: month, currency: currency, groups: sections)
     }
 }

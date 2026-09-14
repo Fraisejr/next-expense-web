@@ -228,6 +228,9 @@ final class LiveReviewTests: XCTestCase {
             case "workspaces": return (200, [:], [["id": workspace.uuidString, "name": "Test workspace", "default_currency": "SEK", "yearly_spending_goals": [:]]])
             case "categories": return (200, [:], [["id": category.uuidString, "name": "Food", "report_group": "personal_expense"]])
             case "workspace_account_balances": return (200, [:], [["account_id": account.uuidString, "balance_minor": 10000]] + (twoBanks ? [["account_id": transaction.uuidString, "balance_minor": 20000]] : []))
+            case "category_groups": return (200, [:], [])
+            case "periods": return (200, [:], [])
+            case "budgets": return (200, [:], [])
             case "fx_rates": return (200, [:], [])
             case "payees": return (200, [:], [])
             case "bank_connections": return (200, [:], noBanks ? [] : ([["account_id": account.uuidString]] + (twoBanks ? [["account_id": transaction.uuidString]] : [])))
@@ -247,6 +250,21 @@ final class LiveReviewTests: XCTestCase {
         }
         return NeonAPI(session: URLSession(configuration: configuration), vault: vault)
     }
+    func testBudgetLoadsWithReadOnlyMonthScopedRequests() async {
+        let store = await signedInStore()
+        XCTAssertNotNil(store.budget)
+        XCTAssertNil(store.budgetError)
+        XCTAssertEqual(store.budget?.month, String(LiveReports.today().prefix(7)))
+        let budgetTables = ["category_groups", "categories", "periods", "budgets", "transactions", "fx_rates"]
+        for request in requests where budgetTables.contains(request.url?.lastPathComponent ?? "") {
+            XCTAssertEqual(request.httpMethod, "GET")
+        }
+        let monthly = requests.filter { request in
+            request.url?.lastPathComponent == "transactions" && (URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []).contains { $0.name == "and" && ($0.value ?? "").contains("transaction_date.lt.") }
+        }
+        XCTAssertEqual(monthly.count, 1)
+    }
+
     func testBankSyncRefreshesReportsAndReviewAndUsesOnlyJWT() async throws {
         let store = await signedInStore()
         let before = requests.filter { $0.url?.lastPathComponent == "workspace_account_balances" }.count
@@ -548,5 +566,47 @@ final class SpendingPaceTests: XCTestCase {
         XCTAssertEqual(zero.target, 0)
         XCTAssertEqual(zero.variance, 500)
         XCTAssertNil(SpendingPace(throughDate: "invalid", annualGoal: 100, expenses: 0))
+    }
+}
+
+@MainActor
+final class LiveBudgetTests: XCTestCase {
+    func testMonthlySpendingRefundsIncomeAndOverridesMatchWeb() throws {
+        let food = UUID(), salary = UUID(), group = UUID(), account = UUID()
+        let categories = [
+            MobileBudgetCategory(id: food, name: "Groceries", categoryGroupId: group, sortOrder: 2, defaultBudgetMinor: 20000, color: "#ff0000", icon: "basket", reportGroup: "personal_expense", hidden: false),
+            MobileBudgetCategory(id: salary, name: "Salary", categoryGroupId: nil, sortOrder: 1, defaultBudgetMinor: 100000, color: nil, icon: "briefcase.fill", reportGroup: "personal_income", hidden: false)
+        ]
+        func transaction(_ category: UUID, _ amount: Int, _ type: String, _ date: String = "2026-09-10", _ currency: String = "EUR") -> ReviewTransaction {
+            ReviewTransaction(id: UUID(), accountId: account, transactionDate: date, amountMinor: amount, currency: currency, transactionType: type, payeeName: "Payee", payeeId: nil, categoryId: category, memo: nil)
+        }
+        let activity = [transaction(food, 10000, "expense"), transaction(food, 2000, "income"), transaction(food, 50000, "expense", "2026-09-12", "SEK"), transaction(food, 99999, "expense", "2026-08-31"), transaction(food, 99999, "expense", "2026-10-01"), transaction(food, 99999, "transfer"), transaction(salary, 100000, "income"), transaction(salary, 5000, "expense")]
+        let rates = [ReportRate(baseCurrency: "EUR", quoteCurrency: "SEK", rateHundredths: 1000, rateDate: "2026-09-30")]
+        let result = try LiveBudget.calculate(month: "2026-09", currency: "EUR", groups: [MobileBudgetGroup(id: group, name: "Everyday", sortOrder: 0)], categories: categories, overrides: [MobileBudgetOverride(categoryId: food, amountMinor: 0)], activity: activity, rates: rates)
+        let foodRow = result.groups[0].categories[0]
+        XCTAssertEqual(foodRow.spent, 13000)
+        XCTAssertEqual(foodRow.budget, 0, "An explicit zero overrides the default")
+        XCTAssertEqual(foodRow.transactions.count, 3, "Drill-down contains exactly this month's non-transfer activity")
+        XCTAssertEqual(foodRow.transactions.first?.transactionDate, "2026-09-12")
+        XCTAssertEqual(result.groups[1].name, "Other")
+        XCTAssertEqual(result.groups[1].categories[0].spent, 95000)
+        XCTAssertEqual(result.groups[1].categories[0].budget, 100000)
+        XCTAssertEqual(categories[0].symbol, "cart.fill")
+        XCTAssertEqual(categories[1].symbol, "briefcase.fill")
+        XCTAssertEqual(LiveBudget.nextMonth("2026-12"), "2027-01")
+    }
+
+    func testGroupsCategoryOrderHiddenRowsAndOverBudgetProgress() throws {
+        let first = UUID(), second = UUID()
+        func category(_ name: String, _ group: UUID?, _ order: Int, _ hidden: Bool = false) -> MobileBudgetCategory {
+            MobileBudgetCategory(id: UUID(), name: name, categoryGroupId: group, sortOrder: order, defaultBudgetMinor: 1000, color: nil, icon: nil, reportGroup: "personal_expense", hidden: hidden)
+        }
+        let a = category("Last", first, 2), b = category("First", first, 1, true), c = category("Ungrouped", UUID(), 0)
+        let result = try LiveBudget.calculate(month: "2026-09", currency: "EUR", groups: [MobileBudgetGroup(id: second, name: "Empty", sortOrder: 0), MobileBudgetGroup(id: first, name: "Expenses", sortOrder: 1)], categories: [a, b, c], overrides: [], activity: [], rates: [])
+        XCTAssertEqual(result.groups.map { $0.name }, ["Expenses", "Other"])
+        XCTAssertEqual(result.groups[0].categories.map { $0.category.name }, ["First", "Last"])
+        XCTAssertEqual(result.groups[0].categories[0].category.hidden, true)
+        let overspent = LiveBudget.Category(category: a, spent: 1500, budget: 1000, transactions: [])
+        XCTAssertEqual(overspent.fraction, 1.5, "Show the true percentage even when the bar is full")
     }
 }
