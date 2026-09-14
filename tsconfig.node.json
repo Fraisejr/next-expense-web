@@ -6,7 +6,15 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
     "module": "ESNext",
-    "moduleResolution": "Bundler"
+    "moduleResolution": "Bundler",
+    "target": "ES2022"
   },
-  "include": ["vite.config.ts", "server/**/*.ts", "api/**/*.ts"]
+  "include": [
+    "vite.config.ts",
+    "server/**/*.ts",
+    "api/**/*.ts",
+    "shared/**/*.ts",
+    "src/types.ts",
+    "src/bank-import-policy.ts"
+  ]
 }

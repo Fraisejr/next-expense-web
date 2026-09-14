@@ -55,12 +55,21 @@ authorization. The user then selects the returned provider account to attach to
 the existing Next Expense account. Bank credentials are entered only on the
 bank/GoCardless authorization pages and are never visible to Next Expense.
 
-Connected accounts expose **Sync now**. A sync makes one transactions request
-and one balances request, imports only booked transactions after the persisted
-legacy-migration cutoff, deduplicates later requests by provider ID, and updates
-the account to the bank-reported balance. The most recent successful sync and
-rate-limit information are stored on the bank connection. Merely opening an
-account does not request bank data.
+Connected web accounts expose **Sync now**; iOS exposes **Sync banks** on Reports
+and Review. Both call `POST /api/gocardless/sync-import` with a workspace ID,
+account ID and the user's Neon JWT. The server reads the connection, import mode
+and last sync date itself, fetches transactions and balances once each, then
+persists imports, Review candidates, reference matches and balance metadata
+through the user-scoped Data API. Zero-value decisions and rejected/matched IDs
+remain available for deduplication. Historical references are paginated.
+
+A compare-and-swap lease on the bank connection's database-maintained
+`updated_at` serializes concurrent syncs for that account across instances. It
+expires after six minutes if execution is interrupted. Import processing stops
+within 270 seconds, inside Vercel's configured 300-second duration. There is no
+new schema migration. Stale browser bundles are asked to refresh before syncing.
+Opening an account or refreshing Reports does not request bank data. iOS shows
+per-account results and refreshes Reports and Review after partial successes too.
 
 Bank counterparties can be mapped to owned accounts for transfer detection.
 Matching is conservative: direction, currency, amount, a unique date-near

@@ -18,7 +18,7 @@ struct LiveExpenseView: View {
                         List {
                             messages
                             if store.candidates.isEmpty && !store.busy && store.errorMessage == nil {
-                                ContentUnavailableView("You’re all caught up", systemImage: "checkmark.circle", description: Text("Sync your bank in the web app, then pull to refresh here."))
+                                ContentUnavailableView("You’re all caught up", systemImage: "checkmark.circle", description: Text("Tap Sync banks to check for new imports."))
                             }
                             ForEach(store.candidates) { candidate in
                                 Button { selected = candidate } label: { row(candidate) }
@@ -165,13 +165,27 @@ struct LiveExpenseView: View {
     }
 
     @ViewBuilder private var messages: some View {
-        if store.busy { ProgressView("Updating…") }
+        if store.busy { ProgressView(store.syncingBanks ? "Syncing banks…" : "Updating…") }
+        if !store.bankSyncResults.isEmpty {
+            Section("Bank sync") {
+                ForEach(store.bankSyncResults) { result in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(result.name).font(.headline)
+                        Text(result.message).font(.footnote).foregroundStyle(result.failed ? Color.orange : Color.secondary)
+                    }
+                }
+            }
+        }
         if let error = store.errorMessage {
             Section { Text(error).foregroundStyle(.red); Button("Retry") { Task { await store.refresh() } }.disabled(store.busy) }
         }
         if let notice = store.notice { Text(notice).font(.footnote).foregroundStyle(.secondary) }
     }
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button { Task { await store.syncBanks() } } label: { Label("Sync banks", systemImage: "arrow.triangle.2.circlepath") }
+                .disabled(store.busy)
+        }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 Text(store.workspace?.name ?? "")

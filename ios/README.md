@@ -28,8 +28,9 @@ key, or GoCardless secret to the app.
 
 ## Real review workflow
 
-1. Import bank transactions using **Sync now** in the web app.
-2. Continue with Google on iOS and open **Review**. Pull to refresh if needed.
+1. Continue with Google on iOS and tap **Sync banks** in Reports or Review.
+2. Each open, connected account syncs sequentially and shows its result. Reports
+   and Review refresh afterward, including when one account fails.
 3. Open an item, choose an active category, and optionally choose a different
    existing payee. **Use imported payee** lets the existing server approval
    function resolve/create the payee using its established rules.
@@ -84,9 +85,15 @@ fails, and reports that failure. RLS remains authoritative for workspace access.
 
 The shipped UI contains real Reports and Review tabs. The original Overview,
 Accounts, and demo store remain available for SwiftUI previews and unit tests;
-they are not presented as live financial data. Mobile bank sync,
-bank linking, new payee entry, and transfers remain outside
+they are not presented as live financial data. Bank linking/reconnection,
+new payee entry, and transfers remain outside
 this integration. Google-only accounts do not need to create a password.
+
+Bank sync calls the fixed HTTPS `/api/gocardless/sync-import` endpoint using a
+fresh Neon JWT. Auth cookies and provider secrets never go to that endpoint.
+The server applies the same import mode, matching, zero-value exclusions and
+Review staging used by the web client. Network failures do not retry imports;
+refresh to see any saved results. Reconnect expired consents on the website.
 
 ## Verification
 

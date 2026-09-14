@@ -3,7 +3,7 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "functions": { "api/gocardless/[action].ts": { "maxDuration": 60 } },
+  "functions": { "api/gocardless/[action].ts": { "maxDuration": 300 } },
   "rewrites": [
     { "source": "/auth/ios/callback", "destination": "/auth/ios/callback.html" },
     { "source": "/((?!api/|auth/ios/).*)", "destination": "/index.html" }

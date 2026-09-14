@@ -1,3 +1,6 @@
+import { saveBankSync } from './bank-import.ts'
+import type { BankSyncPayload } from '../shared/bank-types.ts'
+import { bankClient, acquireSyncLease } from './bank-sync.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createHash } from 'node:crypto'
 import { allowedOrigin, assertUUID, authorizeBankRequest, bankReference, verifyBankReference, BankHttpError } from './bank-authorization.ts'
@@ -144,6 +147,7 @@ export function createGoCardlessHandler(secretId: string | undefined, secretKey:
   }
 
   return async (request: IncomingMessage, response: ServerResponse) => {
+        let releaseSync: (() => Promise<void>) | undefined
         try {
           if (!['GET', 'POST'].includes(request.method ?? '')) throw new BankHttpError('Method not allowed.', 405)
           const origin = request.headers.origin
@@ -204,9 +208,11 @@ export function createGoCardlessHandler(secretId: string | undefined, secretKey:
             return
           }
 
-          if (request.method === 'POST' && url.pathname === '/sync') {
+          if (request.method === 'POST' && url.pathname === '/sync') throw new BankHttpError('Refresh the website to use the updated bank sync.', 409)
+
+          if (request.method === 'POST' && url.pathname === '/sync-import') {
             if (!auth.accountId || !auth.providerAccountId) throw new BankHttpError('This account is not connected to a bank.', 403)
-            const connections = await auth.read('bank_connections', { select: 'id,provider_connection_id', workspace_id: `eq.${auth.workspaceId}`, account_id: `eq.${auth.accountId}`, provider: 'eq.gocardless_bank_account_data', status: 'eq.active', limit: '1' })
+            const connections = await auth.read('bank_connections', { select: 'id,provider_connection_id,last_synced_at', workspace_id: `eq.${auth.workspaceId}`, account_id: `eq.${auth.accountId}`, provider: 'eq.gocardless_bank_account_data', status: 'eq.active', limit: '1' })
             if (!connections.length) throw new BankHttpError('There is no active bank connection for this account.', 403)
             // Account/connection rows are client-editable. Prove the binding
             // against the provider's signed reference before reading bank data.
@@ -215,7 +221,14 @@ export function createGoCardlessHandler(secretId: string | undefined, secretKey:
             if (!secretKey || !verifyBankReference(requisition.reference, auth.workspaceId, auth.accountId, secretKey)) throw new BankHttpError('Reconnect this bank account to authorize secure hosted sync.', 403)
             if (!Array.isArray(requisition.accounts) || !requisition.accounts.includes(auth.providerAccountId)) throw new BankHttpError('This bank account is not part of your authorization.', 403)
             const accountId = auth.providerAccountId
-            const dateFrom = String(body.dateFrom ?? '')
+            const db = bankClient(config.dataApiUrl!, request.headers.authorization!)
+            releaseSync = await acquireSyncLease(db, auth.workspaceId, auth.accountId)
+            const accounts = await auth.read('accounts', { select: 'id,currency,bank_import_mode,closed', workspace_id: `eq.${auth.workspaceId}`, id: `eq.${auth.accountId}`, limit: '1' })
+            const savedAccount = accounts[0]
+            if (!savedAccount || savedAccount.closed) throw new BankHttpError('This account is closed or unavailable.', 409)
+            const lastSync = connections[0].last_synced_at ? new Date(String(connections[0].last_synced_at)) : null
+            if (lastSync && Number.isFinite(lastSync.getTime())) lastSync.setUTCDate(lastSync.getUTCDate() - 14)
+            const dateFrom = lastSync && Number.isFinite(lastSync.getTime()) ? lastSync.toISOString().slice(0, 10) : ''
             if (!/^[0-9a-f-]{36}$/i.test(accountId)) throw new Error('The connected bank account reference is invalid.')
             if (dateFrom && !/^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) throw new Error('The transaction start date is invalid.')
 
@@ -254,7 +267,7 @@ export function createGoCardlessHandler(secretId: string | undefined, secretKey:
               ? selectedBalance.balanceAmount as Record<string, unknown>
               : null
 
-            json(response, 200, {
+            const payload: BankSyncPayload = {
               transactions: normalizedTransactions,
               rawProviderResponse: {
                 transactions: transactionResponse?.payload ?? null,
@@ -279,13 +292,25 @@ export function createGoCardlessHandler(secretId: string | undefined, secretKey:
                 balances: balanceAttempt.status === 'rejected' ? cleanError(balanceAttempt.reason, balanceAttempt.reason instanceof Error ? balanceAttempt.reason.message : 'The balance could not be retrieved.') : null,
               },
               fetchedAt: new Date().toISOString(),
-            })
+            }
+            const result = await saveBankSync(db, auth.workspaceId, {
+              id: auth.accountId, providerAccountId: auth.providerAccountId,
+              currency: String(savedAccount.currency),
+              bankImportMode: savedAccount.bank_import_mode === 'automatic' ? 'automatic' : 'review',
+            }, payload)
+            if (releaseSync) { await releaseSync().catch(() => {}); releaseSync = undefined }
+            json(response, 200, result)
             return
           }
 
           json(response, 404, { error: 'Unknown GoCardless endpoint.' })
         } catch (error) {
-          json(response, error instanceof GoCardlessRequestError || error instanceof BankHttpError ? error.status : error instanceof SyntaxError ? 400 : 500, { error: error instanceof Error ? error.message : 'The GoCardless request failed.' })
+          if (releaseSync) { await releaseSync().catch(() => {}); releaseSync = undefined }
+          json(response, error instanceof GoCardlessRequestError ? (error.status === 401 ? 502 : error.status) : error instanceof BankHttpError ? error.status : error instanceof SyntaxError ? 400 : 500, { error: error && typeof error === 'object' && 'message' in error ? String(error.message) : 'The GoCardless request failed.' })
+        } finally {
+          // A failed release expires automatically; never turn a completed import
+          // into an apparent failure that encourages an immediate retry.
+          if (releaseSync) await releaseSync().catch(() => {})
         }
   }
 }

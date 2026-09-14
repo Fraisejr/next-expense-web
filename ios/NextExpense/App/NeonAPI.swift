@@ -155,6 +155,27 @@ final class NeonAPI {
         }
     }
 
+    func syncBank(workspaceId: UUID, accountId: UUID) async throws -> MobileBankSyncSummary {
+        // Refresh before a potentially long import. Only a preflight 401 can
+        // trigger a retry; transport and processing failures are never retried.
+        try await refreshToken()
+        do { return try await bankRequest(workspaceId: workspaceId, accountId: accountId) }
+        catch let error as MobileAPIError where error.status == 401 {
+            try await refreshToken()
+            return try await bankRequest(workspaceId: workspaceId, accountId: accountId)
+        }
+    }
+
+    private func bankRequest(workspaceId: UUID, accountId: UUID) async throws -> MobileBankSyncSummary {
+        var request = URLRequest(url: URL(string: "https://next-expense-web.vercel.app/api/gocardless/sync-import")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(jwt ?? "")", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["workspaceId": workspaceId.uuidString, "accountId": accountId.uuidString])
+        let (data, _) = try await send(request, timeout: 330)
+        return try JSONDecoder().decode(MobileBankSyncSummary.self, from: data)
+    }
+
     // This is a refresh hint only; the server verifies the token signature.
     static func expiresSoon(_ token: String, now: Date = Date()) -> Bool {
         let parts = token.split(separator: ".")
@@ -206,10 +227,10 @@ final class NeonAPI {
         return (data, response)
     }
 
-    private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    private func send(_ request: URLRequest, timeout: TimeInterval = 30) async throws -> (Data, HTTPURLResponse) {
         guard request.url?.scheme == "https" else { throw MobileAPIError(message: "A secure connection is required.", status: 0) }
         var request = request
-        request.timeoutInterval = 30
+        request.timeoutInterval = timeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
         let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
@@ -219,7 +240,7 @@ final class NeonAPI {
             if object?["code"] as? String == "INVALID_CALLBACKURL" {
                 message = "Google sign-in needs the iOS callback enabled in the server settings. You do not need to create a password."
             } else {
-                message = object?["message"] as? String ?? object?["code"] as? String ?? "The server could not complete the request (\(response.statusCode))."
+                message = object?["message"] as? String ?? object?["error"] as? String ?? object?["code"] as? String ?? "The server could not complete the request (\(response.statusCode))."
             }
             throw MobileAPIError(message: message, status: response.statusCode)
         }

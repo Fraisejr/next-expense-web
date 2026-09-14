@@ -18,6 +18,20 @@ struct ReviewTransaction: Decodable, Identifiable {
     let memo: String?
 }
 
+struct MobileBankSyncSummary: Decodable {
+    struct Diagnostic: Decodable { let staged: Int; let zeroIgnored: Int? }
+    let imported: Int
+    let duplicates: Int
+    let diagnostic: Diagnostic
+    let warnings: [String]
+}
+struct MobileBankSyncResult: Identifiable {
+    let id: UUID
+    let name: String
+    var message: String
+    var failed = false
+}
+
 @MainActor
 final class LiveExpenseStore: ObservableObject {
     @Published private(set) var signedIn = false
@@ -31,6 +45,8 @@ final class LiveExpenseStore: ObservableObject {
     @Published private(set) var accounts: [ReviewChoice] = []
     @Published var errorMessage: String?
     @Published var notice: String?
+    @Published private(set) var bankSyncResults: [MobileBankSyncResult] = []
+    @Published private(set) var syncingBanks = false
     private let api: NeonAPI
     private let columns = "id,account_id,transaction_date,amount_minor,currency,transaction_type,payee_name,payee_id,category_id,memo"
 
@@ -101,6 +117,48 @@ final class LiveExpenseStore: ObservableObject {
         do {
             if let workspace { try await loadSnapshot(workspace.id) }
             else { try await loadWorkspaces() }
+        } catch { handle(error) }
+    }
+
+    func syncBanks() async {
+        guard !busy, let workspace else { return }
+        busy = true; syncingBanks = true; errorMessage = nil; notice = nil; bankSyncResults = []
+        defer { busy = false; syncingBanks = false }
+        struct Connection: Decodable { let accountId: UUID }
+        do {
+            let connections: [Connection] = try await all("bank_connections", query: scoped(workspace.id) + [
+                .init(name: "select", value: "account_id"), .init(name: "account_id", value: "not.is.null"), .init(name: "provider", value: "eq.gocardless_bank_account_data"),
+                .init(name: "status", value: "eq.active"), .init(name: "order", value: "id")
+            ])
+            let openAccounts: [ReviewChoice] = try await all("accounts", query: scoped(workspace.id) + [
+                .init(name: "select", value: "id,name"), .init(name: "closed", value: "eq.false"), .init(name: "order", value: "name,id")
+            ])
+            let connected = Set(connections.map { $0.accountId })
+            let targets = openAccounts.filter { connected.contains($0.id) }
+            guard !targets.isEmpty else { notice = "No connected banks. Connect an account on the website first."; return }
+            bankSyncResults = targets.map { .init(id: $0.id, name: $0.name, message: "Waiting") }
+            for (index, account) in targets.enumerated() {
+                bankSyncResults[index].message = "Syncing…"
+                do {
+                    let result = try await api.syncBank(workspaceId: workspace.id, accountId: account.id)
+                    let summary = "\(result.imported) imported · \(result.diagnostic.staged) to review · \(result.duplicates) already known"
+                    bankSyncResults[index].message = ([summary] + result.warnings).joined(separator: "\n")
+                    bankSyncResults[index].failed = !result.warnings.isEmpty
+                } catch {
+                    bankSyncResults[index].message = error.localizedDescription
+                    bankSyncResults[index].failed = true
+                    if let failure = error as? MobileAPIError, failure.status == 401 {
+                        for remaining in targets.indices where remaining > index {
+                            bankSyncResults[remaining].message = "Not synced — sign in again."
+                            bankSyncResults[remaining].failed = true
+                        }
+                        break
+                    }
+                }
+            }
+            // Refresh even after partial failures: earlier accounts may have saved.
+            do { try await loadSnapshot(workspace.id) }
+            catch { errorMessage = "Bank sync finished. Could not refresh Reports and Review: \(error.localizedDescription)" }
         } catch { handle(error) }
     }
 
@@ -212,7 +270,7 @@ final class LiveExpenseStore: ObservableObject {
         errorMessage = error.localizedDescription
     }
     private func clearWorkspace() {
-        workspace = nil; candidates = []; reports = nil; categories = []; payees = []; accounts = []; notice = nil
+        workspace = nil; candidates = []; reports = nil; categories = []; payees = []; accounts = []; notice = nil; bankSyncResults = []
     }
     private func reset() { signedIn = false; workspaces = []; clearWorkspace() }
 }

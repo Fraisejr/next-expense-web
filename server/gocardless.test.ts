@@ -74,16 +74,14 @@ test('cross-origin calls fail before authentication', async t => {
 })
 test('cross-workspace account lookup fails closed', async t => {
   const calls=mockFetch(t,{account:false})
-  assert.equal((await invoke('/sync',{workspaceId:workspace,accountId:account})).status,403)
+  assert.equal((await invoke('/sync-import',{workspaceId:workspace,accountId:account})).status,403)
   assert.ok(calls.every(x=>x.host==='data.example'))
 })
-test('sync uses server-read provider ID, ignoring a forged client provider ID', async t => {
-  const calls=mockFetch(t)
-  const result=await invoke('/sync',{workspaceId:workspace,accountId:account,providerAccountId:requisition})
-  assert.equal(result.status,200)
-  assert.ok(calls.some(x=>x.pathname===`/api/v2/accounts/${provider}/transactions/`))
-  assert.ok(!calls.some(x=>x.pathname.includes(`/accounts/${requisition}/`)))
-  assert.equal((result.payload.transactions as {amount:string}[])[0].amount,'-12.34')
+test('old browser sync asks for a refresh before requesting bank data', async t => {
+  const calls = mockFetch(t)
+  const result = await invoke('/sync', { workspaceId: workspace, accountId: account })
+  assert.equal(result.status, 409)
+  assert.ok(calls.every(x => x.host === 'data.example'))
 })
 test('requisition belongs to the workspace and account that initiated it',async t=>{
   mockFetch(t,{reference:bankReference(workspace,account,key)})
@@ -102,11 +100,11 @@ test('signed bank references reject tampering',()=>{
 
 test('client-edited provider account outside the signed requisition cannot sync',async t=>{
   const calls=mockFetch(t,{providerAccounts:[requisition]})
-  assert.equal((await invoke('/sync',{workspaceId:workspace,accountId:account})).status,403)
+  assert.equal((await invoke('/sync-import',{workspaceId:workspace,accountId:account})).status,403)
   assert.ok(!calls.some(x=>x.pathname.endsWith('/transactions/') || x.pathname.endsWith('/balances/')))
 })
 test('legacy or another workspace requisition cannot authorize hosted sync',async t=>{
   const calls=mockFetch(t,{reference:'legacy-reference'})
-  assert.equal((await invoke('/sync',{workspaceId:workspace,accountId:account})).status,403)
+  assert.equal((await invoke('/sync-import',{workspaceId:workspace,accountId:account})).status,403)
   assert.ok(!calls.some(x=>x.pathname.endsWith('/transactions/') || x.pathname.endsWith('/balances/')))
 })

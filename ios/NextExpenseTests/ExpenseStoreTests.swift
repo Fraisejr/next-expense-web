@@ -169,6 +169,11 @@ final class LiveReviewTests: XCTestCase {
     private var expiredOnce = false
     private var expiryStatus = 401
     private var sessionCalls = 0
+    private var bankStatus = 200
+    private var bankTransportFailure = false
+    private var twoBanks = false
+    private var noBanks = false
+    private var bankCalls = 0
     private var rejectStatus = 200
     private var rejectRows = true
     private let vault = MemoryVault()
@@ -193,6 +198,27 @@ final class LiveReviewTests: XCTestCase {
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer data-jwt")
             XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"), "Auth cookies must never go to the Data API")
             if expiredOnce { expiredOnce = false; return (expiryStatus, [:], ["message": "JWT token has expired"]) }
+            if path == "sync-import" {
+                bankCalls += 1
+                XCTAssertEqual(request.url?.host, "next-expense-web.vercel.app")
+                XCTAssertEqual(request.httpMethod, "POST")
+                var bodyData = request.httpBody ?? Data()
+                if bodyData.isEmpty, let stream = request.httpBodyStream {
+                    stream.open(); defer { stream.close() }
+                    var bytes = [UInt8](repeating: 0, count: 1024)
+                    while stream.hasBytesAvailable {
+                        let count = stream.read(&bytes, maxLength: bytes.count)
+                        if count <= 0 { break }; bodyData.append(bytes, count: count)
+                    }
+                }
+                let body = try JSONSerialization.jsonObject(with: bodyData) as! [String: String]
+                XCTAssertEqual(body["workspaceId"], workspace.uuidString)
+                XCTAssertNotNil(body["accountId"])
+                XCTAssertNil(body["providerAccountId"])
+                if bankTransportFailure { throw URLError(.timedOut) }
+                if bankStatus != 200 && bankCalls == 1 { return (bankStatus, [:], ["error": "Reconnect this bank on the website."]) }
+                return (200, [:], ["imported": 2, "duplicates": 10, "diagnostic": ["staged": 3, "zeroIgnored": 1], "warnings": []])
+            }
             let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
             if !["workspaces", "workspace_members", "approve_bank_import_candidate", "workspace_account_balances"].contains(path) {
                 XCTAssertEqual(query.first(where: { $0.name == "workspace_id" })?.value, "eq.\(workspace)")
@@ -201,10 +227,11 @@ final class LiveReviewTests: XCTestCase {
             case "workspace_members": return (200, [:], [["workspace_id": workspace.uuidString]])
             case "workspaces": return (200, [:], [["id": workspace.uuidString, "name": "Test workspace", "default_currency": "SEK", "yearly_spending_goals": [:]]])
             case "categories": return (200, [:], [["id": category.uuidString, "name": "Food", "report_group": "personal_expense"]])
-            case "workspace_account_balances": return (200, [:], [["account_id": account.uuidString, "balance_minor": 10000]])
+            case "workspace_account_balances": return (200, [:], [["account_id": account.uuidString, "balance_minor": 10000]] + (twoBanks ? [["account_id": transaction.uuidString, "balance_minor": 20000]] : []))
             case "fx_rates": return (200, [:], [])
             case "payees": return (200, [:], [])
-            case "accounts": return (200, [:], [["id": account.uuidString, "name": "Main", "currency": "SEK", "closed": false, "scope": "Personal"]])
+            case "bank_connections": return (200, [:], noBanks ? [] : ([["account_id": account.uuidString]] + (twoBanks ? [["account_id": transaction.uuidString]] : [])))
+            case "accounts": return (200, [:], [["id": account.uuidString, "name": "Main", "currency": "SEK", "closed": false, "scope": "Personal"]] + (twoBanks ? [["id": transaction.uuidString, "name": "Second", "currency": "SEK", "closed": false, "scope": "Personal"]] : []))
             case "bank_import_candidates":
                 if request.httpMethod == "PATCH" {
                     return (rejectStatus, [:], rejectStatus == 200 ? (rejectRows ? [["id": candidate.uuidString]] : []) : ["message": "Write failed"])
@@ -220,6 +247,47 @@ final class LiveReviewTests: XCTestCase {
         }
         return NeonAPI(session: URLSession(configuration: configuration), vault: vault)
     }
+    func testBankSyncRefreshesReportsAndReviewAndUsesOnlyJWT() async throws {
+        let store = await signedInStore()
+        let before = requests.filter { $0.url?.lastPathComponent == "workspace_account_balances" }.count
+        await store.syncBanks()
+        XCTAssertEqual(bankCalls, 1)
+        XCTAssertEqual(store.bankSyncResults.count, 1)
+        XCTAssertTrue(store.bankSyncResults[0].message.contains("3 to review"))
+        XCTAssertFalse(store.bankSyncResults[0].failed)
+        XCTAssertNotNil(store.reports)
+        XCTAssertEqual(requests.filter { $0.url?.lastPathComponent == "workspace_account_balances" }.count, before + 1)
+        XCTAssertFalse(store.busy)
+    }
+
+    func testBankSyncContinuesAfterAnAccountFailure() async throws {
+        twoBanks = true; bankStatus = 403
+        let store = await signedInStore()
+        await store.syncBanks()
+        XCTAssertEqual(bankCalls, 2)
+        XCTAssertTrue(store.bankSyncResults[0].failed)
+        XCTAssertEqual(store.bankSyncResults[0].message, "Reconnect this bank on the website.")
+        XCTAssertFalse(store.bankSyncResults[1].failed)
+        XCTAssertNotNil(store.reports)
+    }
+
+    func testBankTransportFailureIsNotRetriedAndStillRefreshes() async throws {
+        bankTransportFailure = true
+        let store = await signedInStore()
+        await store.syncBanks()
+        XCTAssertEqual(bankCalls, 1)
+        XCTAssertTrue(store.bankSyncResults[0].failed)
+        XCTAssertNotNil(store.reports)
+    }
+
+    func testNoConnectedBanksDoesNotCallProvider() async throws {
+        noBanks = true
+        let store = await signedInStore()
+        await store.syncBanks()
+        XCTAssertEqual(bankCalls, 0)
+        XCTAssertTrue(store.notice?.contains("No connected banks") == true)
+    }
+
     func testNeon400ExpiryRenewsInsteadOfFailing() async throws {
         let api = makeAPI()
         try await api.signIn(email: "test@example.com", password: "fixture")
