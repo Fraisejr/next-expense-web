@@ -3706,11 +3706,12 @@ function CategoryDetail({ category, spent, budget, monthlyBudgetOverride, monthK
           <label><span>Default monthly budget</span><input type="number" min="0" step="0.01" value={defaultBudgetInput} onChange={(event) => setDefaultBudgetInput(event.target.value)} /></label>
           <small>Used automatically in every month that does not have its own budget.</small>
           <button className="secondary-button" type="button" disabled={defaultBudgetMinor === null || defaultBudgetMinor === category.defaultBudgetMinor || Boolean(savingBudget)} onClick={() => defaultBudgetMinor !== null && runBudgetAction('default', () => onUpdateDefaultBudget(category.id, defaultBudgetMinor))}>{savingBudget === 'default' ? 'Saving…' : 'Save default'}</button>
-          <div className="category-budget-helper">
-            <div><strong>Need a starting point?</strong><span>Use an existing plan or a recent monthly average.</span></div>
+          <details className="category-budget-helper">
+            <summary>Need a starting point?</summary>
+            <p>Use an existing plan or a recent monthly average.</p>
             {suggestions.length > 0 && <div>{suggestions.map((suggestion) => <button className="secondary-button" type="button" key={suggestion.label} onClick={() => setDefaultBudgetInput((suggestion.amountMinor / 100).toFixed(2))}><span>{suggestion.label}</span><strong>{formatMoney(suggestion.amountMinor, defaultCurrency)}</strong></button>)}</div>}
             {!historyLoaded && <button className="category-budget-load" type="button" disabled={historyLoading} onClick={() => void onRequestHistory()}><LoaderCircle className={historyLoading ? 'spin-icon' : ''} size={13} />{historyLoading ? 'Loading suggestions…' : 'Show recent averages'}</button>}
-          </div>
+          </details>
         </div>
         <div className="category-budget-setting month-setting">
           <label><span>{selectedMonthLabel} budget</span><input type="number" min="0" step="0.01" value={monthlyBudgetInput} onChange={(event) => setMonthlyBudgetInput(event.target.value)} /></label>
