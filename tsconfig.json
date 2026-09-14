@@ -10,6 +10,7 @@
   ],
   "compilerOptions": {
     "allowImportingTsExtensions": true,
-    "rewriteRelativeImportExtensions": true
+    "rewriteRelativeImportExtensions": true,
+    "target": "ES2022"
   }
 }
