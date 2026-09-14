@@ -700,7 +700,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
-  async function editCategory(categoryId: string, changes: Pick<Category, 'name' | 'reportGroup' | 'icon' | 'color' | 'categoryGroupId'>) {
+  async function editCategory(categoryId: string, changes: Pick<Category, 'name' | 'reportGroup' | 'icon' | 'color' | 'categoryGroupId' | 'hidden'>) {
     const normalizedName = changes.name.normalize('NFKC').trim()
     try {
       setSyncError('')
@@ -1344,7 +1344,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onPostTransfer={postBankImportAsTransfer} onRematchPayees={() => rematchBankImportPayees(selectedAccount.id)} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onAddAlternativeName={(sourceName, payeeId) => addPayeeAlternativeForReview(sourceName, payeeId, selectedAccount.id)} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingAccountId === selectedAccount.id} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
         )}
         {selectedCategory && (
-          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} monthlyBudgetOverride={data.budgets.find((budget) => budget.month === selectedMonthKey && budget.categoryId === selectedCategory.id)?.amountMinor} monthKey={selectedMonthKey} defaultCurrency={workspace.defaultCurrency} fxRates={data.fxRates} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTransactions={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onUpdateBudget={updateBudget} onUpdateDefaultBudget={updateDefaultBudget} onRemoveBudgetOverride={removeBudgetOverride} onEdit={() => setModal('edit-category')} onDelete={removeUnusedCategory} onSetHidden={setCategoryHidden} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
+          <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} monthlyBudgetOverride={data.budgets.find((budget) => budget.month === selectedMonthKey && budget.categoryId === selectedCategory.id)?.amountMinor} monthKey={selectedMonthKey} defaultCurrency={workspace.defaultCurrency} fxRates={data.fxRates} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTransactions={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onUpdateBudget={updateBudget} onUpdateDefaultBudget={updateDefaultBudget} onRemoveBudgetOverride={removeBudgetOverride} onEdit={() => setModal('edit-category')} onDelete={removeUnusedCategory} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
         )}
         {selectedPayee && (
           <PayeeDetailPage key={selectedPayee.id} payee={selectedPayee} payees={data.payees} mappings={data.payeeMappings.filter((mapping) => mapping.payeeId === selectedPayee.id)} transactions={data.transactions.filter((transaction) => transaction.payeeId === selectedPayee.id)} categories={data.categories} accounts={data.accounts} onBack={() => goTo('/payees')} onEditTransaction={setCategoryTarget} onRename={renamePayee} onUpdateDefaults={changePayeeDefaults} onAddMapping={addPayeeMapping} onUpdateMapping={changePayeeMapping} onRemoveMapping={removePayeeMapping} />
@@ -3590,7 +3590,7 @@ function formatSyncDiagnostic(diagnostic: NonNullable<Account['lastSyncDiagnosti
   ].filter(Boolean).join(' · ')
 }
 
-function CategoryDetailPage({ category, spent, budget, monthlyBudgetOverride, monthKey, defaultCurrency, fxRates, transactions, allTransactions, categories, categoryGroups, accounts, historyLoaded, historyLoading, onRequestHistory, onUpdateBudget, onUpdateDefaultBudget, onRemoveBudgetOverride, onEdit, onDelete, onSetHidden, onBack, onSelectCategory, onEditTransaction }: { category: Category; spent: number; budget: number; monthlyBudgetOverride?: number; monthKey: string; defaultCurrency: string; fxRates: FxRate[]; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; categoryGroups: CategoryGroup[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onUpdateBudget: (categoryId: string, amountMinor: number) => Promise<void>; onUpdateDefaultBudget: (categoryId: string, amountMinor: number) => Promise<void>; onRemoveBudgetOverride: (categoryId: string) => Promise<void>; onEdit: () => void; onDelete: (categoryId: string) => Promise<void>; onSetHidden: (categoryId: string, hidden: boolean) => void; onBack: () => void; onSelectCategory: (id: string) => void; onEditTransaction: (transaction: Transaction) => void }) {
+function CategoryDetailPage({ category, spent, budget, monthlyBudgetOverride, monthKey, defaultCurrency, fxRates, transactions, allTransactions, categories, categoryGroups, accounts, historyLoaded, historyLoading, onRequestHistory, onUpdateBudget, onUpdateDefaultBudget, onRemoveBudgetOverride, onEdit, onDelete, onBack, onSelectCategory, onEditTransaction }: { category: Category; spent: number; budget: number; monthlyBudgetOverride?: number; monthKey: string; defaultCurrency: string; fxRates: FxRate[]; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; categoryGroups: CategoryGroup[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onUpdateBudget: (categoryId: string, amountMinor: number) => Promise<void>; onUpdateDefaultBudget: (categoryId: string, amountMinor: number) => Promise<void>; onRemoveBudgetOverride: (categoryId: string) => Promise<void>; onEdit: () => void; onDelete: (categoryId: string) => Promise<void>; onBack: () => void; onSelectCategory: (id: string) => void; onEditTransaction: (transaction: Transaction) => void }) {
   const Icon = categoryIcons[category.icon as keyof typeof categoryIcons] ?? Sparkles
   const categoryGroupName = categoryGroups.find((group) => group.id === category.categoryGroupId)?.name
   const [confirmingDelete, setConfirmingDelete] = useState(false)
@@ -3602,7 +3602,7 @@ function CategoryDetailPage({ category, spent, budget, monthlyBudgetOverride, mo
       <label><span>Category</span><select value={category.id} onChange={(event) => onSelectCategory(event.target.value)}>{categories.map((option) => <option key={option.id} value={option.id}>{option.name}{option.hidden ? ' (hidden)' : ''}</option>)}</select></label>
     </div>
     <section className="panel entity-detail-panel">
-      <div className="entity-heading"><div className="entity-heading-icon" style={{ color: category.color, background: `${category.color}18` }}><Icon size={20} /></div><div><span className="eyebrow">{category.reportGroup.replace('_', ' ')}{categoryGroupName ? ` · ${categoryGroupName}` : ''}{category.hidden ? ' · Hidden' : ''}</span><h2>{category.name}</h2></div><div className="entity-heading-actions"><button className="secondary-button" type="button" onClick={onEdit}><Pencil size={16} />Edit</button><button className="secondary-button" type="button" onClick={() => onSetHidden(category.id, !category.hidden)}>{category.hidden ? <Eye size={16} /> : <EyeOff size={16} />}{category.hidden ? 'Unhide category' : 'Hide category'}</button>{allTransactions.length === 0 && <button className={confirmingDelete ? 'danger-button confirming' : 'danger-button'} type="button" disabled={deleting} onClick={async () => {
+      <div className="entity-heading"><div className="entity-heading-icon" style={{ color: category.color, background: `${category.color}18` }}><Icon size={20} /></div><div><span className="eyebrow">{category.reportGroup.replace('_', ' ')}{categoryGroupName ? ` · ${categoryGroupName}` : ''}{category.hidden ? ' · Hidden' : ''}</span><h2>{category.name}</h2></div><div className="entity-heading-actions"><button className="secondary-button" type="button" onClick={onEdit}><Pencil size={16} />Edit</button>{allTransactions.length === 0 && <button className={confirmingDelete ? 'danger-button confirming' : 'danger-button'} type="button" disabled={deleting} onClick={async () => {
         if (!confirmingDelete) { setConfirmingDelete(true); setDeleteError(''); return }
         setDeleting(true)
         try { await onDelete(category.id) } catch (cause) { setDeleteError(getErrorMessage(cause, 'Could not delete the category.')); setDeleting(false); setConfirmingDelete(false) }
@@ -3630,6 +3630,8 @@ function CategoryDetail({ category, spent, budget, monthlyBudgetOverride, monthK
   const [savingBudget, setSavingBudget] = useState<'default' | 'month' | 'remove' | ''>('')
   const [budgetError, setBudgetError] = useState('')
   const remaining = budget - spent
+  const budgetPercent = budget > 0 ? Math.round((spent / budget) * 100) : 0
+  const overBudget = remaining < 0
   const selectedMonthDate = fromMonthKey(monthKey)
   const selectedMonthLabel = selectedMonthDate ? monthName.format(selectedMonthDate) : monthKey
   const averageFor = (count: number) => {
@@ -3661,10 +3663,14 @@ function CategoryDetail({ category, spent, budget, monthlyBudgetOverride, monthK
     }
   }
   return <div className="category-detail">
-    <div className="category-detail-summary">
-      <div><span>Net spent</span><strong>{formatMoney(spent)}</strong></div>
-      <div><span>Budget · {monthlyBudgetOverride === undefined ? 'Default' : 'Month override'}</span><strong>{formatMoney(budget)}</strong></div>
-      <div><span>Remaining</span><strong className={remaining < 0 ? 'negative' : ''}>{formatMoney(remaining)}</strong></div>
+    <div className="category-detail-progress">
+      <div className="category-detail-progress-heading">
+        <strong>{formatMoney(spent)} <small>spent</small></strong>
+        <span>of {formatMoney(budget)} <small>· {monthlyBudgetOverride === undefined ? 'default budget' : 'month override'}</small></span>
+        <span className={overBudget ? 'negative' : ''}>{overBudget ? `${formatMoney(Math.abs(remaining))} over budget` : `${formatMoney(remaining)} remaining`}</span>
+        <b>{budget > 0 ? `${budgetPercent}%` : 'No budget'}</b>
+      </div>
+      <div className="progress-track" role="img" aria-label={budget > 0 ? `${Math.max(0, budgetPercent)}% of budget spent` : 'No budget set'}><span style={{ width: `${Math.min(100, Math.max(0, budgetPercent))}%`, background: overBudget ? '#ae4c38' : category.color }} /></div>
     </div>
     <section className="category-budget-settings">
       <div className="category-budget-settings-heading"><h3>Default and monthly budget</h3><p>{monthlyBudgetOverride === undefined ? `${selectedMonthLabel} is using the default.` : `${selectedMonthLabel} has its own override.`}</p></div>
@@ -4231,10 +4237,11 @@ function CategoryGroupManagerRow({ group, categoryCount, first, last, onRename, 
   </div>
 }
 
-function CategoryDetailsForm({ category, categories, categoryGroups, onSubmit }: { category: Category; categories: Category[]; categoryGroups: CategoryGroup[]; onSubmit: (categoryId: string, changes: Pick<Category, 'name' | 'reportGroup' | 'icon' | 'color' | 'categoryGroupId'>) => Promise<void> }) {
+function CategoryDetailsForm({ category, categories, categoryGroups, onSubmit }: { category: Category; categories: Category[]; categoryGroups: CategoryGroup[]; onSubmit: (categoryId: string, changes: Pick<Category, 'name' | 'reportGroup' | 'icon' | 'color' | 'categoryGroupId' | 'hidden'>) => Promise<void> }) {
   const [name, setName] = useState(category.name)
   const [reportGroup, setReportGroup] = useState<ReportGroup>(category.reportGroup)
   const [categoryGroupId, setCategoryGroupId] = useState(category.categoryGroupId ?? '')
+  const [hidden, setHidden] = useState(category.hidden)
   const [icon, setIcon] = useState(category.icon in categoryIcons ? category.icon : 'sparkles')
   const [color, setColor] = useState(category.color)
   const [saving, setSaving] = useState(false)
@@ -4243,7 +4250,7 @@ function CategoryDetailsForm({ category, categories, categoryGroups, onSubmit }:
   const duplicate = categories.some((item) => item.id !== category.id && item.name.localeCompare(normalizedName, undefined, { sensitivity: 'accent' }) === 0)
   const validColor = /^#[0-9a-f]{6}$/i.test(color)
   const normalizedCategoryGroupId = categoryGroupId || undefined
-  const unchanged = normalizedName === category.name && reportGroup === category.reportGroup && normalizedCategoryGroupId === category.categoryGroupId && icon === category.icon && color.toLocaleLowerCase('en') === category.color.toLocaleLowerCase('en')
+  const unchanged = normalizedName === category.name && reportGroup === category.reportGroup && normalizedCategoryGroupId === category.categoryGroupId && hidden === category.hidden && icon === category.icon && color.toLocaleLowerCase('en') === category.color.toLocaleLowerCase('en')
   const PreviewIcon = categoryIcons[icon as keyof typeof categoryIcons] ?? Sparkles
   return <form className="form" onSubmit={async (event) => {
     event.preventDefault()
@@ -4251,7 +4258,7 @@ function CategoryDetailsForm({ category, categories, categoryGroups, onSubmit }:
     setSaving(true)
     setError('')
     try {
-      await onSubmit(category.id, { name: normalizedName, reportGroup, categoryGroupId: normalizedCategoryGroupId, icon, color })
+      await onSubmit(category.id, { name: normalizedName, reportGroup, categoryGroupId: normalizedCategoryGroupId, hidden, icon, color })
     } catch (cause) {
       setError(getErrorMessage(cause, 'Could not update the category.'))
       setSaving(false)
@@ -4259,6 +4266,7 @@ function CategoryDetailsForm({ category, categories, categoryGroups, onSubmit }:
   }}>
     <label><span>Category name</span><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} /></label>
     <div className="form-grid"><label><span>Report group</span><select value={reportGroup} onChange={(event) => setReportGroup(event.target.value as ReportGroup)}><option value="personal_income">Personal income</option><option value="personal_expense">Personal expense</option><option value="personal_tax">Personal tax</option><option value="company_revenue">Company revenue</option><option value="company_expense">Company expense</option><option value="company_tax">Company tax</option></select></label><label><span>Category group</span><select value={categoryGroupId} onChange={(event) => setCategoryGroupId(event.target.value)}><option value="">No group</option>{categoryGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></label></div>
+    <label className="category-visibility-field"><input type="checkbox" checked={hidden} onChange={(event) => setHidden(event.target.checked)} /><span><strong>Hide category</strong><small>Remove it from active category lists while keeping its history.</small></span></label>
     <div className="category-appearance-row">
       <div className="category-appearance-preview"><span style={{ color, background: `${color}18` }}><PreviewIcon size={22} /></span><div><small>Preview</small><strong>{normalizedName || 'Category'}</strong></div></div>
       <label className="category-color-field"><span>Color</span><div><input type="color" value={validColor ? color : '#5d7d91'} onChange={(event) => setColor(event.target.value)} /><input aria-label="Category color hex value" value={color} onChange={(event) => setColor(event.target.value)} maxLength={7} /></div></label>

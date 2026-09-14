@@ -792,7 +792,7 @@ export async function updateCategoryHidden(workspaceId: string, categoryId: stri
   if (error) throw error
 }
 
-export async function updateCategoryDetails(workspaceId: string, categoryId: string, details: Pick<Category, 'name' | 'reportGroup' | 'icon' | 'color' | 'categoryGroupId' | 'sortOrder'>) {
+export async function updateCategoryDetails(workspaceId: string, categoryId: string, details: Pick<Category, 'name' | 'reportGroup' | 'icon' | 'color' | 'categoryGroupId' | 'sortOrder' | 'hidden'>) {
   const categoryType = details.reportGroup === 'personal_income' || details.reportGroup === 'company_revenue' ? 'Income' : 'Expense'
   const { data, error } = await neon.from('categories')
     .update({
@@ -801,6 +801,7 @@ export async function updateCategoryDetails(workspaceId: string, categoryId: str
       report_group: details.reportGroup,
       category_group_id: details.categoryGroupId ?? null,
       sort_order: details.sortOrder,
+      hidden: details.hidden,
       icon: details.icon,
       color: details.color,
     })
