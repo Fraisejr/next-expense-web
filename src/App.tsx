@@ -3703,19 +3703,23 @@ function CategoryDetail({ category, spent, budget, monthlyBudgetOverride, monthK
       <div className="category-budget-settings-heading"><h3>Default and monthly budget</h3><p>{monthlyBudgetOverride === undefined ? `${selectedMonthLabel} is using the default.` : `${selectedMonthLabel} has its own override.`}</p></div>
       <div className="category-budget-setting-grid">
         <div className="category-budget-setting default-setting">
-          <label><span>Default monthly budget</span><input type="number" min="0" step="0.01" value={defaultBudgetInput} onChange={(event) => setDefaultBudgetInput(event.target.value)} /></label>
-          <small>Used automatically in every month that does not have its own budget.</small>
-          <button className="secondary-button" type="button" disabled={defaultBudgetMinor === null || defaultBudgetMinor === category.defaultBudgetMinor || Boolean(savingBudget)} onClick={() => defaultBudgetMinor !== null && runBudgetAction('default', () => onUpdateDefaultBudget(category.id, defaultBudgetMinor))}>{savingBudget === 'default' ? 'Saving…' : 'Save default'}</button>
-          <details className="category-budget-helper">
-            <summary>Need a starting point?</summary>
-            <p>Use an existing plan or a recent monthly average.</p>
-            {suggestions.length > 0 && <div>{suggestions.map((suggestion) => <button className="secondary-button" type="button" key={suggestion.label} onClick={() => setDefaultBudgetInput((suggestion.amountMinor / 100).toFixed(2))}><span>{suggestion.label}</span><strong>{formatMoney(suggestion.amountMinor, defaultCurrency)}</strong></button>)}</div>}
-            {!historyLoaded && <button className="category-budget-load" type="button" disabled={historyLoading} onClick={() => void onRequestHistory()}><LoaderCircle className={historyLoading ? 'spin-icon' : ''} size={13} />{historyLoading ? 'Loading suggestions…' : 'Show recent averages'}</button>}
-          </details>
+          <div className="category-budget-setting-copy"><strong>Default monthly budget</strong><small>Used for months without an override.</small></div>
+          <input aria-label="Default monthly budget" type="number" min="0" step="0.01" value={defaultBudgetInput} onChange={(event) => setDefaultBudgetInput(event.target.value)} />
+          <div className="category-budget-actions">
+            <button className="secondary-button" type="button" disabled={defaultBudgetMinor === null || defaultBudgetMinor === category.defaultBudgetMinor || Boolean(savingBudget)} onClick={() => defaultBudgetMinor !== null && runBudgetAction('default', () => onUpdateDefaultBudget(category.id, defaultBudgetMinor))}>{savingBudget === 'default' ? 'Saving…' : 'Save default'}</button>
+            <details className="category-budget-helper">
+              <summary>Starting point</summary>
+              <div className="category-budget-helper-panel">
+                <p>Use an existing plan or a recent monthly average.</p>
+                {suggestions.length > 0 && <div>{suggestions.map((suggestion) => <button className="secondary-button" type="button" key={suggestion.label} onClick={() => setDefaultBudgetInput((suggestion.amountMinor / 100).toFixed(2))}><span>{suggestion.label}</span><strong>{formatMoney(suggestion.amountMinor, defaultCurrency)}</strong></button>)}</div>}
+                {!historyLoaded && <button className="category-budget-load" type="button" disabled={historyLoading} onClick={() => void onRequestHistory()}><LoaderCircle className={historyLoading ? 'spin-icon' : ''} size={13} />{historyLoading ? 'Loading suggestions…' : 'Show recent averages'}</button>}
+              </div>
+            </details>
+          </div>
         </div>
         <div className="category-budget-setting month-setting">
-          <label><span>{selectedMonthLabel} budget</span><input type="number" min="0" step="0.01" value={monthlyBudgetInput} onChange={(event) => setMonthlyBudgetInput(event.target.value)} /></label>
-          <small>{monthlyBudgetOverride === undefined ? `Currently inherited from the ${formatMoney(category.defaultBudgetMinor, defaultCurrency)} default.` : 'This amount applies only to the selected month.'}</small>
+          <div className="category-budget-setting-copy"><strong>{selectedMonthLabel} budget</strong><small>{monthlyBudgetOverride === undefined ? `Inherits the ${formatMoney(category.defaultBudgetMinor, defaultCurrency)} default.` : 'Applies only to this month.'}</small></div>
+          <input aria-label={`${selectedMonthLabel} budget`} type="number" min="0" step="0.01" value={monthlyBudgetInput} onChange={(event) => setMonthlyBudgetInput(event.target.value)} />
           <div className="category-budget-actions">
             <button className="secondary-button" type="button" disabled={monthlyBudgetMinor === null || monthlyBudgetMinor === monthlyBudgetOverride || Boolean(savingBudget)} onClick={() => monthlyBudgetMinor !== null && runBudgetAction('month', () => onUpdateBudget(category.id, monthlyBudgetMinor))}>{savingBudget === 'month' ? 'Saving…' : monthlyBudgetOverride === undefined ? 'Set month override' : 'Update month'}</button>
             {monthlyBudgetOverride !== undefined && <button className="text-button" type="button" disabled={Boolean(savingBudget)} onClick={() => runBudgetAction('remove', () => onRemoveBudgetOverride(category.id))}>{savingBudget === 'remove' ? 'Removing…' : 'Use default instead'}</button>}
