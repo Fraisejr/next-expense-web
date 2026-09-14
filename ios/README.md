@@ -87,7 +87,8 @@ The app opens on a read-only Budget tab, followed by Reports and Review.
 Budget shows the current month by saved category group and category order, with
 saved colors/icons, net spending, monthly overrides (or default budgets), and
 uncapped usage percentages. Tap a category to see its current-month transactions;
-there are no editing controls. Hidden categories can be shown with a toggle.
+there are no editing controls. Hidden categories are excluded. The month appears discreetly beneath the compact
+Budget navigation title.
 Bank sync results can be hidden using **Hide** and restored using **Show bank sync
 results** in the account menu; this preference persists across launches.
 

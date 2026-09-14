@@ -4,7 +4,6 @@ struct LiveExpenseView: View {
     @StateObject private var store = LiveExpenseStore()
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("showBankSyncResults") private var showBankSyncResults = true
-    @State private var showHiddenBudget = false
     @State private var email = ""
     @State private var password = ""
     @State private var selected: ReviewTransaction?
@@ -51,15 +50,8 @@ struct LiveExpenseView: View {
             List {
                 messages
                 if let budget = store.budget {
-                    Section {
-                        Text(budget.monthTitle).font(.headline)
-                        Text("Current month · budgets managed on the web").font(.caption).foregroundStyle(.secondary)
-                        if budget.groups.flatMap({ $0.categories }).contains(where: { $0.category.hidden == true }) {
-                            Toggle("Show hidden categories", isOn: $showHiddenBudget)
-                        }
-                    }
                     ForEach(budget.groups) { group in
-                        let rows = group.categories.filter { showHiddenBudget || $0.category.hidden != true }
+                        let rows = group.categories.filter { $0.category.hidden != true }
                         if !rows.isEmpty {
                             Section(group.name) {
                                 ForEach(rows) { item in
@@ -72,7 +64,7 @@ struct LiveExpenseView: View {
                             }
                         }
                     }
-                    if budget.groups.isEmpty {
+                    if !budget.groups.flatMap({ $0.categories }).contains(where: { $0.category.hidden != true }) {
                         ContentUnavailableView("No categories yet", systemImage: "square.grid.2x2", description: Text("Set up categories and budgets in the web app."))
                     }
                 } else if let error = store.budgetError {
@@ -82,8 +74,19 @@ struct LiveExpenseView: View {
                 }
             }
             .navigationTitle("Budget")
+            .navigationBarTitleDisplayMode(.inline)
             .refreshable { await store.refresh() }
-            .toolbar { toolbar }
+            .toolbar {
+                toolbar
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 1) {
+                        Text("Budget").font(.headline)
+                        if let budget = store.budget {
+                            Text(budget.monthTitle).font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
         }
         .tabItem { Label("Budget", systemImage: "chart.pie.fill") }
     }
