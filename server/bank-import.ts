@@ -1,3 +1,4 @@
+import { saveTransferReference } from './bank-reference.ts'
 import type { BankSyncPayload, BankSyncSummary } from '../shared/bank-types.ts'
 import { zeroAmountAction, zeroAmountReason } from '../src/bank-import-policy.ts'
 import { bankData, amountToMinor, todayInParis, recentSyncRuns, normalizedPayeeName, daysApart, shiftedDate } from '../shared/bank-data.ts'
@@ -189,6 +190,7 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
   let pendingPromoted = 0
   let pendingStaged = 0
   let transfersMatched = 0
+  let referenceConflicts = 0
   const promotePending = async (row: Row, transaction: BankSyncPayload['transactions'][number]) => {
     if (!row.category_id) {
       const candidate = candidateFor(transaction)
@@ -264,16 +266,21 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
       && (row.provider_transaction_id === transaction.providerTransactionId
         || (transaction.bankTransactionId && row.bank_transaction_id === transaction.bankTransactionId)))
     if (!existingReference) {
-      const referenceInsert = await neon.from('bank_transaction_refs').insert({
-        id: crypto.randomUUID(),
+      const sameTransfer = await saveTransferReference(neon, {
         workspace_id: workspaceId,
-        transaction_id: transfer.id,
+        transaction_id: String(transfer.id),
         account_id: account.id,
         provider: 'gocardless_bank_account_data',
         provider_transaction_id: transaction.providerTransactionId,
         bank_transaction_id: transaction.bankTransactionId ?? null,
       })
-      if (referenceInsert.error) throw referenceInsert.error
+      if (!sameTransfer) {
+        // Another saved match owns this ID. Preserve both ledger records and
+        // exclude it from all remaining promotion/import steps in this run.
+        unique.delete(transaction.providerTransactionId)
+        referenceConflicts += 1
+        continue
+      }
     }
 
     const duplicate = existingByProviderId.get(transaction.providerTransactionId)
@@ -364,7 +371,7 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
     // A migrated account may contain the same bank history under provider IDs
     // from an older consent. Establish a clean delta boundary on its first sync.
     .filter((transaction) => transaction.date <= today)
-  const duplicates = Math.max(0, receivedTransactions.length - unseenTransactions.length - pendingPromoted - transfersMatched)
+  const duplicates = referenceConflicts + Math.max(0, receivedTransactions.length - unseenTransactions.length - pendingPromoted - transfersMatched)
 
   const sourcePayeeNames = [...new Set(newTransactions.flatMap((transaction) => [transaction.payee, transaction.note ?? '']).map((name) => name.normalize('NFKC').trim()).filter(Boolean))]
   const [resolvedPayees, categoryResult] = await Promise.all([
