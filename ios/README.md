@@ -31,14 +31,20 @@ key, or GoCardless secret to the app.
 1. Continue with Google on iOS and tap **Sync banks** in Reports or Review.
 2. Each open, connected account syncs sequentially and shows its result. Reports
    and Review refresh afterward, including when one account fails.
-3. Open an item, choose an active category, and optionally choose a different
-   existing payee. **Use imported payee** lets the existing server approval
-   function resolve/create the payee using its established rules.
+3. Open an item, choose an active category, and optionally search for a different
+   existing payee. When an exact payee mapping is a prefix of the imported name
+   or memo, iOS offers the same **Use Starts with and select payee** and **Add to
+   alternative names and select payee** actions as the web app. **Use imported
+   payee** lets the existing server approval function resolve/create the payee
+   using its established rules.
 4. Approve. iOS calls the same `approve_bank_import_candidate` RPC as the web
    app. The database atomically creates/promotes the ledger transaction and
    marks the candidate approved. The inbox changes only after acknowledgement.
 5. Reports refresh after the approval commits. Refresh the web app to see the
    same saved result there.
+
+An item that already has a valid saved payee and category can also be approved
+with a trailing swipe from the Review list.
 
 Rejection saves a server-side tombstone, preserving bank-sync deduplication.
 Reports show current net worth and year-to-date personal plus company expenses

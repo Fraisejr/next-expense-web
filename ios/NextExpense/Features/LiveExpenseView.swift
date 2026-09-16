@@ -25,6 +25,14 @@ struct LiveExpenseView: View {
                             ForEach(store.candidates) { candidate in
                                 Button { selected = candidate } label: { row(candidate) }
                                     .disabled(store.busy)
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                        if store.canSwipeApprove(candidate) {
+                                            Button {
+                                                Task { try? await store.approve(candidate, payeeId: candidate.payeeId, categoryId: candidate.categoryId) }
+                                            } label: { Label("Approve", systemImage: "checkmark") }
+                                                .tint(.teal)
+                                        }
+                                    }
                             }
                         }
                         .navigationTitle("Review")
@@ -276,6 +284,7 @@ private struct LiveCandidateView: View {
     @State private var categoryId: UUID?
     @State private var error: String?
     @State private var rejecting = false
+    @State private var applyingSuggestion = false
 
     init(store: LiveExpenseStore, candidate: ReviewTransaction) {
         self.store = store
@@ -294,9 +303,14 @@ private struct LiveCandidateView: View {
                     if let memo = candidate.memo { Text(memo).foregroundStyle(.secondary) }
                 }
                 Section("Review details") {
-                    Picker("Payee", selection: $payeeId) {
-                        Text("Use imported payee").tag(nil as UUID?)
-                        ForEach(store.payees) { Text($0.name).tag(Optional($0.id)) }
+                    NavigationLink {
+                        SearchablePayeePicker(payees: store.payees, selection: $payeeId)
+                    } label: {
+                        LabeledContent("Payee", value: store.payees.first(where: { $0.id == payeeId })?.name ?? "Use imported payee")
+                    }
+                    .onChange(of: payeeId) { _, nextPayeeId in
+                        if let defaultCategory = store.payees.first(where: { $0.id == nextPayeeId })?.defaultCategoryId,
+                           store.categories.contains(where: { $0.id == defaultCategory }) { categoryId = defaultCategory }
                     }
                     Picker("Category", selection: $categoryId) {
                         Text("Select category").tag(nil as UUID?)
@@ -305,6 +319,31 @@ private struct LiveCandidateView: View {
                     Text("Hidden categories cannot be used. Transfers should be reviewed in the web app.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }.disabled(store.busy)
+                if let suggestion = store.possiblePayeeMatch(for: candidate), payeeId == nil {
+                    Section("Possible payee match") {
+                        Label(suggestion.payee.name, systemImage: "sparkles")
+                        Text("“\(suggestion.mapping.sourceName)” matches the start of the bank \(suggestion.sourceIsMemo ? "memo" : "description").")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        Button("Use Starts with and select payee") {
+                            Task {
+                                applyingSuggestion = true; defer { applyingSuggestion = false }
+                                do {
+                                    try await store.promotePayeeMapping(suggestion)
+                                    payeeId = suggestion.payee.id
+                                } catch { self.error = error.localizedDescription }
+                            }
+                        }
+                        Button("Add to alternative names and select payee") {
+                            Task {
+                                applyingSuggestion = true; defer { applyingSuggestion = false }
+                                do {
+                                    try await store.addAlternativeName(suggestion.sourceText, payee: suggestion.payee)
+                                    payeeId = suggestion.payee.id
+                                } catch { self.error = error.localizedDescription }
+                            }
+                        }
+                    }.disabled(store.busy || applyingSuggestion)
+                }
                 if let error { Text(error).foregroundStyle(.red) }
                 Section {
                     Button("Approve") {
@@ -331,6 +370,39 @@ private struct LiveCandidateView: View {
             }
             .onChange(of: store.signedIn) { _, value in if !value { dismiss() } }
         }
+    }
+}
+
+private struct SearchablePayeePicker: View {
+    let payees: [ReviewPayee]
+    @Binding var selection: UUID?
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+
+    private var filtered: [ReviewPayee] {
+        let cleaned = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? payees : payees.filter { $0.name.localizedStandardContains(cleaned) }
+    }
+
+    var body: some View {
+        List {
+            Button {
+                selection = nil; dismiss()
+            } label: {
+                HStack { Text("Use imported payee"); Spacer(); if selection == nil { Image(systemName: "checkmark") } }
+            }
+            ForEach(filtered) { payee in
+                Button {
+                    selection = payee.id; dismiss()
+                } label: {
+                    HStack { Text(payee.name); Spacer(); if selection == payee.id { Image(systemName: "checkmark") } }
+                }
+            }
+            if filtered.isEmpty { ContentUnavailableView.search(text: query) }
+        }
+        .navigationTitle("Select payee")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $query, prompt: "Filter payees")
     }
 }
 

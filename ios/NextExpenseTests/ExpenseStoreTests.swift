@@ -163,6 +163,8 @@ final class LiveReviewTests: XCTestCase {
     private let category = UUID(uuidString: "10000000-0000-0000-0000-000000000003")!
     private let account = UUID(uuidString: "10000000-0000-0000-0000-000000000004")!
     private let transaction = UUID(uuidString: "10000000-0000-0000-0000-000000000005")!
+    private let payee = UUID(uuidString: "10000000-0000-0000-0000-000000000006")!
+    private let mapping = UUID(uuidString: "10000000-0000-0000-0000-000000000007")!
     private var requests: [URLRequest] = []
     private var approvalStatus = 200
     private var ledgerFails = false
@@ -176,6 +178,8 @@ final class LiveReviewTests: XCTestCase {
     private var bankCalls = 0
     private var rejectStatus = 200
     private var rejectRows = true
+    private var matchingFixtures = false
+    private var candidateHasPayee = false
     private let vault = MemoryVault()
 
     private func makeAPI() -> NeonAPI {
@@ -232,7 +236,11 @@ final class LiveReviewTests: XCTestCase {
             case "periods": return (200, [:], [])
             case "budgets": return (200, [:], [])
             case "fx_rates": return (200, [:], [])
-            case "payees": return (200, [:], [])
+            case "payees": return (200, [:], matchingFixtures ? [["id": payee.uuidString, "name": "Market Payee", "default_category_id": category.uuidString]] : [])
+            case "payee_mappings":
+                if request.httpMethod == "PATCH" { return (200, [:], [["id": mapping.uuidString, "source_name": "Market", "payee_id": payee.uuidString, "match_type": "starts_with"]]) }
+                if request.httpMethod == "POST" { return (200, [:], [["id": UUID().uuidString, "source_name": "Market Barcelona purchase", "payee_id": payee.uuidString, "match_type": "exact"]]) }
+                return (200, [:], matchingFixtures ? [["id": mapping.uuidString, "source_name": "Market", "payee_id": payee.uuidString, "match_type": "exact"]] : [])
             case "bank_connections": return (200, [:], noBanks ? [] : ([["account_id": account.uuidString]] + (twoBanks ? [["account_id": transaction.uuidString]] : [])))
             case "accounts": return (200, [:], [["id": account.uuidString, "name": "Main", "currency": "SEK", "closed": false, "scope": "Personal"]] + (twoBanks ? [["id": transaction.uuidString, "name": "Second", "currency": "SEK", "closed": false, "scope": "Personal"]] : []))
             case "bank_import_candidates":
@@ -329,7 +337,8 @@ final class LiveReviewTests: XCTestCase {
     private func row(_ id: UUID) -> [String: Any] {
         ["id": id.uuidString, "account_id": account.uuidString, "transaction_date": "2026-09-12",
          "amount_minor": 2450, "currency": "SEK", "transaction_type": "expense", "payee_name": "Market",
-         "payee_id": NSNull(), "category_id": category.uuidString, "memo": NSNull()]
+         "payee_id": candidateHasPayee ? payee.uuidString as Any : NSNull() as Any, "category_id": category.uuidString,
+         "memo": matchingFixtures ? "Market Barcelona purchase" : NSNull()]
     }
     private func signedInStore() async -> LiveExpenseStore {
         let store = LiveExpenseStore(api: makeAPI())
@@ -394,6 +403,34 @@ final class LiveReviewTests: XCTestCase {
         let before = requests.count
         do { try await store.approve(XCTUnwrap(store.candidates.first), payeeId: nil, categoryId: nil); XCTFail("Expected validation") } catch {}
         XCTAssertEqual(requests.count, before)
+    }
+
+    func testSwipeApprovalRequiresSavedPayeeAndCategory() async throws {
+        matchingFixtures = true
+        var store = await signedInStore()
+        XCTAssertFalse(store.canSwipeApprove(try XCTUnwrap(store.candidates.first)))
+
+        candidateHasPayee = true
+        store = await signedInStore()
+        XCTAssertTrue(store.canSwipeApprove(try XCTUnwrap(store.candidates.first)))
+    }
+
+    func testPossiblePrefixMatchCanBePromotedOrSavedAsAlternative() async throws {
+        matchingFixtures = true
+        let store = await signedInStore()
+        let item = try XCTUnwrap(store.candidates.first)
+        let suggestion = try XCTUnwrap(store.possiblePayeeMatch(for: item))
+        XCTAssertEqual(suggestion.payee.name, "Market Payee")
+        XCTAssertEqual(suggestion.mapping.sourceName, "Market")
+        XCTAssertTrue(suggestion.sourceIsMemo)
+
+        try await store.promotePayeeMapping(suggestion)
+        XCTAssertEqual(store.payeeMappings.first?.matchType, "starts_with")
+        XCTAssertEqual(requests.filter { $0.url?.lastPathComponent == "payee_mappings" && $0.httpMethod == "PATCH" }.count, 1)
+
+        try await store.addAlternativeName(suggestion.sourceText, payee: suggestion.payee)
+        XCTAssertTrue(store.payeeMappings.contains { $0.sourceName == "Market Barcelona purchase" && $0.payeeId == payee })
+        XCTAssertEqual(requests.filter { $0.url?.lastPathComponent == "payee_mappings" && $0.httpMethod == "POST" }.count, 1)
     }
 }
 

@@ -5,6 +5,23 @@ import Foundation
 struct WorkspaceMembership: Decodable { let workspaceId: UUID }
 struct ReviewWorkspace: Decodable, Identifiable { let id: UUID; let name: String }
 struct ReviewChoice: Decodable, Identifiable, Hashable { let id: UUID; let name: String }
+struct ReviewPayee: Decodable, Identifiable, Hashable {
+    let id: UUID
+    let name: String
+    let defaultCategoryId: UUID?
+}
+struct ReviewPayeeMapping: Decodable, Identifiable, Hashable {
+    let id: UUID
+    let sourceName: String
+    let payeeId: UUID
+    let matchType: String
+}
+struct ReviewPayeeSuggestion: Equatable {
+    let mapping: ReviewPayeeMapping
+    let payee: ReviewPayee
+    let sourceText: String
+    let sourceIsMemo: Bool
+}
 struct ReviewTransaction: Decodable, Identifiable {
     let id: UUID
     let accountId: UUID
@@ -43,7 +60,8 @@ final class LiveExpenseStore: ObservableObject {
     @Published private(set) var budget: LiveBudget?
     @Published private(set) var budgetError: String?
     @Published private(set) var categories: [ReviewChoice] = []
-    @Published private(set) var payees: [ReviewChoice] = []
+    @Published private(set) var payees: [ReviewPayee] = []
+    @Published private(set) var payeeMappings: [ReviewPayeeMapping] = []
     @Published private(set) var accounts: [ReviewChoice] = []
     @Published var errorMessage: String?
     @Published var notice: String?
@@ -199,6 +217,76 @@ final class LiveExpenseStore: ObservableObject {
         } catch { handle(error); throw error }
     }
 
+    func canSwipeApprove(_ candidate: ReviewTransaction) -> Bool {
+        guard let payeeId = candidate.payeeId, let categoryId = candidate.categoryId else { return false }
+        return payees.contains(where: { $0.id == payeeId }) && categories.contains(where: { $0.id == categoryId })
+    }
+
+    func possiblePayeeMatch(for candidate: ReviewTransaction) -> ReviewPayeeSuggestion? {
+        guard candidate.payeeId == nil else { return nil }
+        let sources = [(candidate.payeeName ?? "", false), (candidate.memo ?? "", true)].filter { !$0.0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let matches = payeeMappings.flatMap { mapping -> [ReviewPayeeSuggestion] in
+            guard mapping.matchType == "exact", let payee = payees.first(where: { $0.id == mapping.payeeId }) else { return [] }
+            let prefix = Self.normalizedPayeeName(mapping.sourceName)
+            return sources.compactMap { source, isMemo in
+                Self.prefixMappingMatches(Self.normalizedPayeeName(source), prefix)
+                    ? ReviewPayeeSuggestion(mapping: mapping, payee: payee, sourceText: source, sourceIsMemo: isMemo)
+                    : nil
+            }
+        }.sorted { Self.normalizedPayeeName($0.mapping.sourceName).count > Self.normalizedPayeeName($1.mapping.sourceName).count }
+        guard let first = matches.first else { return nil }
+        let longest = Self.normalizedPayeeName(first.mapping.sourceName).count
+        let best = matches.filter { Self.normalizedPayeeName($0.mapping.sourceName).count == longest }
+        return Set(best.map { $0.payee.id }).count == 1 ? first : nil
+    }
+
+    func promotePayeeMapping(_ suggestion: ReviewPayeeSuggestion) async throws {
+        guard !busy, let workspace else { throw MobileAPIError(message: "Wait for the current request to finish.", status: 0) }
+        busy = true; errorMessage = nil
+        defer { busy = false }
+        do {
+            let rows: [ReviewPayeeMapping] = try await api.data("payee_mappings", query: scoped(workspace.id) + [
+                .init(name: "id", value: "eq.\(suggestion.mapping.id)"), .init(name: "select", value: "id,source_name,payee_id,match_type")
+            ], method: "PATCH", body: ["match_type": "starts_with"])
+            guard let updated = rows.first else { throw MobileAPIError(message: "This payee match changed. Refresh and try again.", status: 409) }
+            payeeMappings = payeeMappings.map { $0.id == updated.id ? updated : $0 }
+        } catch { handle(error); throw error }
+    }
+
+    func addAlternativeName(_ sourceName: String, payee: ReviewPayee) async throws {
+        guard !busy, let workspace else { throw MobileAPIError(message: "Wait for the current request to finish.", status: 0) }
+        let cleaned = sourceName.precomposedStringWithCompatibilityMapping.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { throw MobileAPIError(message: "A bank description is required.", status: 0) }
+        let normalized = Self.normalizedPayeeName(cleaned)
+        if let existing = payeeMappings.first(where: { Self.normalizedPayeeName($0.sourceName) == normalized }) {
+            guard existing.payeeId == payee.id else { throw MobileAPIError(message: "That alternative name already belongs to another payee.", status: 409) }
+            return
+        }
+        busy = true; errorMessage = nil
+        defer { busy = false }
+        do {
+            let id = UUID()
+            let rows: [ReviewPayeeMapping] = try await api.data("payee_mappings", query: scoped(workspace.id) + [.init(name: "select", value: "id,source_name,payee_id,match_type")], method: "POST", body: [
+                "id": id.uuidString, "workspace_id": workspace.id.uuidString, "normalized_name": normalized,
+                "source_name": cleaned, "payee_id": payee.id.uuidString, "match_type": "exact"
+            ])
+            guard let inserted = rows.first else { throw MobileAPIError(message: "The alternative name could not be saved.", status: 0) }
+            payeeMappings.append(inserted)
+        } catch { handle(error); throw error }
+    }
+
+    private static func normalizedPayeeName(_ value: String) -> String {
+        value.precomposedStringWithCompatibilityMapping
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ").lowercased()
+    }
+
+    private static func prefixMappingMatches(_ source: String, _ prefix: String) -> Bool {
+        guard source.hasPrefix(prefix), source.count > prefix.count else { return false }
+        let boundary = source[source.index(source.startIndex, offsetBy: prefix.count)]
+        return !boundary.isLetter && !boundary.isNumber
+    }
+
     func reject(_ candidate: ReviewTransaction) async throws {
         guard !busy, let workspace else { throw MobileAPIError(message: "Wait for the current request to finish.", status: 0) }
         busy = true
@@ -237,10 +325,11 @@ final class LiveExpenseStore: ObservableObject {
     private func loadSnapshot(_ id: UUID) async throws {
         let scope = scoped(id)
         let newCategories: [ReviewChoice] = try await all("categories", query: scope + [.init(name: "select", value: "id,name"), .init(name: "hidden", value: "eq.false"), .init(name: "order", value: "name,id")])
-        let newPayees: [ReviewChoice] = try await all("payees", query: scope + [.init(name: "select", value: "id,name"), .init(name: "order", value: "name,id")])
+        let newPayees: [ReviewPayee] = try await all("payees", query: scope + [.init(name: "select", value: "id,name,default_category_id"), .init(name: "order", value: "name,id")])
+        let newMappings: [ReviewPayeeMapping] = try await all("payee_mappings", query: scope + [.init(name: "select", value: "id,source_name,payee_id,match_type"), .init(name: "order", value: "id")])
         let newAccounts: [ReviewChoice] = try await all("accounts", query: scope + [.init(name: "select", value: "id,name"), .init(name: "order", value: "id")])
         let newCandidates: [ReviewTransaction] = try await all("bank_import_candidates", query: scope + [.init(name: "select", value: columns), .init(name: "status", value: "eq.pending"), .init(name: "order", value: "transaction_date.desc,id")])
-        categories = newCategories; payees = newPayees; accounts = newAccounts
+        categories = newCategories; payees = newPayees; payeeMappings = newMappings; accounts = newAccounts
         candidates = newCandidates
         budget = nil; budgetError = nil
         do { budget = try await loadBudget(id) } catch { budgetError = error.localizedDescription }
@@ -291,7 +380,7 @@ final class LiveExpenseStore: ObservableObject {
         errorMessage = error.localizedDescription
     }
     private func clearWorkspace() {
-        workspace = nil; candidates = []; reports = nil; budget = nil; budgetError = nil; categories = []; payees = []; accounts = []; notice = nil; bankSyncResults = []
+        workspace = nil; candidates = []; reports = nil; budget = nil; budgetError = nil; categories = []; payees = []; payeeMappings = []; accounts = []; notice = nil; bankSyncResults = []
     }
     private func reset() { signedIn = false; workspaces = []; clearWorkspace() }
 }
