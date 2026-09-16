@@ -241,7 +241,7 @@ struct LiveExpenseView: View {
                 Text(store.workspace?.name ?? "")
                 Toggle("Show bank sync results", isOn: $showBankSyncResults)
                 Button("Refresh") { Task { await store.refresh() } }
-                ForEach(store.workspaces) { workspace in
+                ForEach(store.workspaces.filter { $0.id != store.workspace?.id }) { workspace in
                     Button("Switch to \(workspace.name)") { Task { await store.select(workspace) } }
                 }
                 Button("Sign out", role: .destructive) { Task { await store.signOut() } }
