@@ -1530,15 +1530,19 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode, onR
   const [draggedId, setDraggedId] = useState('')
   const [savingOrder, setSavingOrder] = useState(false)
   const saveQueue = useRef(new Map<string, Promise<void>>())
+  const tableWrapRef = useRef<HTMLDivElement>(null)
+  const todayColumnRef = useRef<HTMLTableCellElement>(null)
   const monthDate = useMemo(() => fromMonthKey(month) ?? new Date(), [month])
   const dayCount = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate()
+  const now = new Date()
+  const todayDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
   const days = useMemo(() => Array.from({ length: dayCount }, (_, index) => {
     const day = index + 1
     const date = `${month}-${String(day).padStart(2, '0')}`
     const value = new Date(`${date}T12:00:00`)
     const week = isoWeekForDate(date)
-    return { day, date, label: new Intl.DateTimeFormat('en', { weekday: 'short' }).format(value).slice(0, 2), weekend: value.getDay() === 0 || value.getDay() === 6, ...week }
-  }), [dayCount, month])
+    return { day, date, label: new Intl.DateTimeFormat('en', { weekday: 'short' }).format(value).slice(0, 2), weekend: value.getDay() === 0 || value.getDay() === 6, isToday: date === todayDate, ...week }
+  }), [dayCount, month, todayDate])
 
   useEffect(() => {
     let cancelled = false
@@ -1576,6 +1580,17 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode, onR
     }
     return [...totals.values()]
   }, [days, entries])
+
+  useEffect(() => {
+    if (loading || !todayColumnRef.current || !tableWrapRef.current) return
+    const wrap = tableWrapRef.current
+    const todayColumn = todayColumnRef.current
+    const stickyColumnWidth = 210
+    const stickyTotalWidth = 80
+    const visibleDayWidth = Math.max(0, wrap.clientWidth - stickyColumnWidth - stickyTotalWidth)
+    const centeredScrollLeft = todayColumn.offsetLeft - stickyColumnWidth - ((visibleDayWidth - todayColumn.offsetWidth) / 2)
+    wrap.scrollLeft = Math.max(0, Math.min(centeredScrollLeft, wrap.scrollWidth - wrap.clientWidth))
+  }, [loading, month])
 
   function beginReordering() {
     setOrderedIds(visibleCodes.map((code) => code.id))
@@ -1701,13 +1716,13 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode, onR
         <div className="time-code-reorder-list">{displayedCodes.map((code, index) => <div key={code.id} className={draggedId === code.id ? 'dragging' : ''} draggable onDragStart={() => setDraggedId(code.id)} onDragEnd={() => setDraggedId('')} onDragOver={(event) => event.preventDefault()} onDrop={() => dropCode(code.id)}><GripVertical size={17} aria-hidden="true" /><strong>{code.name}</strong><button type="button" className="icon-button" disabled={index === 0 || savingOrder} onClick={() => moveCode(code.id, -1)} aria-label={`Move ${code.name} earlier`}><ArrowUp size={14} /></button><button type="button" className="icon-button" disabled={index === displayedCodes.length - 1 || savingOrder} onClick={() => moveCode(code.id, 1)} aria-label={`Move ${code.name} later`}><ArrowDown size={14} /></button></div>)}</div>
       </div>}
 
-      {loading ? <div className="timesheet-loading"><LoaderCircle size={18} />Loading hours…</div> : visibleCodes.length === 0 ? <div className="timesheet-empty"><Clock3 size={25} /><strong>No visible time codes</strong><span>Add your first code above to start reporting hours.</span></div> : <div className="timesheet-table-wrap">
+      {loading ? <div className="timesheet-loading"><LoaderCircle size={18} />Loading hours…</div> : visibleCodes.length === 0 ? <div className="timesheet-empty"><Clock3 size={25} /><strong>No visible time codes</strong><span>Add your first code above to start reporting hours.</span></div> : <div className="timesheet-table-wrap" ref={tableWrapRef}>
         <table className="timesheet-table">
-          <thead><tr><th className="time-code-column">Item</th>{days.map((day) => <th key={day.date} className={day.weekend ? 'weekend' : ''}><span>{day.label}</span><b>{day.day}</b></th>)}<th className="time-total-column">Total</th></tr></thead>
+          <thead><tr><th className="time-code-column">Item</th>{days.map((day) => <th key={day.date} ref={day.isToday ? todayColumnRef : undefined} className={`${day.weekend ? 'weekend ' : ''}${day.isToday ? 'today' : ''}`} aria-current={day.isToday ? 'date' : undefined}><span>{day.isToday ? 'Today' : day.label}</span><b>{day.day}</b></th>)}<th className="time-total-column">Total</th></tr></thead>
           <tbody>
-            {displayedCodes.map((code) => <tr key={code.id}><th><TimeCodeEditor code={code} month={month} onSave={updateCode} /></th>{days.map((day) => <td key={day.date} className={day.weekend ? 'weekend' : ''}><TimeEntryCell codeName={code.name} date={day.date} value={entryMap.get(`${code.id}:${day.date}`) ?? 0} onChange={(hours) => changeEntry(code.id, day.date, hours)} /></td>)}<td className="time-row-total">{formatHours(totalForCode(code.id))}</td></tr>)}
+            {displayedCodes.map((code) => <tr key={code.id}><th><TimeCodeEditor code={code} month={month} onSave={updateCode} /></th>{days.map((day) => <td key={day.date} className={`${day.weekend ? 'weekend ' : ''}${day.isToday ? 'today' : ''}`}><TimeEntryCell codeName={code.name} date={day.date} value={entryMap.get(`${code.id}:${day.date}`) ?? 0} onChange={(hours) => changeEntry(code.id, day.date, hours)} /></td>)}<td className="time-row-total">{formatHours(totalForCode(code.id))}</td></tr>)}
           </tbody>
-          <tfoot><tr><th>Daily total</th>{days.map((day) => <td key={day.date} className={day.weekend ? 'weekend' : ''}>{formatHours(totalForDate(day.date), true)}</td>)}<td>{formatHours(monthTotal)}</td></tr></tfoot>
+          <tfoot><tr><th>Daily total</th>{days.map((day) => <td key={day.date} className={`${day.weekend ? 'weekend ' : ''}${day.isToday ? 'today' : ''}`}>{formatHours(totalForDate(day.date), true)}</td>)}<td>{formatHours(monthTotal)}</td></tr></tfoot>
         </table>
       </div>}
 

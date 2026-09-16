@@ -1077,6 +1077,10 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .timesheet-table thead th b { margin-top: 3px; color: #424a44; font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 500; }
 .timesheet-table .weekend { background: #f7f1ea; }
 .timesheet-table thead .weekend { color: #9d6a52; background: #eee5dc; }
+.timesheet-table .today { background: #e7f2ee; box-shadow: inset 2px 0 #4f8577, inset -2px 0 #4f8577; }
+.timesheet-table thead .today { color: #d7ebe4; background: #47766b; }
+.timesheet-table thead .today b { color: #fff; font-size: 12px; font-weight: 700; }
+.timesheet-table tfoot td.today { color: #214f43; background: #dbeae4; }
 .timesheet-table .time-code-column, .timesheet-table tbody th, .timesheet-table tfoot th { position: sticky; z-index: 3; left: 0; width: 210px; min-width: 210px; padding: 7px 11px; text-align: left; box-shadow: 1px 0 #dfe1da; }
 .timesheet-table thead .time-code-column { z-index: 5; }
 .timesheet-table tbody th { background: #fbfaf6; }
