@@ -48,6 +48,8 @@ key, or GoCardless secret to the app.
 
 An item that already has an active category and either a saved payee or a usable
 imported payee name can also be approved by swiping right from the Review list.
+Each row shows a green **Ready to approve** badge or an orange badge naming the
+missing payee, category, or both.
 Possible existing transfers are suggested when a same-currency transfer has the
 same amount within three days. Any imported item can also be posted as a new
 transfer to or from another open account in the same currency.

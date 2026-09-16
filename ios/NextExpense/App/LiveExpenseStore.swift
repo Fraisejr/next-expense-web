@@ -28,6 +28,12 @@ struct ReviewPayeeSuggestion: Equatable {
     let sourceText: String
     let sourceIsMemo: Bool
 }
+enum ReviewReadiness: Equatable {
+    case ready
+    case missingPayee
+    case missingCategory
+    case missingPayeeAndCategory
+}
 struct ReviewTransaction: Decodable, Identifiable {
     let id: UUID
     let accountId: UUID
@@ -318,10 +324,20 @@ final class LiveExpenseStore: ObservableObject {
     }
 
     func canSwipeApprove(_ candidate: ReviewTransaction) -> Bool {
-        guard let categoryId = candidate.categoryId,
-              categories.contains(where: { $0.id == categoryId }) else { return false }
-        if let payeeId = candidate.payeeId { return payees.contains(where: { $0.id == payeeId }) }
-        return !(candidate.payeeName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        reviewReadiness(for: candidate) == .ready
+    }
+
+    func reviewReadiness(for candidate: ReviewTransaction) -> ReviewReadiness {
+        let hasCategory = candidate.categoryId.map { id in categories.contains(where: { $0.id == id }) } ?? false
+        let hasPayee: Bool
+        if let payeeId = candidate.payeeId { hasPayee = payees.contains(where: { $0.id == payeeId }) }
+        else { hasPayee = !(candidate.payeeName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) }
+        switch (hasPayee, hasCategory) {
+        case (true, true): return .ready
+        case (false, true): return .missingPayee
+        case (true, false): return .missingCategory
+        case (false, false): return .missingPayeeAndCategory
+        }
     }
 
     func possiblePayeeMatch(for candidate: ReviewTransaction) -> ReviewPayeeSuggestion? {

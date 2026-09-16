@@ -447,6 +447,7 @@ final class LiveReviewTests: XCTestCase {
         var store = await signedInStore()
         let importedPayee = try XCTUnwrap(store.candidates.first)
         XCTAssertTrue(store.canSwipeApprove(importedPayee))
+        XCTAssertEqual(store.reviewReadiness(for: importedPayee), .ready)
 
         let missingCategory = ReviewTransaction(
             id: importedPayee.id, accountId: importedPayee.accountId, transactionDate: importedPayee.transactionDate,
@@ -454,6 +455,21 @@ final class LiveReviewTests: XCTestCase {
             payeeName: importedPayee.payeeName, payeeId: nil, categoryId: nil, memo: importedPayee.memo
         )
         XCTAssertFalse(store.canSwipeApprove(missingCategory))
+        XCTAssertEqual(store.reviewReadiness(for: missingCategory), .missingCategory)
+
+        let missingPayee = ReviewTransaction(
+            id: importedPayee.id, accountId: importedPayee.accountId, transactionDate: importedPayee.transactionDate,
+            amountMinor: importedPayee.amountMinor, currency: importedPayee.currency, transactionType: importedPayee.transactionType,
+            payeeName: nil, payeeId: nil, categoryId: importedPayee.categoryId, memo: importedPayee.memo
+        )
+        XCTAssertEqual(store.reviewReadiness(for: missingPayee), .missingPayee)
+
+        let missingBoth = ReviewTransaction(
+            id: importedPayee.id, accountId: importedPayee.accountId, transactionDate: importedPayee.transactionDate,
+            amountMinor: importedPayee.amountMinor, currency: importedPayee.currency, transactionType: importedPayee.transactionType,
+            payeeName: nil, payeeId: nil, categoryId: nil, memo: importedPayee.memo
+        )
+        XCTAssertEqual(store.reviewReadiness(for: missingBoth), .missingPayeeAndCategory)
 
         candidateHasPayee = true
         store = await signedInStore()

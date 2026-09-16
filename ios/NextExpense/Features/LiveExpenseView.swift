@@ -262,12 +262,18 @@ struct LiveExpenseView: View {
     private func row(_ transaction: ReviewTransaction) -> some View {
         let sign = transaction.transactionType == "income" ? "+" : transaction.transactionType == "expense" ? "−" : ""
         let category = store.categories.first(where: { $0.id == transaction.categoryId })?.name ?? "No category"
+        let status = reviewStatus(transaction)
         return HStack {
             VStack(alignment: .leading, spacing: 4) {
                 Text(store.payees.first(where: { $0.id == transaction.payeeId })?.name ?? transaction.payeeName ?? "Transfer")
                     .font(.headline).foregroundStyle(.primary)
                 Text("\(store.accounts.first(where: { $0.id == transaction.accountId })?.name ?? "Account") · \(transaction.transactionDate)")
                     .font(.caption).foregroundStyle(.secondary)
+                Label(status.title, systemImage: status.icon)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(status.color)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(status.color.opacity(0.12), in: Capsule())
             }
             Spacer()
             VStack(alignment: .trailing) {
@@ -277,6 +283,15 @@ struct LiveExpenseView: View {
             .foregroundStyle(.primary)
         }
         .padding(.vertical, 4)
+    }
+
+    private func reviewStatus(_ transaction: ReviewTransaction) -> (title: String, icon: String, color: Color) {
+        switch store.reviewReadiness(for: transaction) {
+        case .ready: return ("Ready to approve", "checkmark.circle.fill", .green)
+        case .missingPayee: return ("Needs payee", "person.crop.circle.badge.questionmark", .orange)
+        case .missingCategory: return ("Needs category", "tag.slash.fill", .orange)
+        case .missingPayeeAndCategory: return ("Needs payee & category", "exclamationmark.circle.fill", .orange)
+        }
     }
 }
 
@@ -335,8 +350,6 @@ private struct LiveCandidateView: View {
                         if let payeeId, let nextCategoryId,
                            store.payees.first(where: { $0.id == payeeId })?.defaultCategoryId != nextCategoryId { rememberCategory = true }
                     }
-                    Text("Hidden categories cannot be used.")
-                        .font(.footnote).foregroundStyle(.secondary)
                     if let payeeId,
                        store.payees.first(where: { $0.id == payeeId })?.defaultCategoryId != categoryId {
                         Toggle("Make this the default category for \(store.payees.first(where: { $0.id == payeeId })?.name ?? "this payee")", isOn: $rememberCategory)
