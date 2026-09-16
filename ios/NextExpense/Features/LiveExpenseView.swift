@@ -23,10 +23,12 @@ struct LiveExpenseView: View {
                                 ContentUnavailableView("You’re all caught up", systemImage: "checkmark.circle", description: Text("Tap Sync banks to check for new imports."))
                             }
                             ForEach(store.candidates) { candidate in
-                                Button { selected = candidate } label: { row(candidate) }
-                                    .disabled(store.busy)
-                                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                        if store.canSwipeApprove(candidate) {
+                                row(candidate)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { if !store.busy { selected = candidate } }
+                                    .accessibilityAddTraits(.isButton)
+                                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                        if !store.busy && store.canSwipeApprove(candidate) {
                                             Button {
                                                 Task { try? await store.approve(candidate, payeeId: candidate.payeeId, categoryId: candidate.categoryId) }
                                             } label: { Label("Approve", systemImage: "checkmark") }
