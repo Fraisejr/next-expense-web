@@ -258,7 +258,9 @@ struct LiveExpenseView: View {
         }
     }
     private func row(_ transaction: ReviewTransaction) -> some View {
-        HStack {
+        let sign = transaction.transactionType == "income" ? "+" : transaction.transactionType == "expense" ? "−" : ""
+        let category = store.categories.first(where: { $0.id == transaction.categoryId })?.name ?? "No category"
+        return HStack {
             VStack(alignment: .leading, spacing: 4) {
                 Text(store.payees.first(where: { $0.id == transaction.payeeId })?.name ?? transaction.payeeName ?? "Transfer")
                     .font(.headline).foregroundStyle(.primary)
@@ -267,8 +269,8 @@ struct LiveExpenseView: View {
             }
             Spacer()
             VStack(alignment: .trailing) {
-                Text(formattedMoney(transaction.amountMinor, currency: transaction.currency)).monospacedDigit()
-                Text(transaction.transactionType.capitalized).font(.caption).foregroundStyle(.secondary)
+                Text("\(sign)\(formattedMoney(abs(transaction.amountMinor), currency: transaction.currency))").monospacedDigit()
+                Text(category).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             .foregroundStyle(.primary)
         }
