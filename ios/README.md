@@ -32,19 +32,25 @@ key, or GoCardless secret to the app.
 2. Each open, connected account syncs sequentially and shows its result. Reports
    and Review refresh afterward, including when one account fails.
 3. Open an item, choose an active category, and optionally search for a different
-   existing payee. When an exact payee mapping is a prefix of the imported name
+   payee or create one from the search field. When an exact payee mapping is a prefix of the imported name
    or memo, iOS offers the same **Use Starts with and select payee** and **Add to
    alternative names and select payee** actions as the web app. **Use imported
    payee** lets the existing server approval function resolve/create the payee
    using its established rules.
-4. Approve. iOS calls the same `approve_bank_import_candidate` RPC as the web
+4. Optionally save a changed category as the payee default and remember a
+   manually selected payee as an alternative name. New mappings immediately
+   rematch the other pending imports for that account.
+5. Approve. iOS calls the same `approve_bank_import_candidate` RPC as the web
    app. The database atomically creates/promotes the ledger transaction and
    marks the candidate approved. The inbox changes only after acknowledgement.
-5. Reports refresh after the approval commits. Refresh the web app to see the
+6. Reports refresh after the approval commits. Refresh the web app to see the
    same saved result there.
 
 An item that already has a valid saved payee and category can also be approved
 with a trailing swipe from the Review list.
+Possible existing transfers are suggested when a same-currency transfer has the
+same amount within three days. Any imported item can also be posted as a new
+transfer to or from another open account in the same currency.
 
 Rejection saves a server-side tombstone, preserving bank-sync deduplication.
 Reports show current net worth and year-to-date personal plus company expenses
@@ -100,9 +106,8 @@ results** in the account menu; this preference persists across launches.
 
 The shipped UI contains real Budget, Reports and Review tabs. The original Overview,
 Accounts, and demo store remain available for SwiftUI previews and unit tests;
-they are not presented as live financial data. Bank linking/reconnection,
-new payee entry, and transfers remain outside
-this integration. Google-only accounts do not need to create a password.
+they are not presented as live financial data. Bank linking and reconnection
+remain on the website. Google-only accounts do not need to create a password.
 
 Bank sync calls the fixed HTTPS `/api/gocardless/sync-import` endpoint using a
 fresh Neon JWT. Auth cookies and provider secrets never go to that endpoint.

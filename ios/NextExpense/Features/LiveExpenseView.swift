@@ -287,12 +287,19 @@ private struct LiveCandidateView: View {
     @State private var error: String?
     @State private var rejecting = false
     @State private var applyingSuggestion = false
+    @State private var rememberCategory: Bool
+    @State private var rememberMapping = true
+    @State private var showingTransfer = false
+    @State private var transferAccountId: UUID?
 
     init(store: LiveExpenseStore, candidate: ReviewTransaction) {
         self.store = store
         self.candidate = candidate
         _payeeId = State(initialValue: candidate.payeeId)
         _categoryId = State(initialValue: store.categories.contains(where: { $0.id == candidate.categoryId }) ? candidate.categoryId : nil)
+        let payee = store.payees.first(where: { $0.id == candidate.payeeId })
+        _rememberCategory = State(initialValue: candidate.payeeId != nil && payee?.defaultCategoryId != candidate.categoryId)
+        _transferAccountId = State(initialValue: store.eligibleTransferAccounts(for: candidate).first?.id)
     }
     var body: some View {
         NavigationStack {
@@ -306,11 +313,15 @@ private struct LiveCandidateView: View {
                 }
                 Section("Review details") {
                     NavigationLink {
-                        SearchablePayeePicker(payees: store.payees, selection: $payeeId)
+                        SearchablePayeePicker(payees: store.payees, selection: $payeeId) { name in
+                            try await store.createPayee(name: name, categoryId: categoryId, accountId: candidate.accountId)
+                        }
                     } label: {
                         LabeledContent("Payee", value: store.payees.first(where: { $0.id == payeeId })?.name ?? "Use imported payee")
                     }
                     .onChange(of: payeeId) { _, nextPayeeId in
+                        rememberCategory = nextPayeeId != nil
+                        rememberMapping = nextPayeeId != nil
                         if let defaultCategory = store.payees.first(where: { $0.id == nextPayeeId })?.defaultCategoryId,
                            store.categories.contains(where: { $0.id == defaultCategory }) { categoryId = defaultCategory }
                     }
@@ -318,8 +329,19 @@ private struct LiveCandidateView: View {
                         Text("Select category").tag(nil as UUID?)
                         ForEach(store.categories) { Text($0.name).tag(Optional($0.id)) }
                     }
-                    Text("Hidden categories cannot be used. Transfers should be reviewed in the web app.")
+                    .onChange(of: categoryId) { _, nextCategoryId in
+                        if let payeeId, let nextCategoryId,
+                           store.payees.first(where: { $0.id == payeeId })?.defaultCategoryId != nextCategoryId { rememberCategory = true }
+                    }
+                    Text("Hidden categories cannot be used.")
                         .font(.footnote).foregroundStyle(.secondary)
+                    if let payeeId,
+                       store.payees.first(where: { $0.id == payeeId })?.defaultCategoryId != categoryId {
+                        Toggle("Make this the default category for \(store.payees.first(where: { $0.id == payeeId })?.name ?? "this payee")", isOn: $rememberCategory)
+                    }
+                    if shouldOfferMapping {
+                        Toggle("Remember “\(candidate.payeeName ?? "")” as an alternative name", isOn: $rememberMapping)
+                    }
                 }.disabled(store.busy)
                 if let suggestion = store.possiblePayeeMatch(for: candidate), payeeId == nil {
                     Section("Possible payee match") {
@@ -332,6 +354,7 @@ private struct LiveCandidateView: View {
                                 do {
                                     try await store.promotePayeeMapping(suggestion)
                                     payeeId = suggestion.payee.id
+                                    rememberMapping = false
                                 } catch { self.error = error.localizedDescription }
                             }
                         }
@@ -339,18 +362,52 @@ private struct LiveCandidateView: View {
                             Task {
                                 applyingSuggestion = true; defer { applyingSuggestion = false }
                                 do {
-                                    try await store.addAlternativeName(suggestion.sourceText, payee: suggestion.payee)
+                                    try await store.addAlternativeName(suggestion.sourceText, payee: suggestion.payee, accountId: candidate.accountId)
                                     payeeId = suggestion.payee.id
+                                    rememberMapping = false
                                 } catch { self.error = error.localizedDescription }
                             }
                         }
                     }.disabled(store.busy || applyingSuggestion)
                 }
+                if let suggestedAccount = store.suggestedTransferAccount(for: candidate) {
+                    Section("Possible transfer match") {
+                        Button("Match existing transfer to \(suggestedAccount.name)") {
+                            Task {
+                                do { try await store.approveAsTransfer(candidate, counterpartyAccountId: suggestedAccount.id); dismiss() }
+                                catch { self.error = error.localizedDescription }
+                            }
+                        }
+                    }.disabled(store.busy)
+                }
+                if !store.eligibleTransferAccounts(for: candidate).isEmpty {
+                    Section("Transfer") {
+                        DisclosureGroup("Post as transfer", isExpanded: $showingTransfer) {
+                            Picker(candidate.transactionType == "expense" ? "Transfer to" : "Transfer from", selection: $transferAccountId) {
+                                ForEach(store.eligibleTransferAccounts(for: candidate)) { account in
+                                    Text(account.name).tag(Optional(account.id))
+                                }
+                            }
+                            Button("Post transfer") {
+                                guard let transferAccountId else { return }
+                                Task {
+                                    do { try await store.approveAsTransfer(candidate, counterpartyAccountId: transferAccountId); dismiss() }
+                                    catch { self.error = error.localizedDescription }
+                                }
+                            }.disabled(transferAccountId == nil || store.busy)
+                        }
+                    }
+                }
                 if let error { Text(error).foregroundStyle(.red) }
                 Section {
                     Button("Approve") {
                         Task {
-                            do { try await store.approve(candidate, payeeId: payeeId, categoryId: categoryId); dismiss() }
+                            do {
+                                try await store.approve(candidate, payeeId: payeeId, categoryId: categoryId,
+                                                       rememberCategory: rememberCategory,
+                                                       rememberMapping: shouldOfferMapping && rememberMapping)
+                                dismiss()
+                            }
                             catch { self.error = error.localizedDescription }
                         }
                     }.disabled(store.busy || categoryId == nil)
@@ -373,13 +430,26 @@ private struct LiveCandidateView: View {
             .onChange(of: store.signedIn) { _, value in if !value { dismiss() } }
         }
     }
+
+    private var shouldOfferMapping: Bool {
+        guard let payeeId, payeeId != candidate.payeeId,
+              let source = candidate.payeeName?.trimmingCharacters(in: .whitespacesAndNewlines), !source.isEmpty else { return false }
+        let normalized = source.precomposedStringWithCompatibilityMapping.lowercased()
+        return !store.payeeMappings.contains {
+            $0.payeeId == payeeId && $0.sourceName.precomposedStringWithCompatibilityMapping
+                .trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalized
+        }
+    }
 }
 
 private struct SearchablePayeePicker: View {
     let payees: [ReviewPayee]
     @Binding var selection: UUID?
+    let onCreate: (String) async throws -> ReviewPayee
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    @State private var creating = false
+    @State private var error: String?
 
     private var filtered: [ReviewPayee] {
         let cleaned = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -400,7 +470,22 @@ private struct SearchablePayeePicker: View {
                     HStack { Text(payee.name); Spacer(); if selection == payee.id { Image(systemName: "checkmark") } }
                 }
             }
+            let cleaned = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleaned.isEmpty && !payees.contains(where: { $0.name.compare(cleaned, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }) {
+                Button {
+                    Task {
+                        creating = true; defer { creating = false }
+                        do {
+                            let payee = try await onCreate(cleaned)
+                            selection = payee.id
+                            dismiss()
+                        } catch { self.error = error.localizedDescription }
+                    }
+                } label: { Label("Create “\(cleaned)”", systemImage: "plus") }
+                    .disabled(creating)
+            }
             if filtered.isEmpty { ContentUnavailableView.search(text: query) }
+            if let error { Text(error).foregroundStyle(.red) }
         }
         .navigationTitle("Select payee")
         .navigationBarTitleDisplayMode(.inline)

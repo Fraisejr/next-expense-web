@@ -180,6 +180,7 @@ final class LiveReviewTests: XCTestCase {
     private var rejectRows = true
     private var matchingFixtures = false
     private var candidateHasPayee = false
+    private var transferFixture = false
     private let vault = MemoryVault()
 
     private func makeAPI() -> NeonAPI {
@@ -224,7 +225,7 @@ final class LiveReviewTests: XCTestCase {
                 return (200, [:], ["imported": 2, "duplicates": 10, "diagnostic": ["staged": 3, "zeroIgnored": 1], "warnings": []])
             }
             let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
-            if !["workspaces", "workspace_members", "approve_bank_import_candidate", "workspace_account_balances"].contains(path) {
+            if !["workspaces", "workspace_members", "approve_bank_import_candidate", "approve_bank_import_candidate_as_transfer", "workspace_account_balances"].contains(path) {
                 XCTAssertEqual(query.first(where: { $0.name == "workspace_id" })?.value, "eq.\(workspace)")
             }
             switch path {
@@ -236,10 +237,18 @@ final class LiveReviewTests: XCTestCase {
             case "periods": return (200, [:], [])
             case "budgets": return (200, [:], [])
             case "fx_rates": return (200, [:], [])
-            case "payees": return (200, [:], matchingFixtures ? [["id": payee.uuidString, "name": "Market Payee", "default_category_id": category.uuidString]] : [])
+            case "payees":
+                if request.httpMethod == "POST" {
+                    let body = try jsonBody(request)
+                    return (200, [:], [["id": body["id"]!, "name": body["name"]!, "default_category_id": body["default_category_id"] ?? NSNull()]])
+                }
+                return (200, [:], matchingFixtures ? [["id": payee.uuidString, "name": "Market Payee", "default_category_id": category.uuidString]] : [])
             case "payee_mappings":
                 if request.httpMethod == "PATCH" { return (200, [:], [["id": mapping.uuidString, "source_name": "Market", "payee_id": payee.uuidString, "match_type": "starts_with"]]) }
-                if request.httpMethod == "POST" { return (200, [:], [["id": UUID().uuidString, "source_name": "Market Barcelona purchase", "payee_id": payee.uuidString, "match_type": "exact"]]) }
+                if request.httpMethod == "POST" {
+                    let body = try jsonBody(request)
+                    return (200, [:], [["id": body["id"]!, "source_name": body["source_name"]!, "payee_id": body["payee_id"]!, "match_type": "exact"]])
+                }
                 return (200, [:], matchingFixtures ? [["id": mapping.uuidString, "source_name": "Market", "payee_id": payee.uuidString, "match_type": "exact"]] : [])
             case "bank_connections": return (200, [:], noBanks ? [] : ([["account_id": account.uuidString]] + (twoBanks ? [["account_id": transaction.uuidString]] : [])))
             case "accounts": return (200, [:], [["id": account.uuidString, "name": "Main", "currency": "SEK", "closed": false, "scope": "Personal"]] + (twoBanks ? [["id": transaction.uuidString, "name": "Second", "currency": "SEK", "closed": false, "scope": "Personal"]] : []))
@@ -250,13 +259,36 @@ final class LiveReviewTests: XCTestCase {
                 return (200, [:], [row(candidate)])
             case "approve_bank_import_candidate":
                 return (approvalStatus, [:], approvalStatus == 200 ? transaction.uuidString : ["message": "Approval failed"])
+            case "approve_bank_import_candidate_as_transfer":
+                return (approvalStatus, [:], approvalStatus == 200 ? transaction.uuidString : ["message": "Transfer failed"])
             case "transactions":
+                if query.contains(where: { $0.name == "transaction_type" && $0.value == "eq.transfer" }) {
+                    return (200, [:], transferFixture ? [[
+                        "id": mapping.uuidString, "account_id": account.uuidString,
+                        "destination_account_id": transaction.uuidString, "transaction_date": "2026-09-11",
+                        "amount_minor": 2450, "destination_amount_minor": 2450, "currency": "SEK"
+                    ]] : [])
+                }
                 if ledgerFails { return (503, [:], ["message": "Temporarily unavailable"]) }
                 return (200, [:], query.contains(where: { $0.name == "id" }) ? [row(transaction)] : [])
             default: XCTFail("Unexpected endpoint: \(path)"); return (404, [:], [:])
             }
         }
         return NeonAPI(session: URLSession(configuration: configuration), vault: vault)
+    }
+
+    private func jsonBody(_ request: URLRequest) throws -> [String: Any] {
+        var data = request.httpBody ?? Data()
+        if data.isEmpty, let stream = request.httpBodyStream {
+            stream.open(); defer { stream.close() }
+            var bytes = [UInt8](repeating: 0, count: 1024)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&bytes, maxLength: bytes.count)
+                if count <= 0 { break }
+                data.append(bytes, count: count)
+            }
+        }
+        return try JSONSerialization.jsonObject(with: data) as! [String: Any]
     }
     func testBudgetLoadsWithReadOnlyMonthScopedRequests() async {
         let store = await signedInStore()
@@ -428,9 +460,41 @@ final class LiveReviewTests: XCTestCase {
         XCTAssertEqual(store.payeeMappings.first?.matchType, "starts_with")
         XCTAssertEqual(requests.filter { $0.url?.lastPathComponent == "payee_mappings" && $0.httpMethod == "PATCH" }.count, 1)
 
-        try await store.addAlternativeName(suggestion.sourceText, payee: suggestion.payee)
+        try await store.addAlternativeName(suggestion.sourceText, payee: suggestion.payee, accountId: account)
         XCTAssertTrue(store.payeeMappings.contains { $0.sourceName == "Market Barcelona purchase" && $0.payeeId == payee })
+        XCTAssertEqual(store.candidates.first?.payeeId, payee)
+        XCTAssertEqual(store.candidates.first?.categoryId, category)
         XCTAssertEqual(requests.filter { $0.url?.lastPathComponent == "payee_mappings" && $0.httpMethod == "POST" }.count, 1)
+    }
+
+    func testCreatesPayeeAndRemembersCategoryAndAlternativeOnApproval() async throws {
+        let store = await signedInStore()
+        let created = try await store.createPayee(name: "New Market", categoryId: category, accountId: account)
+        XCTAssertEqual(created.name, "New Market")
+        XCTAssertEqual(created.defaultCategoryId, category)
+
+        let item = try XCTUnwrap(store.candidates.first)
+        try await store.approve(item, payeeId: created.id, categoryId: category, rememberCategory: true, rememberMapping: true)
+        let approval = try XCTUnwrap(requests.last(where: { $0.url?.lastPathComponent == "approve_bank_import_candidate" }))
+        let approvalBody = try jsonBody(approval)
+        XCTAssertEqual(approvalBody["p_remember_category"] as? Bool, true)
+        XCTAssertTrue(store.payeeMappings.contains { $0.sourceName == "Market" && $0.payeeId == created.id })
+        XCTAssertTrue(store.candidates.isEmpty)
+    }
+
+    func testSuggestsAndPostsExistingTransfer() async throws {
+        twoBanks = true
+        transferFixture = true
+        let store = await signedInStore()
+        let item = try XCTUnwrap(store.candidates.first)
+        let suggested = try XCTUnwrap(store.suggestedTransferAccount(for: item))
+        XCTAssertEqual(suggested.id, transaction)
+
+        try await store.approveAsTransfer(item, counterpartyAccountId: suggested.id)
+        let request = try XCTUnwrap(requests.last(where: { $0.url?.lastPathComponent == "approve_bank_import_candidate_as_transfer" }))
+        let body = try jsonBody(request)
+        XCTAssertEqual(body["p_counterparty_account_id"] as? String, transaction.uuidString)
+        XCTAssertTrue(store.candidates.isEmpty)
     }
 }
 
