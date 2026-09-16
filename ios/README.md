@@ -46,8 +46,8 @@ key, or GoCardless secret to the app.
 6. Reports refresh after the approval commits. Refresh the web app to see the
    same saved result there.
 
-An item that already has a valid saved payee and category can also be approved
-with a trailing swipe from the Review list.
+An item that already has an active category and either a saved payee or a usable
+imported payee name can also be approved with a trailing swipe from the Review list.
 Possible existing transfers are suggested when a same-currency transfer has the
 same amount within three days. Any imported item can also be posted as a new
 transfer to or from another open account in the same currency.

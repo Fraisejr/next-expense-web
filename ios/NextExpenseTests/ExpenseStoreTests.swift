@@ -437,10 +437,18 @@ final class LiveReviewTests: XCTestCase {
         XCTAssertEqual(requests.count, before)
     }
 
-    func testSwipeApprovalRequiresSavedPayeeAndCategory() async throws {
+    func testSwipeApprovalAcceptsImportedOrSavedPayeeWithCategory() async throws {
         matchingFixtures = true
         var store = await signedInStore()
-        XCTAssertFalse(store.canSwipeApprove(try XCTUnwrap(store.candidates.first)))
+        let importedPayee = try XCTUnwrap(store.candidates.first)
+        XCTAssertTrue(store.canSwipeApprove(importedPayee))
+
+        let missingCategory = ReviewTransaction(
+            id: importedPayee.id, accountId: importedPayee.accountId, transactionDate: importedPayee.transactionDate,
+            amountMinor: importedPayee.amountMinor, currency: importedPayee.currency, transactionType: importedPayee.transactionType,
+            payeeName: importedPayee.payeeName, payeeId: nil, categoryId: nil, memo: importedPayee.memo
+        )
+        XCTAssertFalse(store.canSwipeApprove(missingCategory))
 
         candidateHasPayee = true
         store = await signedInStore()

@@ -318,8 +318,10 @@ final class LiveExpenseStore: ObservableObject {
     }
 
     func canSwipeApprove(_ candidate: ReviewTransaction) -> Bool {
-        guard let payeeId = candidate.payeeId, let categoryId = candidate.categoryId else { return false }
-        return payees.contains(where: { $0.id == payeeId }) && categories.contains(where: { $0.id == categoryId })
+        guard let categoryId = candidate.categoryId,
+              categories.contains(where: { $0.id == categoryId }) else { return false }
+        if let payeeId = candidate.payeeId { return payees.contains(where: { $0.id == payeeId }) }
+        return !(candidate.payeeName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }
 
     func possiblePayeeMatch(for candidate: ReviewTransaction) -> ReviewPayeeSuggestion? {
