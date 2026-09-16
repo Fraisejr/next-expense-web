@@ -225,7 +225,10 @@ final class LiveReviewTests: XCTestCase {
                 return (200, [:], ["imported": 2, "duplicates": 10, "diagnostic": ["staged": 3, "zeroIgnored": 1], "warnings": []])
             }
             let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
-            if !["workspaces", "workspace_members", "approve_bank_import_candidate", "approve_bank_import_candidate_as_transfer", "workspace_account_balances"].contains(path) {
+            let unfilteredInsert = request.httpMethod == "POST" && ["payees", "payee_mappings"].contains(path)
+            if unfilteredInsert {
+                XCTAssertNil(query.first(where: { $0.name == "workspace_id" }), "Insert filters trigger Neon subzer0_source errors; scope belongs in the body and RLS.")
+            } else if !["workspaces", "workspace_members", "approve_bank_import_candidate", "approve_bank_import_candidate_as_transfer", "workspace_account_balances"].contains(path) {
                 XCTAssertEqual(query.first(where: { $0.name == "workspace_id" })?.value, "eq.\(workspace)")
             }
             switch path {
@@ -240,6 +243,7 @@ final class LiveReviewTests: XCTestCase {
             case "payees":
                 if request.httpMethod == "POST" {
                     let body = try jsonBody(request)
+                    XCTAssertEqual(body["workspace_id"] as? String, workspace.uuidString)
                     return (200, [:], [["id": body["id"]!, "name": body["name"]!, "default_category_id": body["default_category_id"] ?? NSNull()]])
                 }
                 return (200, [:], matchingFixtures ? [["id": payee.uuidString, "name": "Market Payee", "default_category_id": category.uuidString]] : [])
@@ -247,6 +251,7 @@ final class LiveReviewTests: XCTestCase {
                 if request.httpMethod == "PATCH" { return (200, [:], [["id": mapping.uuidString, "source_name": "Market", "payee_id": payee.uuidString, "match_type": "starts_with"]]) }
                 if request.httpMethod == "POST" {
                     let body = try jsonBody(request)
+                    XCTAssertEqual(body["workspace_id"] as? String, workspace.uuidString)
                     return (200, [:], [["id": body["id"]!, "source_name": body["source_name"]!, "payee_id": body["payee_id"]!, "match_type": "exact"]])
                 }
                 return (200, [:], matchingFixtures ? [["id": mapping.uuidString, "source_name": "Market", "payee_id": payee.uuidString, "match_type": "exact"]] : [])

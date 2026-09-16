@@ -376,7 +376,7 @@ final class LiveExpenseStore: ObservableObject {
             "sort_order": payees.count, "default_account_id": accountId.uuidString
         ]
         if let categoryId { body["default_category_id"] = categoryId.uuidString }
-        let rows: [ReviewPayee] = try await api.data("payees", query: scoped(workspace.id) + [
+        let rows: [ReviewPayee] = try await api.data("payees", query: [
             .init(name: "select", value: "id,name,default_category_id")
         ], method: "POST", body: body)
         guard let inserted = rows.first else { throw MobileAPIError(message: "The payee could not be created.", status: 0) }
@@ -403,7 +403,7 @@ final class LiveExpenseStore: ObservableObject {
             return
         }
         let id = UUID()
-        let rows: [ReviewPayeeMapping] = try await api.data("payee_mappings", query: scoped(workspace.id) + [
+        let rows: [ReviewPayeeMapping] = try await api.data("payee_mappings", query: [
             .init(name: "select", value: "id,source_name,payee_id,match_type")
         ], method: "POST", body: [
             "id": id.uuidString, "workspace_id": workspace.id.uuidString, "normalized_name": normalized,
