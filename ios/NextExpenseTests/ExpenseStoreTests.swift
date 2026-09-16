@@ -496,6 +496,20 @@ final class LiveReviewTests: XCTestCase {
         XCTAssertEqual(requests.filter { $0.url?.lastPathComponent == "payee_mappings" && $0.httpMethod == "POST" }.count, 1)
     }
 
+    func testRecheckPayeesReloadsMappingsAndRematchesPendingCandidates() async throws {
+        matchingFixtures = true
+        let store = await signedInStore()
+        XCTAssertNil(store.candidates.first?.payeeId)
+
+        await store.recheckPayees()
+
+        XCTAssertEqual(store.candidates.first?.payeeId, payee)
+        XCTAssertEqual(store.candidates.first?.categoryId, category)
+        XCTAssertEqual(store.notice, "Rechecked payees. 1 transaction matched.")
+        XCTAssertEqual(requests.filter { $0.url?.lastPathComponent == "payees" && $0.httpMethod == "GET" }.count, 2)
+        XCTAssertEqual(requests.filter { $0.url?.lastPathComponent == "payee_mappings" && $0.httpMethod == "GET" }.count, 2)
+    }
+
     func testCreatesPayeeAndRemembersCategoryAndAlternativeOnApproval() async throws {
         let store = await signedInStore()
         let created = try await store.createPayee(name: "New Market", categoryId: category, accountId: account)

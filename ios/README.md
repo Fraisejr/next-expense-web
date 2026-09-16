@@ -40,6 +40,8 @@ key, or GoCardless secret to the app.
 4. Optionally save a changed category as the payee default and remember a
    manually selected payee as an alternative name. New mappings immediately
    rematch the other pending imports for that account.
+   **Recheck payees** at the top of Review reloads all current mappings and
+   reprocesses every unmatched pending transaction across accounts.
 5. Approve. iOS calls the same `approve_bank_import_candidate` RPC as the web
    app. The database atomically creates/promotes the ledger transaction and
    marks the candidate approved. The inbox changes only after acknowledgement.

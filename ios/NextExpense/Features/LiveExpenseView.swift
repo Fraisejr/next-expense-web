@@ -19,6 +19,12 @@ struct LiveExpenseView: View {
                     NavigationStack {
                         List {
                             messages
+                            if store.candidates.contains(where: { $0.payeeId == nil }) {
+                                Button { Task { await store.recheckPayees() } } label: {
+                                    Label("Recheck payees", systemImage: "arrow.triangle.2.circlepath")
+                                }
+                                .disabled(store.busy)
+                            }
                             if store.candidates.isEmpty && !store.busy && store.errorMessage == nil {
                                 ContentUnavailableView("You’re all caught up", systemImage: "checkmark.circle", description: Text("Tap Sync banks to check for new imports."))
                             }

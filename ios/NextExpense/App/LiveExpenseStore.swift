@@ -266,7 +266,7 @@ final class LiveExpenseStore: ObservableObject {
             if rememberMapping, let importedName = candidate.payeeName, !importedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 do {
                     try await saveExactMapping(importedName, payee: resolvedPayee, replaceConflict: true)
-                    try await rematchPendingCandidates(accountId: candidate.accountId)
+                    _ = try await rematchPendingCandidates(accountId: candidate.accountId)
                 } catch {
                     errorMessage = "Transaction approved, but its bank description could not be saved as an alternative name: \(error.localizedDescription)"
                 }
@@ -377,8 +377,26 @@ final class LiveExpenseStore: ObservableObject {
         defer { busy = false }
         do {
             try await saveExactMapping(sourceName, payee: payee, replaceConflict: false)
-            try await rematchPendingCandidates(accountId: accountId)
+            _ = try await rematchPendingCandidates(accountId: accountId)
         } catch { handle(error); throw error }
+    }
+
+    func recheckPayees() async {
+        guard !busy, let workspace else { return }
+        busy = true; errorMessage = nil
+        defer { busy = false }
+        do {
+            payees = try await all("payees", query: scoped(workspace.id) + [
+                .init(name: "select", value: "id,name,default_category_id"), .init(name: "order", value: "name,id")
+            ])
+            payeeMappings = try await all("payee_mappings", query: scoped(workspace.id) + [
+                .init(name: "select", value: "id,source_name,payee_id,match_type"), .init(name: "order", value: "id")
+            ])
+            let accountIds = Set(candidates.filter { $0.payeeId == nil }.map(\.accountId))
+            var matched = 0
+            for accountId in accountIds { matched += try await rematchPendingCandidates(accountId: accountId) }
+            notice = matched == 1 ? "Rechecked payees. 1 transaction matched." : "Rechecked payees. \(matched) transactions matched."
+        } catch { handle(error) }
     }
 
     private func insertPayee(name: String, categoryId: UUID?, accountId: UUID) async throws -> ReviewPayee {
@@ -429,8 +447,9 @@ final class LiveExpenseStore: ObservableObject {
         payeeMappings.append(inserted)
     }
 
-    private func rematchPendingCandidates(accountId: UUID) async throws {
-        guard let workspace else { return }
+    private func rematchPendingCandidates(accountId: UUID) async throws -> Int {
+        guard let workspace else { return 0 }
+        var matchedCount = 0
         for candidate in candidates where candidate.accountId == accountId && candidate.payeeId == nil {
             let matched = [candidate.payeeName, candidate.memo].compactMap { $0 }.compactMap(matchedPayee).first
             guard let matched else { continue }
@@ -441,6 +460,7 @@ final class LiveExpenseStore: ObservableObject {
                 .init(name: "payee_id", value: "is.null"), .init(name: "select", value: "id")
             ], method: "PATCH", body: body)
             guard !rows.isEmpty else { continue }
+            matchedCount += 1
             candidates = candidates.map { item in
                 item.id == candidate.id ? ReviewTransaction(
                     id: item.id, accountId: item.accountId, transactionDate: item.transactionDate,
@@ -450,6 +470,7 @@ final class LiveExpenseStore: ObservableObject {
                 ) : item
             }
         }
+        return matchedCount
     }
 
     private func matchedPayee(_ sourceName: String) -> ReviewPayee? {
