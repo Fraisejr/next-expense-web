@@ -322,6 +322,7 @@ private struct LiveCandidateView: View {
         NavigationStack {
             Form {
                 Section("Imported transaction") {
+                    LabeledContent("Account", value: store.accounts.first(where: { $0.id == candidate.accountId })?.name ?? "Unknown account")
                     LabeledContent("Amount", value: formattedMoney(candidate.amountMinor, currency: candidate.currency))
                     LabeledContent("Type", value: candidate.transactionType.capitalized)
                     LabeledContent("Date", value: candidate.transactionDate)
