@@ -23,13 +23,13 @@ function databaseErrorMessage(error: unknown, fallback: string) {
   return fallback
 }
 
-async function allRows(table: string, columns = '*', orderColumn = 'id'): Promise<Row[]> {
+async function allRows(table: string, columns = '*', orderColumn = 'id', tieBreakerColumn: string | null = 'id'): Promise<Row[]> {
   const pageSize = 1000
   const rows: Row[] = []
 
   for (let start = 0; ; start += pageSize) {
     let query = neon.from(table).select(columns).order(orderColumn, { ascending: true })
-    if (orderColumn !== 'id') query = query.order('id', { ascending: true })
+    if (tieBreakerColumn && orderColumn !== tieBreakerColumn) query = query.order(tieBreakerColumn, { ascending: true })
     const { data, error } = await query.range(start, start + pageSize - 1)
     if (error) throw error
     const page = (data ?? []) as unknown as Row[]
@@ -279,8 +279,8 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
     allRows('payees', 'id,name,sort_order,default_category_id,default_account_id', 'sort_order'),
     allRows('payee_mappings', 'id,source_name,payee_id,match_type'),
     allRows('timesheet_clients', 'id,name,currency,sort_order,active', 'sort_order'),
-    allRows('timesheet_client_rates', 'client_id,effective_from,hourly_rate_minor', 'effective_from'),
-    allRows('timesheet_client_forecasts', 'client_id,forecast_year,weekly_hours,vacation_weeks', 'forecast_year'),
+    allRows('timesheet_client_rates', 'client_id,effective_from,hourly_rate_minor', 'effective_from', 'client_id'),
+    allRows('timesheet_client_forecasts', 'client_id,forecast_year,weekly_hours,vacation_weeks', 'forecast_year', 'client_id'),
     allRows('time_codes', 'id,name,sort_order,client_id,hidden_from_month', 'sort_order'),
     loadTransactionPage(workspaceId, { startDate: monthStart, endDate: monthEnd }),
     neon.rpc('workspace_account_balances', { p_workspace_id: workspaceId }),
