@@ -10,7 +10,7 @@ import { matchPath, useLocation, useNavigate } from 'react-router-dom'
 import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTimeCode, createTimesheetClient, createTransaction, deleteAllUnusedPayees, deleteBudget, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadRevenueRecognitionEntries, loadTimeComments, loadTimeEntries, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveTimeCodeOrder, saveTimeComment, saveTimeEntry, saveTimesheetClientForecast, saveTimesheetClientRate, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTimeCode, updateTimesheetClient, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
 import { convertMinor } from './currency'
-import { calculateRevenueForecast, type RevenueForecast } from './revenue'
+import { calculateRevenueForecast, recognizedWorkMonthRange, type RevenueForecast } from './revenue'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, TimeCode, TimeComment, TimeEntry, TimesheetClient, TimesheetClientForecast, TimesheetClientRate, Transaction, YearlyFinancialPlan } from './types'
 
 type Page = 'overview' | 'transactions' | 'payees' | 'reports' | 'accounts' | 'timesheet' | 'settings'
@@ -1825,6 +1825,7 @@ function ClientRevenuePanel({ year, defaultCurrency, clients, rates, forecasts, 
   const [currency, setCurrency] = useState(defaultCurrency)
   const [rate, setRate] = useState('')
   const [error, setError] = useState('')
+  const recognizedPeriod = formatRecognizedTimesheetPeriod(todayInParis(), year)
 
   async function addClient(event: FormEvent) {
     event.preventDefault()
@@ -1849,7 +1850,7 @@ function ClientRevenuePanel({ year, defaultCurrency, clients, rates, forecasts, 
   return <section className="panel client-revenue-panel">
     <div className="client-revenue-heading"><div><span className="eyebrow">Recognized revenue · {year}</span><h2>Client revenue forecast</h2><p>Worked hours are recognized on the first of the following month. The remaining forecast uses weekly hours after vacation.</p></div><div className="client-revenue-total"><span>Full-year forecast</span><strong>{formatMoney(revenue.fullYearRevenueMinor, defaultCurrency)}</strong><small>{formatMoney(revenue.actualRevenueMinor, defaultCurrency)} recognized · {formatMoney(revenue.remainingRevenueMinor, defaultCurrency)} remaining</small></div></div>
     {(revenue.missingFx || revenue.missingRate) && <p className="client-revenue-warning"><CircleAlert size={15} />{revenue.missingRate ? 'A billable period is missing a client rate. ' : ''}{revenue.missingFx ? `Add the required exchange rate in Settings to complete the ${defaultCurrency} forecast.` : ''}</p>}
-    <div className="client-revenue-list">{clients.filter((client) => client.active).sort((left, right) => left.sortOrder - right.sortOrder).map((client) => <ClientRevenueCard key={client.id} year={year} defaultCurrency={defaultCurrency} client={client} rates={rates.filter((item) => item.clientId === client.id)} forecast={forecasts.find((item) => item.clientId === client.id && item.year === year)} revenue={revenue.clients.find((item) => item.client.id === client.id)} onUpdateClient={onUpdateClient} onSaveRate={onSaveRate} onSaveForecast={onSaveForecast} />)}</div>
+    <div className="client-revenue-list">{clients.filter((client) => client.active).sort((left, right) => left.sortOrder - right.sortOrder).map((client) => <ClientRevenueCard key={client.id} year={year} defaultCurrency={defaultCurrency} client={client} rates={rates.filter((item) => item.clientId === client.id)} forecast={forecasts.find((item) => item.clientId === client.id && item.year === year)} revenue={revenue.clients.find((item) => item.client.id === client.id)} recognizedPeriod={recognizedPeriod} onUpdateClient={onUpdateClient} onSaveRate={onSaveRate} onSaveForecast={onSaveForecast} />)}</div>
     {clients.some((client) => !client.active) && <div className="inactive-client-list"><span>Inactive clients</span>{clients.filter((client) => !client.active).map((client) => <button type="button" key={client.id} onClick={() => void onUpdateClient({ ...client, active: true })}><Eye size={13} />{client.name}<b>{formatMoney(revenue.clients.find((item) => item.client.id === client.id)?.actualRevenueMinor ?? 0, defaultCurrency)} earned</b></button>)}</div>}
     {!clients.some((client) => client.active) && <div className="client-revenue-empty"><BriefcaseBusiness size={21} /><strong>Add the first client</strong><span>Client rates turn recorded hours into earned revenue.</span></div>}
     <form className="client-add-form" onSubmit={(event) => void addClient(event)}><label><span>Client</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Client name" /></label><label><span>Currency</span><input value={currency} maxLength={3} onChange={(event) => setCurrency(event.target.value.toUpperCase().replace(/[^A-Z]/g, ''))} /></label><label><span>Hourly rate</span><input type="number" min="0" step="0.01" value={rate} onChange={(event) => setRate(event.target.value)} placeholder="0.00" /></label><button type="submit" className="secondary-button" disabled={adding}><Plus size={15} />{adding ? 'Adding…' : 'Add client'}</button></form>
@@ -1857,13 +1858,14 @@ function ClientRevenuePanel({ year, defaultCurrency, clients, rates, forecasts, 
   </section>
 }
 
-function ClientRevenueCard({ year, defaultCurrency, client, rates, forecast, revenue, onUpdateClient, onSaveRate, onSaveForecast }: {
+function ClientRevenueCard({ year, defaultCurrency, client, rates, forecast, revenue, recognizedPeriod, onUpdateClient, onSaveRate, onSaveForecast }: {
   year: number
   defaultCurrency: string
   client: TimesheetClient
   rates: TimesheetClientRate[]
   forecast?: TimesheetClientForecast
   revenue?: RevenueForecast['clients'][number]
+  recognizedPeriod: string
   onUpdateClient: (client: TimesheetClient) => Promise<void>
   onSaveRate: (rate: TimesheetClientRate) => Promise<void>
   onSaveForecast: (forecast: TimesheetClientForecast) => Promise<void>
@@ -1903,7 +1905,7 @@ function ClientRevenueCard({ year, defaultCurrency, client, rates, forecast, rev
 
   return <article className="client-revenue-card">
     <div className="client-revenue-card-heading"><div><strong>{client.name}</strong><span>{client.currency} · {currentRate ? `${formatMoney(currentRate.hourlyRateMinor, client.currency)}/hour` : 'Rate missing'}</span></div><button type="button" title="Deactivate client" aria-label={`Deactivate ${client.name}`} disabled={saving} onClick={() => void onUpdateClient({ ...client, active: false })}><EyeOff size={14} /></button></div>
-    <div className="client-revenue-metrics"><div><span>Recognized YTD</span><strong>{formatMoney(revenue?.actualRevenueMinor ?? 0, defaultCurrency)}</strong><small>{formatHours(revenue?.actualHours ?? 0)}</small></div><div><span>Remaining</span><strong>{formatMoney(revenue?.remainingRevenueMinor ?? 0, defaultCurrency)}</strong><small>{(revenue?.pendingHours ?? 0) > 0 ? `${formatHours(revenue?.pendingHours ?? 0)} awaiting invoice · ` : ''}{(revenue?.workWeeksRemaining ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} work weeks forecast</small></div><div><span>Full year</span><strong>{formatMoney(revenue?.fullYearRevenueMinor ?? 0, defaultCurrency)}</strong><small>{formatHours((revenue?.actualHours ?? 0) + (revenue?.pendingHours ?? 0) + (revenue?.forecastHours ?? 0))}</small></div></div>
+    <div className="client-revenue-metrics"><div><span>Earned YTD</span><strong>{formatMoney(revenue?.actualRevenueMinor ?? 0, defaultCurrency)}</strong><small>{formatHours(revenue?.actualHours ?? 0)} · {recognizedPeriod}</small></div><div><span>Remaining</span><strong>{formatMoney(revenue?.remainingRevenueMinor ?? 0, defaultCurrency)}</strong><small>{(revenue?.pendingHours ?? 0) > 0 ? `${formatHours(revenue?.pendingHours ?? 0)} awaiting invoice · ` : ''}{(revenue?.workWeeksRemaining ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} work weeks forecast</small></div><div><span>Full year</span><strong>{formatMoney(revenue?.fullYearRevenueMinor ?? 0, defaultCurrency)}</strong><small>{formatHours((revenue?.actualHours ?? 0) + (revenue?.pendingHours ?? 0) + (revenue?.forecastHours ?? 0))}</small></div></div>
     <div className="client-revenue-inputs"><label><span>Rate</span><div><b>{client.currency}</b><input type="number" min="0" step="0.01" value={rateInput} onChange={(event) => setRateInput(event.target.value)} /></div></label><label><span>Hours/week</span><input type="number" min="0" max="168" step="0.5" value={weeklyHours} onChange={(event) => setWeeklyHours(event.target.value)} /></label><label><span>Vacation weeks</span><input type="number" min="0" max="53" step="0.5" value={vacationWeeks} onChange={(event) => setVacationWeeks(event.target.value)} /></label><button type="button" className="secondary-button" disabled={saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save'}</button></div>
     {error && <p className="client-card-error" role="alert">{error}</p>}
   </article>
@@ -1912,6 +1914,14 @@ function ClientRevenueCard({ year, defaultCurrency, client, rates, forecast, rev
 function formatHours(hours: number, compact = false) {
   if (compact && hours === 0) return '—'
   return `${hours.toLocaleString(undefined, { maximumFractionDigits: 2 })}h`
+}
+
+function formatRecognizedTimesheetPeriod(today: string, year: number) {
+  const range = recognizedWorkMonthRange(today, year)
+  if (!range) return 'No timesheets recognized yet'
+  const formatter = new Intl.DateTimeFormat('en', { month: 'short', year: '2-digit', timeZone: 'UTC' })
+  const formatMonth = (month: string) => formatter.format(new Date(`${month}-01T00:00:00Z`))
+  return `${formatMonth(range.startMonth)}–${formatMonth(range.endMonth)} timesheets`
 }
 
 function isoWeekForDate(date: string) {
@@ -2687,6 +2697,7 @@ function YearlySpendingPlan({ workspaceId, data, defaultCurrency, historyLoading
   const [revenueError, setRevenueError] = useState('')
   const today = todayInParis()
   const currentYear = Number(today.slice(0, 4))
+  const recognizedPeriod = formatRecognizedTimesheetPeriod(today, currentYear)
   useEffect(() => {
     let cancelled = false
     setRevenueLoading(true)
@@ -2818,7 +2829,7 @@ function YearlySpendingPlan({ workspaceId, data, defaultCurrency, historyLoading
       <div className="segmented three-way yearly-scope" aria-label="Spending scope">{(['Personal', 'Company', 'Combined'] as SpendingGoalScope[]).map((item) => <button type="button" key={item} className={scope === item ? 'active transfer' : ''} aria-pressed={scope === item} onClick={() => setScope(item)}>{item}</button>)}</div>
     </div>
     {historyLoading && <div className="yearly-history-loading"><LoaderCircle size={14} />Loading complete history for an accurate year-to-date comparison…</div>}
-    <div className="yearly-revenue-outlook"><div><span>Recognized revenue YTD</span><strong>{revenueLoading ? '…' : formatMoney(revenueForecast.actualRevenueMinor, defaultCurrency)}</strong></div><div><span>Remaining forecast</span><strong>{revenueLoading ? '…' : formatMoney(revenueForecast.remainingRevenueMinor, defaultCurrency)}</strong></div><div><span>Full-year forecast</span><strong>{revenueLoading ? '…' : formatMoney(revenueForecast.fullYearRevenueMinor, defaultCurrency)}</strong></div><div><span>Plan variance</span><strong className={plan && revenueForecast.fullYearRevenueMinor < plan.projectedCompanyIncomeMinor ? 'negative' : ''}>{plan && !revenueLoading && !revenueForecast.missingFx && !revenueForecast.missingRate ? formatMoney(revenueForecast.fullYearRevenueMinor - plan.projectedCompanyIncomeMinor, defaultCurrency) : '—'}</strong></div></div>
+    <div className="yearly-revenue-outlook"><div><span>Earned revenue YTD</span><strong>{revenueLoading ? '…' : formatMoney(revenueForecast.actualRevenueMinor, defaultCurrency)}</strong><small>{recognizedPeriod}</small></div><div><span>Remaining forecast</span><strong>{revenueLoading ? '…' : formatMoney(revenueForecast.remainingRevenueMinor, defaultCurrency)}</strong></div><div><span>Full-year forecast</span><strong>{revenueLoading ? '…' : formatMoney(revenueForecast.fullYearRevenueMinor, defaultCurrency)}</strong></div><div><span>Plan variance</span><strong className={plan && revenueForecast.fullYearRevenueMinor < plan.projectedCompanyIncomeMinor ? 'negative' : ''}>{plan && !revenueLoading && !revenueForecast.missingFx && !revenueForecast.missingRate ? formatMoney(revenueForecast.fullYearRevenueMinor - plan.projectedCompanyIncomeMinor, defaultCurrency) : '—'}</strong></div></div>
     {revenueError && <p className="yearly-plan-error" role="alert">{revenueError}</p>}
     {!revenueLoading && !revenueError && (revenueForecast.missingFx || revenueForecast.missingRate) && <p className="yearly-revenue-warning"><CircleAlert size={14} />The revenue outlook is incomplete. Add missing client rates or exchange rates from the Timesheet and Settings pages.</p>}
     <div className="yearly-spending-summary">

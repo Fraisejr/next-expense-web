@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict'
-import { calculateRevenueForecast, calendarWorkWeeksRemaining, nextMonday, revenueRecognitionDate } from '../src/revenue.ts'
+import { calculateRevenueForecast, calendarWorkWeeksRemaining, nextMonday, recognizedWorkMonthRange, revenueRecognitionDate } from '../src/revenue.ts'
 
 assert.equal(nextMonday('2026-09-18'), '2026-09-21')
 assert.equal(nextMonday('2026-09-20'), '2026-09-21')
 assert.equal(revenueRecognitionDate('2025-12-31'), '2026-01-01')
 assert.equal(revenueRecognitionDate('2026-01-05'), '2026-02-01')
+assert.deepEqual(recognizedWorkMonthRange('2026-09-18', 2026), { startMonth: '2025-12', endMonth: '2026-08' })
+assert.deepEqual(recognizedWorkMonthRange('2026-10-01', 2026), { startMonth: '2025-12', endMonth: '2026-09' })
+assert.deepEqual(recognizedWorkMonthRange('2027-01-01', 2026), { startMonth: '2025-12', endMonth: '2026-11' })
+assert.equal(recognizedWorkMonthRange('2025-12-31', 2026), null)
 assert.equal(calendarWorkWeeksRemaining('2026-09-18', 2026), 10.2)
 assert.equal(calendarWorkWeeksRemaining('2026-12-31', 2026), 0)
 assert.equal(calendarWorkWeeksRemaining('2026-09-18', 2025), 0)

@@ -34,6 +34,10 @@ function dateKey(value: Date) {
   return value.toISOString().slice(0, 10)
 }
 
+function monthKey(value: Date) {
+  return value.toISOString().slice(0, 7)
+}
+
 export function nextMonday(date: string) {
   const value = parseDate(date)
   const weekday = value.getUTCDay()
@@ -45,6 +49,16 @@ export function nextMonday(date: string) {
 export function revenueRecognitionDate(workDate: string) {
   const [year, month] = workDate.split('-').map(Number)
   return dateKey(new Date(Date.UTC(year, month, 1)))
+}
+
+export function recognizedWorkMonthRange(today: string, year: number) {
+  const [todayYear, todayMonth] = today.split('-').map(Number)
+  const start = new Date(Date.UTC(year - 1, 11, 1))
+  const previousMonth = new Date(Date.UTC(todayYear, todayMonth - 2, 1))
+  const lastMonthForYear = new Date(Date.UTC(year, 10, 1))
+  const end = previousMonth < lastMonthForYear ? previousMonth : lastMonthForYear
+  if (end < start) return null
+  return { startMonth: monthKey(start), endMonth: monthKey(end) }
 }
 
 export function calendarWorkWeeksRemaining(today: string, year: number) {
