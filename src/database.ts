@@ -575,16 +575,25 @@ export async function updateTimeCode(workspaceId: string, code: TimeCode) {
 }
 
 export async function createTimesheetClient(workspaceId: string, client: TimesheetClient, initialRate: TimesheetClientRate) {
-  const { error } = await neon.rpc('create_timesheet_client', {
-    p_workspace_id: workspaceId,
-    p_client_id: client.id,
-    p_name: client.name.normalize('NFKC').trim(),
-    p_currency: client.currency.toUpperCase(),
-    p_sort_order: client.sortOrder,
-    p_effective_from: initialRate.effectiveFrom,
-    p_hourly_rate_minor: initialRate.hourlyRateMinor,
-  })
-  if (error) throw error
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const { error } = await neon.rpc('create_timesheet_client', {
+      p_workspace_id: workspaceId,
+      p_client_id: client.id,
+      p_name: client.name.normalize('NFKC').trim(),
+      p_currency: client.currency.toUpperCase(),
+      p_sort_order: client.sortOrder,
+      p_effective_from: initialRate.effectiveFrom,
+      p_hourly_rate_minor: initialRate.hourlyRateMinor,
+    })
+    if (!error) return
+
+    const transientAuthorizationFailure = error.code === '42501'
+      && error.message.includes('access to this workspace')
+    if (!transientAuthorizationFailure || attempt === 2) throw error
+
+    await neon.auth.getSession()
+    await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)))
+  }
 }
 
 export async function updateTimesheetClient(workspaceId: string, client: TimesheetClient) {
