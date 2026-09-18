@@ -490,7 +490,8 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     setData((current) => ({ ...current, fxRates: current.fxRates.filter((rate) => rate.id !== rateId) }))
   }
 
-  async function addTimeCode(name: string, clientId?: string) {
+  async function addTimeCode(name: string, clientId: string) {
+    if (!clientId) throw new Error('Choose a client for this time code.')
     const code: TimeCode = { id: uid(), name: name.normalize('NFKC').trim(), sortOrder: data.timeCodes.length, clientId }
     await createTimeCode(workspace.workspaceId, code)
     setData((current) => ({ ...current, timeCodes: [...current.timeCodes, code] }))
@@ -1553,7 +1554,7 @@ function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clients, ra
   rates: TimesheetClientRate[]
   forecasts: TimesheetClientForecast[]
   fxRates: FxRate[]
-  onAddCode: (name: string, clientId?: string) => Promise<void>
+  onAddCode: (name: string, clientId: string) => Promise<void>
   onUpdateCode: (code: TimeCode) => Promise<void>
   onReorderCodes: (timeCodeIds: string[]) => Promise<void>
   onAddClient: (name: string, currency: string, hourlyRateMinor: number) => Promise<void>
@@ -1724,11 +1725,11 @@ function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clients, ra
   async function addCode(event: FormEvent) {
     event.preventDefault()
     const name = newCodeName.trim()
-    if (!name) return
+    if (!name || !newCodeClientId) return
     setAddingCode(true)
     setError('')
     try {
-      await onAddCode(name, newCodeClientId || undefined)
+      await onAddCode(name, newCodeClientId)
       setNewCodeName('')
     } catch (cause) {
       setError(getErrorMessage(cause, 'Could not add the time code.'))
@@ -1776,7 +1777,7 @@ function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clients, ra
       <div className="timesheet-heading">
         <div><span className="eyebrow">Daily hours</span><h2>{monthName.format(monthDate)}</h2><p>Enter whole hours directly, or use − and + to adjust one hour at a time. Weekends are shaded.</p></div>
         <div className="timesheet-heading-actions">
-          <form className="time-code-add" onSubmit={(event) => void addCode(event)}><select aria-label="Client for new time code" value={newCodeClientId} onChange={(event) => setNewCodeClientId(event.target.value)}><option value="">No client</option>{clients.filter((client) => client.active).map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select><input aria-label="New time code name" value={newCodeName} onChange={(event) => setNewCodeName(event.target.value)} placeholder="Add a code…" /><button className="primary-button" disabled={addingCode || !newCodeName.trim()}><Plus size={16} />{addingCode ? 'Adding…' : 'Add code'}</button></form>
+          <form className="time-code-add" onSubmit={(event) => void addCode(event)}><select required aria-label="Client for new time code" value={newCodeClientId} onChange={(event) => setNewCodeClientId(event.target.value)}><option value="" disabled>Select client…</option>{clients.filter((client) => client.active).map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select><input required aria-label="New time code name" value={newCodeName} onChange={(event) => setNewCodeName(event.target.value)} placeholder="Add a code…" /><button className="primary-button" disabled={addingCode || !newCodeName.trim() || !newCodeClientId}><Plus size={16} />{addingCode ? 'Adding…' : 'Add code'}</button></form>
           {!reordering && visibleCodes.length > 1 && <button type="button" className="secondary-button timesheet-reorder-button" onClick={beginReordering}><GripVertical size={16} />Reorder</button>}
         </div>
       </div>
@@ -1790,7 +1791,7 @@ function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clients, ra
         <table className="timesheet-table">
           <thead><tr><th className="time-code-column">Item</th>{days.map((day) => <th key={day.date} ref={day.isToday ? todayColumnRef : undefined} className={`${day.weekend ? 'weekend ' : ''}${day.isToday ? 'today' : ''}`} aria-current={day.isToday ? 'date' : undefined}><span>{day.isToday ? 'Today' : day.label}</span><b>{day.day}</b></th>)}<th className="time-total-column">Total</th></tr></thead>
           <tbody>
-            {groupedCodes.map((group) => <Fragment key={group.client?.id ?? 'unassigned'}><tr className="time-client-row"><th>{group.client?.name ?? 'No client'}</th><td colSpan={days.length + 1}>{group.client ? `${group.client.currency} billing` : 'Non-billable or not assigned'}</td></tr>{group.codes.map((code) => <tr key={code.id}><th><TimeCodeEditor code={code} month={month} clients={clients} onSave={updateCode} /></th>{days.map((day) => <td key={day.date} className={`${day.weekend ? 'weekend ' : ''}${day.isToday ? 'today' : ''}`}><TimeEntryCell codeName={code.name} date={day.date} value={entryMap.get(`${code.id}:${day.date}`) ?? 0} onChange={(hours) => changeEntry(code.id, day.date, hours)} /></td>)}<td className="time-row-total">{formatHours(totalForCode(code.id))}</td></tr>)}</Fragment>)}
+            {groupedCodes.map((group) => <Fragment key={group.client?.id ?? 'unassigned'}><tr className="time-client-row"><th>{group.client?.name ?? 'No client'}</th><td colSpan={days.length + 1}>{group.client ? `${group.client.currency} billing` : 'Non-billable or not assigned'}</td></tr>{group.codes.map((code) => <tr key={code.id}><th><TimeCodeEditor code={code} month={month} onSave={updateCode} /></th>{days.map((day) => <td key={day.date} className={`${day.weekend ? 'weekend ' : ''}${day.isToday ? 'today' : ''}`}><TimeEntryCell codeName={code.name} date={day.date} value={entryMap.get(`${code.id}:${day.date}`) ?? 0} onChange={(hours) => changeEntry(code.id, day.date, hours)} /></td>)}<td className="time-row-total">{formatHours(totalForCode(code.id))}</td></tr>)}</Fragment>)}
           </tbody>
           <tfoot><tr><th>Daily total</th>{days.map((day) => <td key={day.date} className={`${day.weekend ? 'weekend ' : ''}${day.isToday ? 'today' : ''}`}>{formatHours(totalForDate(day.date), true)}</td>)}<td>{formatHours(monthTotal)}</td></tr></tfoot>
         </table>
@@ -1801,7 +1802,7 @@ function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clients, ra
         <div className="time-comment-list">{displayedCodes.map((code) => <TimeCommentField key={code.id} code={code} value={commentMap.get(code.id) ?? ''} onSave={(comment) => changeComment(code.id, comment)} />)}</div>
       </section>}
 
-      {hiddenCodes.length > 0 && <div className="hidden-time-codes"><button type="button" onClick={() => setShowHidden((current) => !current)}><EyeOff size={15} />{hiddenCodes.length} hidden {hiddenCodes.length === 1 ? 'code' : 'codes'}<ChevronDown className={showHidden ? 'expanded' : ''} size={15} /></button>{showHidden && <div>{hiddenCodes.map((code) => <TimeCodeEditor key={code.id} code={code} month={month} clients={clients} hidden onSave={updateCode} />)}</div>}</div>}
+      {hiddenCodes.length > 0 && <div className="hidden-time-codes"><button type="button" onClick={() => setShowHidden((current) => !current)}><EyeOff size={15} />{hiddenCodes.length} hidden {hiddenCodes.length === 1 ? 'code' : 'codes'}<ChevronDown className={showHidden ? 'expanded' : ''} size={15} /></button>{showHidden && <div>{hiddenCodes.map((code) => <TimeCodeEditor key={code.id} code={code} month={month} hidden onSave={updateCode} />)}</div>}</div>}
       {error && <p className="timesheet-error" role="alert">{error}</p>}
     </section>
   </div>
@@ -1939,7 +1940,7 @@ function TimeEntryCell({ codeName, date, value, onChange }: { codeName: string; 
   </div>
 }
 
-function TimeCodeEditor({ code, month, clients, hidden = false, onSave }: { code: TimeCode; month: string; clients: TimesheetClient[]; hidden?: boolean; onSave: (code: TimeCode) => Promise<void> }) {
+function TimeCodeEditor({ code, month, hidden = false, onSave }: { code: TimeCode; month: string; hidden?: boolean; onSave: (code: TimeCode) => Promise<void> }) {
   const [name, setName] = useState(code.name)
   const [saving, setSaving] = useState(false)
   useEffect(() => setName(code.name), [code.name])
@@ -1955,7 +1956,6 @@ function TimeCodeEditor({ code, month, clients, hidden = false, onSave }: { code
   }
   return <div className={`time-code-editor${hidden ? ' hidden' : ''}`}>
     <input aria-label={`Rename ${code.name}`} value={name} disabled={saving} onChange={(event) => setName(event.target.value)} onBlur={() => void saveName()} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }} />
-    <select aria-label={`Client for ${code.name}`} value={code.clientId ?? ''} disabled={saving} onChange={async (event) => { setSaving(true); try { await onSave({ ...code, clientId: event.target.value || undefined }) } finally { setSaving(false) } }}><option value="">No client</option>{clients.filter((client) => client.active || client.id === code.clientId).map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select>
     <button type="button" disabled={saving} onClick={() => void setHidden()} title={hidden ? 'Show this code again' : `Hide from ${month} onward`}>{hidden ? <Eye size={14} /> : <EyeOff size={14} />}<span>{hidden ? 'Restore' : 'Hide'}</span></button>
   </div>
 }
