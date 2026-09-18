@@ -156,8 +156,8 @@ export type TimesheetClientRate = {
 export type TimesheetClientForecast = {
   clientId: string
   year: number
-  weeklyHours: number
-  vacationWeeks: number
+  hoursPerDay: number
+  vacationDaysRemaining: number
 }
 
 export type TimeCode = {

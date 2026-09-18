@@ -280,7 +280,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
     allRows('payee_mappings', 'id,source_name,payee_id,match_type'),
     allRows('timesheet_clients', 'id,name,currency,sort_order,active', 'sort_order'),
     allRows('timesheet_client_rates', 'client_id,effective_from,hourly_rate_minor', 'effective_from', 'client_id'),
-    allRows('timesheet_client_forecasts', 'client_id,forecast_year,weekly_hours,vacation_weeks', 'forecast_year', 'client_id'),
+    allRows('timesheet_client_forecasts', 'client_id,forecast_year,hours_per_day,vacation_days_remaining', 'forecast_year', 'client_id'),
     allRows('time_codes', 'id,name,sort_order,client_id,hidden_from_month', 'sort_order'),
     loadTransactionPage(workspaceId, { startDate: monthStart, endDate: monthEnd }),
     neon.rpc('workspace_account_balances', { p_workspace_id: workspaceId }),
@@ -417,8 +417,8 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
   const timesheetClientForecasts: TimesheetClientForecast[] = clientForecastRows.map((row) => ({
     clientId: String(row.client_id),
     year: number(row.forecast_year),
-    weeklyHours: number(row.weekly_hours),
-    vacationWeeks: number(row.vacation_weeks),
+    hoursPerDay: number(row.hours_per_day),
+    vacationDaysRemaining: number(row.vacation_days_remaining),
   }))
   const timeCodes: TimeCode[] = timeCodeRows.map((row) => ({
     id: String(row.id),
@@ -621,8 +621,8 @@ export async function saveTimesheetClientForecast(workspaceId: string, forecast:
     workspace_id: workspaceId,
     client_id: forecast.clientId,
     forecast_year: forecast.year,
-    weekly_hours: forecast.weeklyHours,
-    vacation_weeks: forecast.vacationWeeks,
+    hours_per_day: forecast.hoursPerDay,
+    vacation_days_remaining: forecast.vacationDaysRemaining,
   }, { onConflict: 'workspace_id,client_id,forecast_year' })
   if (error) throw error
 }

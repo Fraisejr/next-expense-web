@@ -1,22 +1,20 @@
 import assert from 'node:assert/strict'
-import { calculateRevenueForecast, calendarWorkWeeksRemaining, nextMonday, recognizedWorkMonthRange, revenueRecognitionDate } from '../src/revenue.ts'
+import { calculateRevenueForecast, calendarWorkDaysRemaining, earnedWorkMonthRange, revenueRecognitionDate } from '../src/revenue.ts'
 
-assert.equal(nextMonday('2026-09-18'), '2026-09-21')
-assert.equal(nextMonday('2026-09-20'), '2026-09-21')
 assert.equal(revenueRecognitionDate('2025-12-31'), '2026-01-01')
 assert.equal(revenueRecognitionDate('2026-01-05'), '2026-02-01')
-assert.deepEqual(recognizedWorkMonthRange('2026-09-18', 2026), { startMonth: '2025-12', endMonth: '2026-08' })
-assert.deepEqual(recognizedWorkMonthRange('2026-10-01', 2026), { startMonth: '2025-12', endMonth: '2026-09' })
-assert.deepEqual(recognizedWorkMonthRange('2027-01-01', 2026), { startMonth: '2025-12', endMonth: '2026-11' })
-assert.equal(recognizedWorkMonthRange('2025-12-31', 2026), null)
-assert.equal(calendarWorkWeeksRemaining('2026-09-18', 2026), 10.2)
-assert.equal(calendarWorkWeeksRemaining('2026-12-31', 2026), 0)
-assert.equal(calendarWorkWeeksRemaining('2026-09-18', 2025), 0)
+assert.deepEqual(earnedWorkMonthRange('2026-09-18', 2026), { startMonth: '2025-12', endMonth: '2026-09' })
+assert.deepEqual(earnedWorkMonthRange('2026-10-01', 2026), { startMonth: '2025-12', endMonth: '2026-10' })
+assert.deepEqual(earnedWorkMonthRange('2027-01-01', 2026), { startMonth: '2025-12', endMonth: '2026-11' })
+assert.equal(earnedWorkMonthRange('2025-11-30', 2026), null)
+assert.equal(calendarWorkDaysRemaining('2026-09-18', 2026), 51)
+assert.equal(calendarWorkDaysRemaining('2026-12-31', 2026), 0)
+assert.equal(calendarWorkDaysRemaining('2026-09-18', 2025), 0)
 
 const result = calculateRevenueForecast({
   clients: [{ id: 'client', name: 'Client', currency: 'EUR', sortOrder: 0, active: true }],
   rates: [{ clientId: 'client', effectiveFrom: '2026-01-01', hourlyRateMinor: 10000 }],
-  forecasts: [{ clientId: 'client', year: 2026, weeklyHours: 20, vacationWeeks: 1 }],
+  forecasts: [{ clientId: 'client', year: 2026, hoursPerDay: 4, vacationDaysRemaining: 5 }],
   timeCodes: [{ id: 'delivery', name: 'Delivery', sortOrder: 0, clientId: 'client' }],
   entries: [
     { codeId: 'delivery', date: '2025-12-05', hours: 8 },
@@ -31,14 +29,12 @@ const result = calculateRevenueForecast({
   year: 2026,
 })
 
-assert.equal(result.actualRevenueMinor, 100000)
-assert.equal(result.clients[0].actualHours, 10)
-assert.equal(result.clients[0].pendingHours, 3)
-assert.equal(result.clients[0].pendingRevenueMinor, 30000)
-assert.equal(result.clients[0].calendarWeeksRemaining, 10.2)
-assert.equal(result.clients[0].workWeeksRemaining, 9.2)
+assert.equal(result.actualRevenueMinor, 130000)
+assert.equal(result.clients[0].actualHours, 13)
+assert.equal(result.clients[0].calendarWorkDaysRemaining, 51)
+assert.equal(result.clients[0].workDaysRemaining, 46)
 assert.equal(result.clients[0].forecastHours, 184)
-assert.equal(result.remainingRevenueMinor, 1870000)
+assert.equal(result.remainingRevenueMinor, 1840000)
 assert.equal(result.fullYearRevenueMinor, 1970000)
 assert.equal(result.missingFx, false)
 assert.equal(result.missingRate, false)
