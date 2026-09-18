@@ -39,6 +39,9 @@ export const seedData: AppData = {
   ],
   yearlyFinancialPlans: [],
   fxRates: [],
+  timesheetClients: [],
+  timesheetClientRates: [],
+  timesheetClientForecasts: [],
   timeCodes: [],
   payees: [
     { id: 'green-market', name: 'Green Market' },

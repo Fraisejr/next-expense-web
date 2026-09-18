@@ -139,10 +139,32 @@ export type FxRate = {
   date: string
 }
 
+export type TimesheetClient = {
+  id: string
+  name: string
+  currency: string
+  sortOrder: number
+  active: boolean
+}
+
+export type TimesheetClientRate = {
+  clientId: string
+  effectiveFrom: string
+  hourlyRateMinor: number
+}
+
+export type TimesheetClientForecast = {
+  clientId: string
+  year: number
+  weeklyHours: number
+  vacationWeeks: number
+}
+
 export type TimeCode = {
   id: string
   name: string
   sortOrder: number
+  clientId?: string
   hiddenFromMonth?: string
 }
 
@@ -191,6 +213,9 @@ export type AppData = {
   budgets: Budget[]
   yearlyFinancialPlans: YearlyFinancialPlan[]
   fxRates: FxRate[]
+  timesheetClients: TimesheetClient[]
+  timesheetClientRates: TimesheetClientRate[]
+  timesheetClientForecasts: TimesheetClientForecast[]
   timeCodes: TimeCode[]
   transactions: Transaction[]
   bankImportCandidates: BankImportCandidate[]

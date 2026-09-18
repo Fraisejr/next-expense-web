@@ -1,5 +1,5 @@
 import type { BankSyncSummary } from '../shared/bank-types.ts'
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
   ArrowLeftRight, ArrowRight, Banknote, BriefcaseBusiness,
   BarChart3, BriefcaseMedical, CalendarDays, CarFront, ChevronDown, ChevronLeft, ChevronRight, CircleHelp,
@@ -7,10 +7,11 @@ import {
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTimeCode, createTransaction, deleteAllUnusedPayees, deleteBudget, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTimeComments, loadTimeEntries, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveTimeCodeOrder, saveTimeComment, saveTimeEntry, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTimeCode, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type LoadedWorkspace, type WorkspaceBackup } from './database'
+import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTimeCode, createTimesheetClient, createTransaction, deleteAllUnusedPayees, deleteBudget, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadTimeComments, loadTimeEntries, loadTransactionPage, loadWorkspace, loadYearTimeEntries, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveTimeCodeOrder, saveTimeComment, saveTimeEntry, saveTimesheetClientForecast, saveTimesheetClientRate, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTimeCode, updateTimesheetClient, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
 import { convertMinor } from './currency'
-import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, TimeCode, TimeComment, TimeEntry, Transaction, YearlyFinancialPlan } from './types'
+import { calculateRevenueForecast, type RevenueForecast } from './revenue'
+import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, TimeCode, TimeComment, TimeEntry, TimesheetClient, TimesheetClientForecast, TimesheetClientRate, Transaction, YearlyFinancialPlan } from './types'
 
 type Page = 'overview' | 'transactions' | 'payees' | 'reports' | 'accounts' | 'timesheet' | 'settings'
 type ReportView = 'profit-loss' | 'net-worth'
@@ -489,8 +490,8 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     setData((current) => ({ ...current, fxRates: current.fxRates.filter((rate) => rate.id !== rateId) }))
   }
 
-  async function addTimeCode(name: string) {
-    const code: TimeCode = { id: uid(), name: name.normalize('NFKC').trim(), sortOrder: data.timeCodes.length }
+  async function addTimeCode(name: string, clientId?: string) {
+    const code: TimeCode = { id: uid(), name: name.normalize('NFKC').trim(), sortOrder: data.timeCodes.length, clientId }
     await createTimeCode(workspace.workspaceId, code)
     setData((current) => ({ ...current, timeCodes: [...current.timeCodes, code] }))
   }
@@ -498,6 +499,39 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   async function changeTimeCode(code: TimeCode) {
     await updateTimeCode(workspace.workspaceId, code)
     setData((current) => ({ ...current, timeCodes: current.timeCodes.map((item) => item.id === code.id ? code : item) }))
+  }
+
+  async function addTimesheetClient(name: string, currency: string, hourlyRateMinor: number) {
+    const year = Number(todayInParis().slice(0, 4))
+    const client: TimesheetClient = { id: uid(), name: name.normalize('NFKC').trim(), currency: currency.toUpperCase(), sortOrder: data.timesheetClients.length, active: true }
+    const rate: TimesheetClientRate = { clientId: client.id, effectiveFrom: `${year}-01-01`, hourlyRateMinor }
+    await createTimesheetClient(workspace.workspaceId, client, rate)
+    setData((current) => ({
+      ...current,
+      timesheetClients: [...current.timesheetClients, client],
+      timesheetClientRates: [...current.timesheetClientRates, rate],
+    }))
+  }
+
+  async function changeTimesheetClient(client: TimesheetClient) {
+    await updateTimesheetClient(workspace.workspaceId, client)
+    setData((current) => ({ ...current, timesheetClients: current.timesheetClients.map((item) => item.id === client.id ? client : item) }))
+  }
+
+  async function changeTimesheetClientRate(rate: TimesheetClientRate) {
+    await saveTimesheetClientRate(workspace.workspaceId, rate)
+    setData((current) => ({
+      ...current,
+      timesheetClientRates: [...current.timesheetClientRates.filter((item) => item.clientId !== rate.clientId || item.effectiveFrom !== rate.effectiveFrom), rate],
+    }))
+  }
+
+  async function changeTimesheetClientForecast(forecast: TimesheetClientForecast) {
+    await saveTimesheetClientForecast(workspace.workspaceId, forecast)
+    setData((current) => ({
+      ...current,
+      timesheetClientForecasts: [...current.timesheetClientForecasts.filter((item) => item.clientId !== forecast.clientId || item.year !== forecast.year), forecast],
+    }))
   }
 
   async function reorderTimeCodes(timeCodeIds: string[]) {
@@ -1323,7 +1357,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         )}
         {page === 'overview' && !selectedCategory && (
           <div className="page-content narrow-page overview-page">
-            <YearlySpendingPlan data={data} defaultCurrency={workspace.defaultCurrency} historyLoading={historyLoading} onSavePlan={changeYearlyFinancialPlan} />
+            <YearlySpendingPlan workspaceId={workspace.workspaceId} data={data} defaultCurrency={workspace.defaultCurrency} historyLoading={historyLoading} onSavePlan={changeYearlyFinancialPlan} />
             <OverviewPage accounts={activeAccounts} defaultCurrency={workspace.defaultCurrency} totalBalance={totalBalance} convertBalance={convertCurrentBalance} personal={{ income: personalIncome, expenses: personalExpenses, tax: personalTaxesPaid, net: personalIncome - personalExpenses - personalTaxesPaid }} company={{ income: companyRevenue, expenses: companyExpenses, tax: companyTaxesPaid + estimatedCompanyTax, net: companyRevenue - companyExpenses - companyTaxesPaid - estimatedCompanyTax }} month={viewedMonth} onOpenNetWorth={() => goTo('/reports/net-worth')} onOpenProfitAndLoss={() => goTo('/reports')} />
             <BudgetsPage categories={data.categories} categoryGroups={data.categoryGroups} defaultCurrency={workspace.defaultCurrency} categorySpending={categorySpending} budgetForCategory={budgetForCategory} showHiddenActivityAlert={selectedMonthKey === toMonthKey(new Date())} onPlanMonth={() => { setModal('monthly-plan'); void ensureFullHistory() }} onAdd={() => setModal('category')} onManageGroups={() => setModal('category-groups')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onUnhideCategory={(id) => setCategoryHidden(id, false)} />
           </div>
@@ -1338,7 +1372,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <SettingsPage workspaceId={workspace.workspaceId} workspaceName={workspace.workspaceName} defaultCurrency={workspace.defaultCurrency} accounts={data.accounts} fxRates={data.fxRates} onSaveFxRate={saveExchangeRate} onDeleteFxRate={removeExchangeRate} />
         )}
         {page === 'timesheet' && (
-          <TimesheetPage workspaceId={workspace.workspaceId} month={selectedMonthKey} codes={data.timeCodes} onAddCode={addTimeCode} onUpdateCode={changeTimeCode} onReorderCodes={reorderTimeCodes} />
+          <TimesheetPage workspaceId={workspace.workspaceId} month={selectedMonthKey} defaultCurrency={workspace.defaultCurrency} codes={data.timeCodes} clients={data.timesheetClients} rates={data.timesheetClientRates} forecasts={data.timesheetClientForecasts} fxRates={data.fxRates} onAddCode={addTimeCode} onUpdateCode={changeTimeCode} onReorderCodes={reorderTimeCodes} onAddClient={addTimesheetClient} onUpdateClient={changeTimesheetClient} onSaveRate={changeTimesheetClientRate} onSaveForecast={changeTimesheetClientForecast} />
         )}
         {selectedAccount && (
           <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onPostTransfer={postBankImportAsTransfer} onRematchPayees={() => rematchBankImportPayees(selectedAccount.id)} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onAddAlternativeName={(sourceName, payeeId) => addPayeeAlternativeForReview(sourceName, payeeId, selectedAccount.id)} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingAccountId === selectedAccount.id} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
@@ -1510,19 +1544,30 @@ function downloadWorkspaceBackup(backup: WorkspaceBackup, prefix?: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
-function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode, onReorderCodes }: {
+function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clients, rates, forecasts, fxRates, onAddCode, onUpdateCode, onReorderCodes, onAddClient, onUpdateClient, onSaveRate, onSaveForecast }: {
   workspaceId: string
   month: string
+  defaultCurrency: string
   codes: TimeCode[]
-  onAddCode: (name: string) => Promise<void>
+  clients: TimesheetClient[]
+  rates: TimesheetClientRate[]
+  forecasts: TimesheetClientForecast[]
+  fxRates: FxRate[]
+  onAddCode: (name: string, clientId?: string) => Promise<void>
   onUpdateCode: (code: TimeCode) => Promise<void>
   onReorderCodes: (timeCodeIds: string[]) => Promise<void>
+  onAddClient: (name: string, currency: string, hourlyRateMinor: number) => Promise<void>
+  onUpdateClient: (client: TimesheetClient) => Promise<void>
+  onSaveRate: (rate: TimesheetClientRate) => Promise<void>
+  onSaveForecast: (forecast: TimesheetClientForecast) => Promise<void>
 }) {
   const [entries, setEntries] = useState<TimeEntry[]>([])
+  const [yearEntries, setYearEntries] = useState<TimeEntry[]>([])
   const [comments, setComments] = useState<TimeComment[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [newCodeName, setNewCodeName] = useState('')
+  const [newCodeClientId, setNewCodeClientId] = useState('')
   const [addingCode, setAddingCode] = useState(false)
   const [showHidden, setShowHidden] = useState(false)
   const [reordering, setReordering] = useState(false)
@@ -1533,6 +1578,7 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode, onR
   const tableWrapRef = useRef<HTMLDivElement>(null)
   const todayColumnRef = useRef<HTMLTableCellElement>(null)
   const monthDate = useMemo(() => fromMonthKey(month) ?? new Date(), [month])
+  const selectedYear = monthDate.getFullYear()
   const dayCount = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate()
   const now = new Date()
   const todayDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
@@ -1548,16 +1594,17 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode, onR
     let cancelled = false
     setLoading(true)
     setError('')
-    Promise.all([loadTimeEntries(workspaceId, month), loadTimeComments(workspaceId, month)])
-      .then(([loadedEntries, loadedComments]) => {
+    Promise.all([loadTimeEntries(workspaceId, month), loadTimeComments(workspaceId, month), loadYearTimeEntries(workspaceId, selectedYear)])
+      .then(([loadedEntries, loadedComments, loadedYearEntries]) => {
         if (cancelled) return
         setEntries(loadedEntries)
         setComments(loadedComments)
+        setYearEntries(loadedYearEntries)
       })
       .catch((cause) => { if (!cancelled) setError(getErrorMessage(cause, 'Could not load this timesheet.')) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [month, workspaceId])
+  }, [month, selectedYear, workspaceId])
 
   const entryMap = useMemo(() => new Map(entries.map((entry) => [`${entry.codeId}:${entry.date}`, entry.hours])), [entries])
   const commentMap = useMemo(() => new Map(comments.map((comment) => [comment.codeId, comment.comment])), [comments])
@@ -1567,6 +1614,12 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode, onR
     const code = visibleCodes.find((item) => item.id === id)
     return code ? [code] : []
   }) : visibleCodes
+  const groupedCodes = useMemo(() => {
+    const orderedClients = [...clients].sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name))
+    const groups = orderedClients.map((client) => ({ client, codes: displayedCodes.filter((code) => code.clientId === client.id) })).filter((group) => group.codes.length > 0)
+    const unassigned = displayedCodes.filter((code) => !code.clientId || !clients.some((client) => client.id === code.clientId))
+    return unassigned.length ? [...groups, { client: null, codes: unassigned }] : groups
+  }, [clients, displayedCodes])
   const totalForCode = (codeId: string) => entries.filter((entry) => entry.codeId === codeId).reduce((sum, entry) => sum + entry.hours, 0)
   const totalForDate = (date: string) => entries.reduce((sum, entry) => sum + (entry.date === date ? entry.hours : 0), 0)
   const monthTotal = entries.reduce((sum, entry) => sum + entry.hours, 0)
@@ -1580,6 +1633,18 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode, onR
     }
     return [...totals.values()]
   }, [days, entries])
+  const today = todayInParis()
+  const revenueForecast = useMemo(() => calculateRevenueForecast({
+    clients,
+    rates,
+    forecasts,
+    timeCodes: codes,
+    entries: yearEntries,
+    fxRates,
+    defaultCurrency,
+    today,
+    year: selectedYear,
+  }), [clients, codes, defaultCurrency, forecasts, fxRates, rates, selectedYear, today, yearEntries])
 
   useEffect(() => {
     if (loading || !todayColumnRef.current || !tableWrapRef.current) return
@@ -1643,6 +1708,9 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode, onR
     setEntries((current) => hours === 0
       ? current.filter((entry) => entry.codeId !== codeId || entry.date !== date)
       : [...current.filter((entry) => entry.codeId !== codeId || entry.date !== date), { codeId, date, hours }])
+    setYearEntries((current) => hours === 0
+      ? current.filter((entry) => entry.codeId !== codeId || entry.date !== date)
+      : [...current.filter((entry) => entry.codeId !== codeId || entry.date !== date), { codeId, date, hours }])
     const previous = saveQueue.current.get(key) ?? Promise.resolve()
     const request = previous.catch(() => undefined).then(() => saveTimeEntry(workspaceId, { codeId, date, hours }))
       .catch(async (cause) => {
@@ -1660,7 +1728,7 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode, onR
     setAddingCode(true)
     setError('')
     try {
-      await onAddCode(name)
+      await onAddCode(name, newCodeClientId || undefined)
       setNewCodeName('')
     } catch (cause) {
       setError(getErrorMessage(cause, 'Could not add the time code.'))
@@ -1692,9 +1760,11 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode, onR
   }
 
   return <div className="page-content timesheet-page">
+    <ClientRevenuePanel year={selectedYear} defaultCurrency={defaultCurrency} clients={clients} rates={rates} forecasts={forecasts} revenue={revenueForecast} onAddClient={onAddClient} onUpdateClient={onUpdateClient} onSaveRate={onSaveRate} onSaveForecast={onSaveForecast} />
+
     <section className="timesheet-summary">
       <div><span className="eyebrow">Month total</span><strong>{formatHours(monthTotal)}</strong><small>across {visibleCodes.length} visible {visibleCodes.length === 1 ? 'item' : 'items'}</small></div>
-      <div className="timesheet-item-totals">{displayedCodes.map((code) => <div key={code.id}><span>{code.name}</span><strong>{formatHours(totalForCode(code.id))}</strong></div>)}</div>
+      <div className="timesheet-item-totals">{groupedCodes.map((group) => <div key={group.client?.id ?? 'unassigned'}><span>{group.client?.name ?? 'Unassigned'}</span><strong>{formatHours(group.codes.reduce((sum, code) => sum + totalForCode(code.id), 0))}</strong></div>)}</div>
     </section>
 
     <section className="timesheet-weekly-summary" aria-label="Weekly hour totals">
@@ -1706,7 +1776,7 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode, onR
       <div className="timesheet-heading">
         <div><span className="eyebrow">Daily hours</span><h2>{monthName.format(monthDate)}</h2><p>Enter whole hours directly, or use − and + to adjust one hour at a time. Weekends are shaded.</p></div>
         <div className="timesheet-heading-actions">
-          <form className="time-code-add" onSubmit={(event) => void addCode(event)}><input aria-label="New time code name" value={newCodeName} onChange={(event) => setNewCodeName(event.target.value)} placeholder="Add a code…" /><button className="primary-button" disabled={addingCode || !newCodeName.trim()}><Plus size={16} />{addingCode ? 'Adding…' : 'Add code'}</button></form>
+          <form className="time-code-add" onSubmit={(event) => void addCode(event)}><select aria-label="Client for new time code" value={newCodeClientId} onChange={(event) => setNewCodeClientId(event.target.value)}><option value="">No client</option>{clients.filter((client) => client.active).map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select><input aria-label="New time code name" value={newCodeName} onChange={(event) => setNewCodeName(event.target.value)} placeholder="Add a code…" /><button className="primary-button" disabled={addingCode || !newCodeName.trim()}><Plus size={16} />{addingCode ? 'Adding…' : 'Add code'}</button></form>
           {!reordering && visibleCodes.length > 1 && <button type="button" className="secondary-button timesheet-reorder-button" onClick={beginReordering}><GripVertical size={16} />Reorder</button>}
         </div>
       </div>
@@ -1720,7 +1790,7 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode, onR
         <table className="timesheet-table">
           <thead><tr><th className="time-code-column">Item</th>{days.map((day) => <th key={day.date} ref={day.isToday ? todayColumnRef : undefined} className={`${day.weekend ? 'weekend ' : ''}${day.isToday ? 'today' : ''}`} aria-current={day.isToday ? 'date' : undefined}><span>{day.isToday ? 'Today' : day.label}</span><b>{day.day}</b></th>)}<th className="time-total-column">Total</th></tr></thead>
           <tbody>
-            {displayedCodes.map((code) => <tr key={code.id}><th><TimeCodeEditor code={code} month={month} onSave={updateCode} /></th>{days.map((day) => <td key={day.date} className={`${day.weekend ? 'weekend ' : ''}${day.isToday ? 'today' : ''}`}><TimeEntryCell codeName={code.name} date={day.date} value={entryMap.get(`${code.id}:${day.date}`) ?? 0} onChange={(hours) => changeEntry(code.id, day.date, hours)} /></td>)}<td className="time-row-total">{formatHours(totalForCode(code.id))}</td></tr>)}
+            {groupedCodes.map((group) => <Fragment key={group.client?.id ?? 'unassigned'}><tr className="time-client-row"><th>{group.client?.name ?? 'No client'}</th><td colSpan={days.length + 1}>{group.client ? `${group.client.currency} billing` : 'Non-billable or not assigned'}</td></tr>{group.codes.map((code) => <tr key={code.id}><th><TimeCodeEditor code={code} month={month} clients={clients} onSave={updateCode} /></th>{days.map((day) => <td key={day.date} className={`${day.weekend ? 'weekend ' : ''}${day.isToday ? 'today' : ''}`}><TimeEntryCell codeName={code.name} date={day.date} value={entryMap.get(`${code.id}:${day.date}`) ?? 0} onChange={(hours) => changeEntry(code.id, day.date, hours)} /></td>)}<td className="time-row-total">{formatHours(totalForCode(code.id))}</td></tr>)}</Fragment>)}
           </tbody>
           <tfoot><tr><th>Daily total</th>{days.map((day) => <td key={day.date} className={`${day.weekend ? 'weekend ' : ''}${day.isToday ? 'today' : ''}`}>{formatHours(totalForDate(day.date), true)}</td>)}<td>{formatHours(monthTotal)}</td></tr></tfoot>
         </table>
@@ -1731,10 +1801,111 @@ function TimesheetPage({ workspaceId, month, codes, onAddCode, onUpdateCode, onR
         <div className="time-comment-list">{displayedCodes.map((code) => <TimeCommentField key={code.id} code={code} value={commentMap.get(code.id) ?? ''} onSave={(comment) => changeComment(code.id, comment)} />)}</div>
       </section>}
 
-      {hiddenCodes.length > 0 && <div className="hidden-time-codes"><button type="button" onClick={() => setShowHidden((current) => !current)}><EyeOff size={15} />{hiddenCodes.length} hidden {hiddenCodes.length === 1 ? 'code' : 'codes'}<ChevronDown className={showHidden ? 'expanded' : ''} size={15} /></button>{showHidden && <div>{hiddenCodes.map((code) => <TimeCodeEditor key={code.id} code={code} month={month} hidden onSave={updateCode} />)}</div>}</div>}
+      {hiddenCodes.length > 0 && <div className="hidden-time-codes"><button type="button" onClick={() => setShowHidden((current) => !current)}><EyeOff size={15} />{hiddenCodes.length} hidden {hiddenCodes.length === 1 ? 'code' : 'codes'}<ChevronDown className={showHidden ? 'expanded' : ''} size={15} /></button>{showHidden && <div>{hiddenCodes.map((code) => <TimeCodeEditor key={code.id} code={code} month={month} clients={clients} hidden onSave={updateCode} />)}</div>}</div>}
       {error && <p className="timesheet-error" role="alert">{error}</p>}
     </section>
   </div>
+}
+
+function ClientRevenuePanel({ year, defaultCurrency, clients, rates, forecasts, revenue, onAddClient, onUpdateClient, onSaveRate, onSaveForecast }: {
+  year: number
+  defaultCurrency: string
+  clients: TimesheetClient[]
+  rates: TimesheetClientRate[]
+  forecasts: TimesheetClientForecast[]
+  revenue: RevenueForecast
+  onAddClient: (name: string, currency: string, hourlyRateMinor: number) => Promise<void>
+  onUpdateClient: (client: TimesheetClient) => Promise<void>
+  onSaveRate: (rate: TimesheetClientRate) => Promise<void>
+  onSaveForecast: (forecast: TimesheetClientForecast) => Promise<void>
+}) {
+  const [adding, setAdding] = useState(false)
+  const [name, setName] = useState('')
+  const [currency, setCurrency] = useState(defaultCurrency)
+  const [rate, setRate] = useState('')
+  const [error, setError] = useState('')
+
+  async function addClient(event: FormEvent) {
+    event.preventDefault()
+    const rateMinor = parseMoneyToMinor(rate)
+    if (!name.trim() || !/^[A-Za-z]{3}$/.test(currency) || rateMinor === null) {
+      setError('Enter a client name, three-letter currency, and valid hourly rate.')
+      return
+    }
+    setAdding(true)
+    setError('')
+    try {
+      await onAddClient(name.trim(), currency.toUpperCase(), rateMinor)
+      setName('')
+      setRate('')
+    } catch (cause) {
+      setError(getErrorMessage(cause, 'Could not add the client.'))
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  return <section className="panel client-revenue-panel">
+    <div className="client-revenue-heading"><div><span className="eyebrow">Earned revenue · {year}</span><h2>Client revenue forecast</h2><p>Actual revenue follows worked hours. The remaining forecast uses weekly hours after vacation.</p></div><div className="client-revenue-total"><span>Full-year forecast</span><strong>{formatMoney(revenue.fullYearRevenueMinor, defaultCurrency)}</strong><small>{formatMoney(revenue.actualRevenueMinor, defaultCurrency)} earned · {formatMoney(revenue.remainingRevenueMinor, defaultCurrency)} remaining</small></div></div>
+    {(revenue.missingFx || revenue.missingRate) && <p className="client-revenue-warning"><CircleAlert size={15} />{revenue.missingRate ? 'A billable period is missing a client rate. ' : ''}{revenue.missingFx ? `Add the required exchange rate in Settings to complete the ${defaultCurrency} forecast.` : ''}</p>}
+    <div className="client-revenue-list">{clients.filter((client) => client.active).sort((left, right) => left.sortOrder - right.sortOrder).map((client) => <ClientRevenueCard key={client.id} year={year} defaultCurrency={defaultCurrency} client={client} rates={rates.filter((item) => item.clientId === client.id)} forecast={forecasts.find((item) => item.clientId === client.id && item.year === year)} revenue={revenue.clients.find((item) => item.client.id === client.id)} onUpdateClient={onUpdateClient} onSaveRate={onSaveRate} onSaveForecast={onSaveForecast} />)}</div>
+    {clients.some((client) => !client.active) && <div className="inactive-client-list"><span>Inactive clients</span>{clients.filter((client) => !client.active).map((client) => <button type="button" key={client.id} onClick={() => void onUpdateClient({ ...client, active: true })}><Eye size={13} />{client.name}<b>{formatMoney(revenue.clients.find((item) => item.client.id === client.id)?.actualRevenueMinor ?? 0, defaultCurrency)} earned</b></button>)}</div>}
+    {!clients.some((client) => client.active) && <div className="client-revenue-empty"><BriefcaseBusiness size={21} /><strong>Add the first client</strong><span>Client rates turn recorded hours into earned revenue.</span></div>}
+    <form className="client-add-form" onSubmit={(event) => void addClient(event)}><label><span>Client</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Client name" /></label><label><span>Currency</span><input value={currency} maxLength={3} onChange={(event) => setCurrency(event.target.value.toUpperCase().replace(/[^A-Z]/g, ''))} /></label><label><span>Hourly rate</span><input type="number" min="0" step="0.01" value={rate} onChange={(event) => setRate(event.target.value)} placeholder="0.00" /></label><button type="submit" className="secondary-button" disabled={adding}><Plus size={15} />{adding ? 'Adding…' : 'Add client'}</button></form>
+    {error && <p className="timesheet-error" role="alert">{error}</p>}
+  </section>
+}
+
+function ClientRevenueCard({ year, defaultCurrency, client, rates, forecast, revenue, onUpdateClient, onSaveRate, onSaveForecast }: {
+  year: number
+  defaultCurrency: string
+  client: TimesheetClient
+  rates: TimesheetClientRate[]
+  forecast?: TimesheetClientForecast
+  revenue?: RevenueForecast['clients'][number]
+  onUpdateClient: (client: TimesheetClient) => Promise<void>
+  onSaveRate: (rate: TimesheetClientRate) => Promise<void>
+  onSaveForecast: (forecast: TimesheetClientForecast) => Promise<void>
+}) {
+  const currentRate = rates.filter((item) => item.effectiveFrom <= todayInParis()).sort((left, right) => right.effectiveFrom.localeCompare(left.effectiveFrom))[0]
+  const [rateInput, setRateInput] = useState(currentRate ? (currentRate.hourlyRateMinor / 100).toFixed(2) : '')
+  const [weeklyHours, setWeeklyHours] = useState(String(forecast?.weeklyHours ?? 0))
+  const [vacationWeeks, setVacationWeeks] = useState(String(forecast?.vacationWeeks ?? 0))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => setRateInput(currentRate ? (currentRate.hourlyRateMinor / 100).toFixed(2) : ''), [currentRate])
+  useEffect(() => { setWeeklyHours(String(forecast?.weeklyHours ?? 0)); setVacationWeeks(String(forecast?.vacationWeeks ?? 0)) }, [forecast?.vacationWeeks, forecast?.weeklyHours])
+
+  async function save() {
+    const rateMinor = parseMoneyToMinor(rateInput)
+    const hours = Number(weeklyHours)
+    const vacation = Number(vacationWeeks)
+    if (rateMinor === null || !Number.isFinite(hours) || hours < 0 || hours > 168 || !Number.isFinite(vacation) || vacation < 0 || vacation > 53) {
+      setError('Check the hourly rate, weekly hours, and vacation weeks.')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      const effectiveFrom = currentRate?.hourlyRateMinor === rateMinor ? currentRate.effectiveFrom : todayInParis()
+      await Promise.all([
+        onSaveRate({ clientId: client.id, effectiveFrom, hourlyRateMinor: rateMinor }),
+        onSaveForecast({ clientId: client.id, year, weeklyHours: hours, vacationWeeks: vacation }),
+      ])
+    } catch (cause) {
+      setError(getErrorMessage(cause, 'Could not save the client forecast.'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return <article className="client-revenue-card">
+    <div className="client-revenue-card-heading"><div><strong>{client.name}</strong><span>{client.currency} · {currentRate ? `${formatMoney(currentRate.hourlyRateMinor, client.currency)}/hour` : 'Rate missing'}</span></div><button type="button" title="Deactivate client" aria-label={`Deactivate ${client.name}`} disabled={saving} onClick={() => void onUpdateClient({ ...client, active: false })}><EyeOff size={14} /></button></div>
+    <div className="client-revenue-metrics"><div><span>Earned YTD</span><strong>{formatMoney(revenue?.actualRevenueMinor ?? 0, defaultCurrency)}</strong><small>{formatHours(revenue?.actualHours ?? 0)}</small></div><div><span>Remaining</span><strong>{formatMoney(revenue?.remainingRevenueMinor ?? 0, defaultCurrency)}</strong><small>{(revenue?.workWeeksRemaining ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 })} work weeks</small></div><div><span>Full year</span><strong>{formatMoney(revenue?.fullYearRevenueMinor ?? 0, defaultCurrency)}</strong><small>{formatHours((revenue?.actualHours ?? 0) + (revenue?.forecastHours ?? 0))}</small></div></div>
+    <div className="client-revenue-inputs"><label><span>Rate</span><div><b>{client.currency}</b><input type="number" min="0" step="0.01" value={rateInput} onChange={(event) => setRateInput(event.target.value)} /></div></label><label><span>Hours/week</span><input type="number" min="0" max="168" step="0.5" value={weeklyHours} onChange={(event) => setWeeklyHours(event.target.value)} /></label><label><span>Vacation weeks</span><input type="number" min="0" max="53" step="0.5" value={vacationWeeks} onChange={(event) => setVacationWeeks(event.target.value)} /></label><button type="button" className="secondary-button" disabled={saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save'}</button></div>
+    {error && <p className="client-card-error" role="alert">{error}</p>}
+  </article>
 }
 
 function formatHours(hours: number, compact = false) {
@@ -1768,7 +1939,7 @@ function TimeEntryCell({ codeName, date, value, onChange }: { codeName: string; 
   </div>
 }
 
-function TimeCodeEditor({ code, month, hidden = false, onSave }: { code: TimeCode; month: string; hidden?: boolean; onSave: (code: TimeCode) => Promise<void> }) {
+function TimeCodeEditor({ code, month, clients, hidden = false, onSave }: { code: TimeCode; month: string; clients: TimesheetClient[]; hidden?: boolean; onSave: (code: TimeCode) => Promise<void> }) {
   const [name, setName] = useState(code.name)
   const [saving, setSaving] = useState(false)
   useEffect(() => setName(code.name), [code.name])
@@ -1784,6 +1955,7 @@ function TimeCodeEditor({ code, month, hidden = false, onSave }: { code: TimeCod
   }
   return <div className={`time-code-editor${hidden ? ' hidden' : ''}`}>
     <input aria-label={`Rename ${code.name}`} value={name} disabled={saving} onChange={(event) => setName(event.target.value)} onBlur={() => void saveName()} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }} />
+    <select aria-label={`Client for ${code.name}`} value={code.clientId ?? ''} disabled={saving} onChange={async (event) => { setSaving(true); try { await onSave({ ...code, clientId: event.target.value || undefined }) } finally { setSaving(false) } }}><option value="">No client</option>{clients.filter((client) => client.active || client.id === code.clientId).map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select>
     <button type="button" disabled={saving} onClick={() => void setHidden()} title={hidden ? 'Show this code again' : `Hide from ${month} onward`}>{hidden ? <Eye size={14} /> : <EyeOff size={14} />}<span>{hidden ? 'Restore' : 'Hide'}</span></button>
   </div>
 }
@@ -2493,7 +2665,7 @@ function annualSpendingMetrics(data: AppData, scope: SpendingGoalScope, defaultC
   return [...metrics.values()].sort((left, right) => left.year - right.year)
 }
 
-function YearlySpendingPlan({ data, defaultCurrency, historyLoading, onSavePlan }: { data: AppData; defaultCurrency: string; historyLoading: boolean; onSavePlan: (plan: YearlyFinancialPlan) => Promise<void> }) {
+function YearlySpendingPlan({ workspaceId, data, defaultCurrency, historyLoading, onSavePlan }: { workspaceId: string; data: AppData; defaultCurrency: string; historyLoading: boolean; onSavePlan: (plan: YearlyFinancialPlan) => Promise<void> }) {
   const [scope, setScope] = useState<SpendingGoalScope>('Combined')
   const [projectedCompanyIncomeInput, setProjectedCompanyIncomeInput] = useState('')
   const [monthlySalaryInput, setMonthlySalaryInput] = useState('')
@@ -2510,8 +2682,32 @@ function YearlySpendingPlan({ data, defaultCurrency, historyLoading, onSavePlan 
   const [comparisonOpen, setComparisonOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [yearTimeEntries, setYearTimeEntries] = useState<TimeEntry[]>([])
+  const [revenueLoading, setRevenueLoading] = useState(true)
+  const [revenueError, setRevenueError] = useState('')
   const today = todayInParis()
   const currentYear = Number(today.slice(0, 4))
+  useEffect(() => {
+    let cancelled = false
+    setRevenueLoading(true)
+    setRevenueError('')
+    loadYearTimeEntries(workspaceId, currentYear)
+      .then((entries) => { if (!cancelled) setYearTimeEntries(entries) })
+      .catch((cause) => { if (!cancelled) setRevenueError(getErrorMessage(cause, 'Could not load the revenue forecast.')) })
+      .finally(() => { if (!cancelled) setRevenueLoading(false) })
+    return () => { cancelled = true }
+  }, [currentYear, workspaceId])
+  const revenueForecast = useMemo(() => calculateRevenueForecast({
+    clients: data.timesheetClients,
+    rates: data.timesheetClientRates,
+    forecasts: data.timesheetClientForecasts,
+    timeCodes: data.timeCodes,
+    entries: yearTimeEntries,
+    fxRates: data.fxRates,
+    defaultCurrency,
+    today,
+    year: currentYear,
+  }), [currentYear, data.fxRates, data.timeCodes, data.timesheetClientForecasts, data.timesheetClientRates, data.timesheetClients, defaultCurrency, today, yearTimeEntries])
   const metrics = annualSpendingMetrics(data, scope, defaultCurrency, today)
   const current = metrics.find((metric) => metric.year === currentYear) ?? { year: currentYear, income: 0, expenses: 0, taxes: 0 }
   const postedTaxes = annualSpendingMetrics(data, 'Combined', defaultCurrency, today).find((metric) => metric.year === currentYear)?.taxes ?? 0
@@ -2622,6 +2818,9 @@ function YearlySpendingPlan({ data, defaultCurrency, historyLoading, onSavePlan 
       <div className="segmented three-way yearly-scope" aria-label="Spending scope">{(['Personal', 'Company', 'Combined'] as SpendingGoalScope[]).map((item) => <button type="button" key={item} className={scope === item ? 'active transfer' : ''} aria-pressed={scope === item} onClick={() => setScope(item)}>{item}</button>)}</div>
     </div>
     {historyLoading && <div className="yearly-history-loading"><LoaderCircle size={14} />Loading complete history for an accurate year-to-date comparison…</div>}
+    <div className="yearly-revenue-outlook"><div><span>Earned revenue YTD</span><strong>{revenueLoading ? '…' : formatMoney(revenueForecast.actualRevenueMinor, defaultCurrency)}</strong></div><div><span>Remaining forecast</span><strong>{revenueLoading ? '…' : formatMoney(revenueForecast.remainingRevenueMinor, defaultCurrency)}</strong></div><div><span>Full-year forecast</span><strong>{revenueLoading ? '…' : formatMoney(revenueForecast.fullYearRevenueMinor, defaultCurrency)}</strong></div><div><span>Plan variance</span><strong className={plan && revenueForecast.fullYearRevenueMinor < plan.projectedCompanyIncomeMinor ? 'negative' : ''}>{plan && !revenueLoading && !revenueForecast.missingFx && !revenueForecast.missingRate ? formatMoney(revenueForecast.fullYearRevenueMinor - plan.projectedCompanyIncomeMinor, defaultCurrency) : '—'}</strong></div></div>
+    {revenueError && <p className="yearly-plan-error" role="alert">{revenueError}</p>}
+    {!revenueLoading && !revenueError && (revenueForecast.missingFx || revenueForecast.missingRate) && <p className="yearly-revenue-warning"><CircleAlert size={14} />The revenue outlook is incomplete. Add missing client rates or exchange rates from the Timesheet and Settings pages.</p>}
     <div className="yearly-spending-summary">
       <div className="yearly-spent-value"><span>Spent year to date</span><strong>{formatMoney(current.expenses, defaultCurrency)}</strong><small>{goalAmount > 0 ? `${Math.round(progress)}% of ${formatMoney(goalAmount, defaultCurrency)} goal` : 'Set up this year’s financial plan'}</small><small className="taxes-excluded">{formatMoney(totalProjectedTaxes, defaultCurrency)} projected taxes · {formatMoney(current.taxes, defaultCurrency)} posted</small></div>
       <div className="yearly-progress">
@@ -2640,7 +2839,7 @@ function YearlySpendingPlan({ data, defaultCurrency, historyLoading, onSavePlan 
     {editingPlan && <div className="yearly-plan-editor">
       <div className="yearly-plan-editor-heading"><div><span className="eyebrow">Financial plan · {currentYear}</span><h3>Set the year’s limits</h3></div><button type="button" className="icon-button" aria-label="Close financial plan editor" onClick={() => { resetPlanInputs(); setEditingPlan(false) }}><X size={15} /></button></div>
       <div className="yearly-plan-inputs">
-        <label><span>Projected company income</span><div><b>{defaultCurrency}</b><input autoFocus type="number" min="0" step="0.01" value={projectedCompanyIncomeInput} onChange={(event) => setProjectedCompanyIncomeInput(event.target.value)} /></div><small>Full-year company revenue, including income already received.</small></label>
+        <label><span>Projected company income</span><div><b>{defaultCurrency}</b><input autoFocus type="number" min="0" step="0.01" value={projectedCompanyIncomeInput} onChange={(event) => setProjectedCompanyIncomeInput(event.target.value)} /></div><small>Approved full-year target. {!revenueLoading && !revenueForecast.missingFx && !revenueForecast.missingRate && revenueForecast.fullYearRevenueMinor > 0 && <button type="button" className="inline-plan-action" onClick={() => setProjectedCompanyIncomeInput((revenueForecast.fullYearRevenueMinor / 100).toFixed(2))}>Use {formatMoney(revenueForecast.fullYearRevenueMinor, defaultCurrency)} forecast</button>}</small></label>
         <label><span>Savings goal</span><div><b>{defaultCurrency}</b><input type="number" min="0" step="0.01" value={savingsGoalInput} onChange={(event) => setSavingsGoalInput(event.target.value)} /></div><small>What you want left after spending and total taxes.</small></label>
         <label><span>Estimated dividend</span><div><b>{defaultCurrency}</b><input type="number" min="0" step="0.01" placeholder="0" value={estimatedDividendInput} onChange={(event) => setEstimatedDividendInput(event.target.value)} /></div><small>Optional; blank is treated as zero.</small></label>
       </div>

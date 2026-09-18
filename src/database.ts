@@ -2,7 +2,7 @@ import { bankData, normalizedPayeeName, recentSyncRuns } from '../shared/bank-da
 export { normalizedPayeeName, prefixMappingMatches } from '../shared/bank-data.ts'
 import { neon } from './neon'
 import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
-import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankSyncDiagnostic, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, TimeCode, TimeComment, TimeEntry, Transaction, YearlyFinancialPlan } from './types'
+import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankSyncDiagnostic, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, TimeCode, TimeComment, TimeEntry, TimesheetClient, TimesheetClientForecast, TimesheetClientRate, Transaction, YearlyFinancialPlan } from './types'
 
 const { ensurePeriod, resolvePayees, findPayees } = bankData(neon)
 type Row = Record<string, unknown>
@@ -268,7 +268,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
   const nextMonthDate = new Date(`${monthStart}T12:00:00Z`)
   nextMonthDate.setUTCMonth(nextMonthDate.getUTCMonth() + 1)
   const monthEnd = nextMonthDate.toISOString().slice(0, 10)
-  const [workspaceResult, accountRows, categoryGroupRows, categoryRows, periodRows, budgetRows, fxRateRows, payeeRows, mappingRows, timeCodeRows, transactionPage, balanceResult, connectionRows, candidateRows, unusedPayeeResult] = await Promise.all([
+  const [workspaceResult, accountRows, categoryGroupRows, categoryRows, periodRows, budgetRows, fxRateRows, payeeRows, mappingRows, clientRows, clientRateRows, clientForecastRows, timeCodeRows, transactionPage, balanceResult, connectionRows, candidateRows, unusedPayeeResult] = await Promise.all([
     neon.from('workspaces').select('name,default_currency,estimated_company_tax_rate_bps,yearly_spending_goals').eq('id', workspaceId).limit(1),
     allRows('accounts', 'id,name,display_type,scope,balance_sheet_group,currency,color,sort_order,closed,investment,pension,auto_sync,bank_import_mode,provider_account_id,institution_id,country', 'sort_order'),
     allRows('category_groups', 'id,name,sort_order,show_categories', 'sort_order'),
@@ -278,7 +278,10 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
     allRows('fx_rates', 'id,base_currency,quote_currency,rate_hundredths,rate_date', 'rate_date'),
     allRows('payees', 'id,name,sort_order,default_category_id,default_account_id', 'sort_order'),
     allRows('payee_mappings', 'id,source_name,payee_id,match_type'),
-    allRows('time_codes', 'id,name,sort_order,hidden_from_month', 'sort_order'),
+    allRows('timesheet_clients', 'id,name,currency,sort_order,active', 'sort_order'),
+    allRows('timesheet_client_rates', 'client_id,effective_from,hourly_rate_minor', 'effective_from'),
+    allRows('timesheet_client_forecasts', 'client_id,forecast_year,weekly_hours,vacation_weeks', 'forecast_year'),
+    allRows('time_codes', 'id,name,sort_order,client_id,hidden_from_month', 'sort_order'),
     loadTransactionPage(workspaceId, { startDate: monthStart, endDate: monthEnd }),
     neon.rpc('workspace_account_balances', { p_workspace_id: workspaceId }),
     allRows('bank_connections', 'id,account_id,status,last_synced_at,metadata'),
@@ -399,10 +402,29 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
     rateHundredths: number(row.rate_hundredths),
     date: row.rate_date as string,
   }))
+  const timesheetClients: TimesheetClient[] = clientRows.map((row) => ({
+    id: String(row.id),
+    name: String(row.name),
+    currency: String(row.currency),
+    sortOrder: number(row.sort_order),
+    active: Boolean(row.active),
+  }))
+  const timesheetClientRates: TimesheetClientRate[] = clientRateRows.map((row) => ({
+    clientId: String(row.client_id),
+    effectiveFrom: String(row.effective_from),
+    hourlyRateMinor: number(row.hourly_rate_minor),
+  }))
+  const timesheetClientForecasts: TimesheetClientForecast[] = clientForecastRows.map((row) => ({
+    clientId: String(row.client_id),
+    year: number(row.forecast_year),
+    weeklyHours: number(row.weekly_hours),
+    vacationWeeks: number(row.vacation_weeks),
+  }))
   const timeCodes: TimeCode[] = timeCodeRows.map((row) => ({
     id: String(row.id),
     name: String(row.name),
     sortOrder: number(row.sort_order),
+    clientId: (row.client_id as string | null) ?? undefined,
     hiddenFromMonth: (row.hidden_from_month as string | null)?.slice(0, 7) || undefined,
   }))
   const bankImportCandidates: BankImportCandidate[] = ((candidateRows.data ?? []) as unknown as Row[])
@@ -469,6 +491,9 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
       budgets,
       yearlyFinancialPlans,
       fxRates,
+      timesheetClients,
+      timesheetClientRates,
+      timesheetClientForecasts,
       timeCodes,
       transactions,
       bankImportCandidates,
@@ -486,6 +511,23 @@ export async function loadTimeEntries(workspaceId: string, month: string): Promi
     .eq('workspace_id', workspaceId)
     .gte('work_date', startDate)
     .lt('work_date', nextMonth.toISOString().slice(0, 10))
+    .order('work_date', { ascending: true })
+  if (error) throw error
+  return ((data ?? []) as unknown as Row[]).map((row) => ({
+    codeId: String(row.time_code_id),
+    date: String(row.work_date),
+    hours: number(row.hours),
+  }))
+}
+
+export async function loadYearTimeEntries(workspaceId: string, year: number): Promise<TimeEntry[]> {
+  const startDate = `${year}-01-01`
+  const endDate = `${year + 1}-01-01`
+  const { data, error } = await neon.from('time_entries')
+    .select('time_code_id,work_date,hours')
+    .eq('workspace_id', workspaceId)
+    .gte('work_date', startDate)
+    .lt('work_date', endDate)
     .order('work_date', { ascending: true })
   if (error) throw error
   return ((data ?? []) as unknown as Row[]).map((row) => ({
@@ -514,6 +556,7 @@ export async function createTimeCode(workspaceId: string, code: TimeCode) {
     workspace_id: workspaceId,
     name: code.name.normalize('NFKC').trim(),
     sort_order: code.sortOrder,
+    client_id: code.clientId ?? null,
     hidden_from_month: code.hiddenFromMonth ? `${code.hiddenFromMonth}-01` : null,
   })
   if (error) throw error
@@ -524,10 +567,55 @@ export async function updateTimeCode(workspaceId: string, code: TimeCode) {
   if (!name) throw new Error('A time code name is required.')
   const { data, error } = await neon.from('time_codes').update({
     name,
+    client_id: code.clientId ?? null,
     hidden_from_month: code.hiddenFromMonth ? `${code.hiddenFromMonth}-01` : null,
   }).eq('workspace_id', workspaceId).eq('id', code.id).select('id')
   if (error) throw error
   if (!data?.length) throw new Error('The time code could not be updated.')
+}
+
+export async function createTimesheetClient(workspaceId: string, client: TimesheetClient, initialRate: TimesheetClientRate) {
+  const { error } = await neon.rpc('create_timesheet_client', {
+    p_workspace_id: workspaceId,
+    p_client_id: client.id,
+    p_name: client.name.normalize('NFKC').trim(),
+    p_currency: client.currency.toUpperCase(),
+    p_sort_order: client.sortOrder,
+    p_effective_from: initialRate.effectiveFrom,
+    p_hourly_rate_minor: initialRate.hourlyRateMinor,
+  })
+  if (error) throw error
+}
+
+export async function updateTimesheetClient(workspaceId: string, client: TimesheetClient) {
+  const { data, error } = await neon.from('timesheet_clients').update({
+    name: client.name.normalize('NFKC').trim(),
+    currency: client.currency.toUpperCase(),
+    active: client.active,
+  }).eq('workspace_id', workspaceId).eq('id', client.id).select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The client could not be updated.')
+}
+
+export async function saveTimesheetClientRate(workspaceId: string, rate: TimesheetClientRate) {
+  const { error } = await neon.from('timesheet_client_rates').upsert({
+    workspace_id: workspaceId,
+    client_id: rate.clientId,
+    effective_from: rate.effectiveFrom,
+    hourly_rate_minor: rate.hourlyRateMinor,
+  }, { onConflict: 'workspace_id,client_id,effective_from' })
+  if (error) throw error
+}
+
+export async function saveTimesheetClientForecast(workspaceId: string, forecast: TimesheetClientForecast) {
+  const { error } = await neon.from('timesheet_client_forecasts').upsert({
+    workspace_id: workspaceId,
+    client_id: forecast.clientId,
+    forecast_year: forecast.year,
+    weekly_hours: forecast.weeklyHours,
+    vacation_weeks: forecast.vacationWeeks,
+  }, { onConflict: 'workspace_id,client_id,forecast_year' })
+  if (error) throw error
 }
 
 export async function saveTimeCodeOrder(workspaceId: string, timeCodeIds: string[]) {

@@ -13,7 +13,8 @@
     "test:server": "node --experimental-transform-types --test server/*.test.ts",
     "test:ios-callback": "node scripts/test-ios-callback.mjs",
     "test:auth": "node --experimental-strip-types scripts/test-auth-bootstrap.mjs",
-    "test:bank-policy": "node --experimental-strip-types scripts/test-bank-import-policy.mjs"
+    "test:bank-policy": "node --experimental-strip-types scripts/test-bank-import-policy.mjs",
+    "test:revenue": "node --experimental-strip-types scripts/test-revenue-forecast.mjs"
   },
   "dependencies": {
     "@neondatabase/neon-js": "^0.7.0-beta",
