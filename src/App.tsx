@@ -1821,6 +1821,7 @@ function ClientRevenuePanel({ year, defaultCurrency, clients, rates, forecasts, 
   onSaveForecast: (forecast: TimesheetClientForecast) => Promise<void>
 }) {
   const [adding, setAdding] = useState(false)
+  const [showAddClient, setShowAddClient] = useState(false)
   const [name, setName] = useState('')
   const [currency, setCurrency] = useState(defaultCurrency)
   const [rate, setRate] = useState('')
@@ -1840,6 +1841,7 @@ function ClientRevenuePanel({ year, defaultCurrency, clients, rates, forecasts, 
       await onAddClient(name.trim(), currency.toUpperCase(), rateMinor)
       setName('')
       setRate('')
+      setShowAddClient(false)
     } catch (cause) {
       setError(getErrorMessage(cause, 'Could not add the client.'))
     } finally {
@@ -1853,7 +1855,8 @@ function ClientRevenuePanel({ year, defaultCurrency, clients, rates, forecasts, 
     <div className="client-revenue-list">{clients.filter((client) => client.active).sort((left, right) => left.sortOrder - right.sortOrder).map((client) => <ClientRevenueCard key={client.id} year={year} defaultCurrency={defaultCurrency} client={client} rates={rates.filter((item) => item.clientId === client.id)} forecast={forecasts.find((item) => item.clientId === client.id && item.year === year)} revenue={revenue.clients.find((item) => item.client.id === client.id)} earnedPeriod={earnedPeriod} onUpdateClient={onUpdateClient} onSaveRate={onSaveRate} onSaveForecast={onSaveForecast} />)}</div>
     {clients.some((client) => !client.active) && <div className="inactive-client-list"><span>Inactive clients</span>{clients.filter((client) => !client.active).map((client) => <button type="button" key={client.id} onClick={() => void onUpdateClient({ ...client, active: true })}><Eye size={13} />{client.name}<b>{formatMoney(revenue.clients.find((item) => item.client.id === client.id)?.actualRevenueMinor ?? 0, defaultCurrency)} earned</b></button>)}</div>}
     {!clients.some((client) => client.active) && <div className="client-revenue-empty"><BriefcaseBusiness size={21} /><strong>Add the first client</strong><span>Client rates turn recorded hours into earned revenue.</span></div>}
-    <form className="client-add-form" onSubmit={(event) => void addClient(event)}><label><span>Client</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Client name" /></label><label><span>Currency</span><input value={currency} maxLength={3} onChange={(event) => setCurrency(event.target.value.toUpperCase().replace(/[^A-Z]/g, ''))} /></label><label><span>Hourly rate</span><input type="number" min="0" step="0.01" value={rate} onChange={(event) => setRate(event.target.value)} placeholder="0.00" /></label><button type="submit" className="secondary-button" disabled={adding}><Plus size={15} />{adding ? 'Adding…' : 'Add client'}</button></form>
+    {!showAddClient && <button type="button" className="secondary-button client-add-toggle" aria-expanded="false" onClick={() => { setShowAddClient(true); setError('') }}><Plus size={13} />New client</button>}
+    {showAddClient && <form className="client-add-form" onSubmit={(event) => void addClient(event)}><label><span>Client</span><input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="Client name" /></label><label><span>Currency</span><input value={currency} maxLength={3} onChange={(event) => setCurrency(event.target.value.toUpperCase().replace(/[^A-Z]/g, ''))} /></label><label><span>Hourly rate</span><input type="number" min="0" step="0.01" value={rate} onChange={(event) => setRate(event.target.value)} placeholder="0.00" /></label><div className="client-add-actions"><button type="button" className="secondary-button" disabled={adding} onClick={() => { setShowAddClient(false); setError('') }}>Cancel</button><button type="submit" className="primary-button" disabled={adding}><Plus size={15} />{adding ? 'Adding…' : 'Add client'}</button></div></form>}
     {error && <p className="timesheet-error" role="alert">{error}</p>}
   </section>
 }

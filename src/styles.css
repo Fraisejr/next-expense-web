@@ -1074,8 +1074,10 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .inactive-client-list > span { color: var(--muted); font-size: 7.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
 .inactive-client-list button { display: inline-flex; align-items: center; gap: 5px; padding: 6px 8px; color: #5f6c65; background: #f0f2ed; border: 1px solid #dce0d8; border-radius: 6px; cursor: pointer; font-size: 8px; }
 .inactive-client-list button b { color: #315f54; font-family: 'DM Mono', monospace; font-size: 7.5px; }
+.client-add-toggle { margin-top: 12px; padding: 6px 9px; border-radius: 6px; font-size: 8.5px; }
 .client-add-form { display: grid; grid-template-columns: minmax(180px, 1fr) 90px 130px auto; align-items: end; gap: 9px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
-.client-add-form button { height: 34px; }
+.client-add-actions { display: flex; gap: 7px; }
+.client-add-actions button { height: 34px; padding-inline: 11px; white-space: nowrap; }
 .timesheet-summary { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 1px; overflow: hidden; color: #f7faf7; background: #42675f; border-radius: 12px; box-shadow: 0 9px 25px rgba(36, 77, 69, .12); }
 .timesheet-summary > div:first-child { padding: 22px 24px; background: var(--green); }
 .timesheet-summary > div:first-child .eyebrow { color: #b9cec7; }
@@ -1297,7 +1299,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .client-revenue-inputs { grid-template-columns: 1fr 1fr; }
   .client-revenue-inputs button { width: 100%; }
   .client-add-form { grid-template-columns: 1fr 90px; }
-  .client-add-form label:nth-child(3), .client-add-form button { grid-column: 1 / -1; }
+  .client-add-form label:nth-child(3), .client-add-actions { grid-column: 1 / -1; }
   .timesheet-item-totals > div:first-child { border-left: 0; }
   .timesheet-weekly-summary { grid-template-columns: 1fr; }
   .timesheet-weekly-totals > div:first-child { border-left: 0; }
@@ -1429,7 +1431,8 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .client-revenue-total { text-align: left; }
   .client-revenue-metrics { grid-template-columns: 1fr; }
   .client-revenue-inputs, .client-add-form { grid-template-columns: 1fr; }
-  .client-add-form label:nth-child(3), .client-add-form button { grid-column: auto; }
+  .client-add-form label:nth-child(3), .client-add-actions { grid-column: auto; }
+  .client-add-actions { flex-direction: column-reverse; }
   .yearly-goal-editor, .yearly-goal-display { grid-column: auto; }
   .yearly-plan-inputs, .yearly-tax-inputs, .yearly-plan-allocation, .yearly-tax-calculation { grid-template-columns: 1fr; }
   .yearly-plan-allocation > div:first-child { grid-column: auto; }
