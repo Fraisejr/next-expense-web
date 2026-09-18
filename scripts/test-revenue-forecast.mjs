@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
-import { calculateRevenueForecast, calendarWorkWeeksRemaining, nextMonday } from '../src/revenue.ts'
+import { calculateRevenueForecast, calendarWorkWeeksRemaining, nextMonday, revenueRecognitionDate } from '../src/revenue.ts'
 
 assert.equal(nextMonday('2026-09-18'), '2026-09-21')
 assert.equal(nextMonday('2026-09-20'), '2026-09-21')
+assert.equal(revenueRecognitionDate('2025-12-31'), '2026-01-01')
+assert.equal(revenueRecognitionDate('2026-01-05'), '2026-02-01')
+assert.equal(calendarWorkWeeksRemaining('2026-09-18', 2026), 10.2)
 assert.equal(calendarWorkWeeksRemaining('2026-12-31', 2026), 0)
 assert.equal(calendarWorkWeeksRemaining('2026-09-18', 2025), 0)
 
@@ -12,21 +15,27 @@ const result = calculateRevenueForecast({
   forecasts: [{ clientId: 'client', year: 2026, weeklyHours: 20, vacationWeeks: 1 }],
   timeCodes: [{ id: 'delivery', name: 'Delivery', sortOrder: 0, clientId: 'client' }],
   entries: [
-    { codeId: 'delivery', date: '2026-01-05', hours: 8 },
+    { codeId: 'delivery', date: '2025-12-05', hours: 8 },
+    { codeId: 'delivery', date: '2026-01-05', hours: 2 },
+    { codeId: 'delivery', date: '2026-09-05', hours: 3 },
+    { codeId: 'delivery', date: '2026-12-05', hours: 8 },
     { codeId: 'delivery', date: '2027-01-05', hours: 8 },
   ],
   fxRates: [],
   defaultCurrency: 'EUR',
-  today: '2026-12-18',
+  today: '2026-09-18',
   year: 2026,
 })
 
-assert.equal(result.actualRevenueMinor, 80000)
-assert.equal(result.clients[0].calendarWeeksRemaining, 1.8)
-assert.equal(result.clients[0].workWeeksRemaining, 0.8)
-assert.equal(result.clients[0].forecastHours, 16)
-assert.equal(result.remainingRevenueMinor, 160000)
-assert.equal(result.fullYearRevenueMinor, 240000)
+assert.equal(result.actualRevenueMinor, 100000)
+assert.equal(result.clients[0].actualHours, 10)
+assert.equal(result.clients[0].pendingHours, 3)
+assert.equal(result.clients[0].pendingRevenueMinor, 30000)
+assert.equal(result.clients[0].calendarWeeksRemaining, 10.2)
+assert.equal(result.clients[0].workWeeksRemaining, 9.2)
+assert.equal(result.clients[0].forecastHours, 184)
+assert.equal(result.remainingRevenueMinor, 1870000)
+assert.equal(result.fullYearRevenueMinor, 1970000)
 assert.equal(result.missingFx, false)
 assert.equal(result.missingRate, false)
 
@@ -39,8 +48,9 @@ const history = calculateRevenueForecast({
   forecasts: [],
   timeCodes: [{ id: 'consulting', name: 'Consulting', sortOrder: 0, clientId: 'history' }],
   entries: [
-    { codeId: 'consulting', date: '2026-01-05', hours: 8 },
-    { codeId: 'consulting', date: '2026-08-05', hours: 2 },
+    { codeId: 'consulting', date: '2025-12-05', hours: 8 },
+    { codeId: 'consulting', date: '2026-06-05', hours: 2 },
+    { codeId: 'consulting', date: '2026-12-05', hours: 5 },
   ],
   fxRates: [],
   defaultCurrency: 'EUR',

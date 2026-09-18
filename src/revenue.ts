@@ -5,6 +5,8 @@ export type ClientRevenueForecast = {
   client: TimesheetClient
   actualHours: number
   actualRevenueMinor: number
+  pendingHours: number
+  pendingRevenueMinor: number
   calendarWeeksRemaining: number
   workWeeksRemaining: number
   forecastHours: number
@@ -40,11 +42,16 @@ export function nextMonday(date: string) {
   return dateKey(value)
 }
 
+export function revenueRecognitionDate(workDate: string) {
+  const [year, month] = workDate.split('-').map(Number)
+  return dateKey(new Date(Date.UTC(year, month, 1)))
+}
+
 export function calendarWorkWeeksRemaining(today: string, year: number) {
-  const todayYear = Number(today.slice(0, 4))
-  if (year < todayYear) return 0
-  const start = year === todayYear ? parseDate(nextMonday(today)) : new Date(Date.UTC(year, 0, 1))
-  const end = new Date(Date.UTC(year, 11, 31))
+  const workPeriodStart = new Date(Date.UTC(year - 1, 11, 1))
+  const nextFullWeek = parseDate(nextMonday(today))
+  const start = nextFullWeek > workPeriodStart ? nextFullWeek : workPeriodStart
+  const end = new Date(Date.UTC(year, 10, 30))
   if (start > end) return 0
   let weekdays = 0
   for (const day = new Date(start); day <= end; day.setUTCDate(day.getUTCDate() + 1)) {
@@ -93,20 +100,26 @@ export function calculateRevenueForecast({
   const clientResults = clients.map((client) => {
     let actualHours = 0
     let actualRevenueMinor = 0
+    let pendingHours = 0
+    let pendingRevenueMinor = 0
     let missingFx = false
     let missingRate = false
 
     for (const entry of entries) {
-      if (entry.date < yearStart || entry.date > yearEnd || entry.date > today || codeClient.get(entry.codeId) !== client.id) continue
-      actualHours += entry.hours
-      const rate = applicableRate(client.id, entry.date, rates)
+      const recognitionDate = revenueRecognitionDate(entry.date)
+      if (recognitionDate < yearStart || recognitionDate > yearEnd || entry.date > today || codeClient.get(entry.codeId) !== client.id) continue
+      const recognized = recognitionDate <= today
+      if (recognized) actualHours += entry.hours
+      else pendingHours += entry.hours
+      const rate = applicableRate(client.id, recognitionDate, rates)
       if (!rate) {
         missingRate = true
         continue
       }
-      const converted = convertRevenue(Math.round(entry.hours * rate.hourlyRateMinor), client.currency, defaultCurrency, entry.date, fxRates)
+      const converted = convertRevenue(Math.round(entry.hours * rate.hourlyRateMinor), client.currency, defaultCurrency, recognitionDate, fxRates)
       if (converted === null) missingFx = true
-      else actualRevenueMinor += converted
+      else if (recognized) actualRevenueMinor += converted
+      else pendingRevenueMinor += converted
     }
 
     const assumptions = client.active ? forecasts.find((forecast) => forecast.clientId === client.id && forecast.year === year) : undefined
@@ -117,12 +130,14 @@ export function calculateRevenueForecast({
     const nativeRemainingRevenue = currentRate ? Math.round(forecastHours * currentRate.hourlyRateMinor) : 0
     const convertedRemaining = convertRevenue(nativeRemainingRevenue, client.currency, defaultCurrency, today, fxRates)
     if (convertedRemaining === null && nativeRemainingRevenue > 0) missingFx = true
-    const remainingRevenueMinor = convertedRemaining ?? 0
+    const remainingRevenueMinor = pendingRevenueMinor + (convertedRemaining ?? 0)
 
     return {
       client,
       actualHours,
       actualRevenueMinor,
+      pendingHours,
+      pendingRevenueMinor,
       calendarWeeksRemaining: calendarWeeks,
       workWeeksRemaining,
       forecastHours,

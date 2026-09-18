@@ -520,9 +520,9 @@ export async function loadTimeEntries(workspaceId: string, month: string): Promi
   }))
 }
 
-export async function loadYearTimeEntries(workspaceId: string, year: number): Promise<TimeEntry[]> {
-  const startDate = `${year}-01-01`
-  const endDate = `${year + 1}-01-01`
+export async function loadRevenueRecognitionEntries(workspaceId: string, year: number): Promise<TimeEntry[]> {
+  const startDate = `${year - 1}-12-01`
+  const endDate = `${year}-12-01`
   const { data, error } = await neon.from('time_entries')
     .select('time_code_id,work_date,hours')
     .eq('workspace_id', workspaceId)
