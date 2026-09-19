@@ -8,6 +8,7 @@ struct LiveExpenseView: View {
     @State private var password = ""
     @State private var selected: ReviewTransaction?
     @State private var confirmingApproveAll = false
+    @State private var showingClosedAccounts = false
 
     var body: some View {
         Group {
@@ -137,7 +138,19 @@ struct LiveExpenseView: View {
                     if !rows.isEmpty { accountSection(group, accounts: rows) }
                 }
                 let closed = store.accounts.filter(\.closed)
-                if !closed.isEmpty { accountSection("Closed accounts", accounts: closed) }
+                if !closed.isEmpty {
+                    Section {
+                        DisclosureGroup(isExpanded: $showingClosedAccounts) {
+                            ForEach(closed) { account in accountRow(account) }
+                        } label: {
+                            HStack {
+                                Text("Closed accounts")
+                                Spacer()
+                                Text(accountGroupSummary(closed)).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
                 if store.accounts.isEmpty && !store.busy && store.errorMessage == nil {
                     ContentUnavailableView("No accounts yet", systemImage: "wallet.pass", description: Text("Create an account in the web app."))
                 }
@@ -151,20 +164,7 @@ struct LiveExpenseView: View {
 
     private func accountSection(_ title: String, accounts: [ReviewAccount]) -> some View {
         Section {
-            ForEach(accounts) { account in
-                HStack(spacing: 12) {
-                    Circle().fill(accountColor(account.color)).frame(width: 10, height: 10)
-                        .accessibilityHidden(true)
-                    Text(account.name).foregroundStyle(.primary)
-                    Spacer()
-                    if let balance = store.accountBalances[account.id] {
-                        Text(formattedMoney(balance, currency: account.currency))
-                            .monospacedDigit().fontWeight(.semibold)
-                            .foregroundStyle(balance < 0 ? Color.red : Color.primary)
-                    } else { Text("—").foregroundStyle(.secondary) }
-                }
-                .padding(.vertical, 2)
-            }
+            ForEach(accounts) { account in accountRow(account) }
         } header: {
             HStack {
                 Text(title)
@@ -172,6 +172,21 @@ struct LiveExpenseView: View {
                 Text(accountGroupSummary(accounts)).textCase(nil)
             }
         }
+    }
+
+    private func accountRow(_ account: ReviewAccount) -> some View {
+        HStack(spacing: 12) {
+            Circle().fill(accountColor(account.color)).frame(width: 10, height: 10)
+                .accessibilityHidden(true)
+            Text(account.name).foregroundStyle(.primary)
+            Spacer()
+            if let balance = store.accountBalances[account.id] {
+                Text(formattedMoney(balance, currency: account.currency))
+                    .monospacedDigit().fontWeight(.semibold)
+                    .foregroundStyle(balance < 0 ? Color.red : Color.primary)
+            } else { Text("—").foregroundStyle(.secondary) }
+        }
+        .padding(.vertical, 2)
     }
 
     private func accountGroupSummary(_ accounts: [ReviewAccount]) -> String {
