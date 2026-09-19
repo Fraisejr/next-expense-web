@@ -229,65 +229,95 @@ final class LiveExpenseStore: ObservableObject {
         errorMessage = nil
         defer { busy = false }
         do {
-            var resolvedPayee = payeeId.flatMap { id in payees.first(where: { $0.id == id }) }
-            var createdPayee = false
-            if resolvedPayee == nil {
-                let importedName = candidate.payeeName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                guard !importedName.isEmpty else { throw MobileAPIError(message: "Choose or create a payee before approving.", status: 0) }
-                resolvedPayee = payees.first(where: { Self.normalizedPayeeName($0.name) == Self.normalizedPayeeName(importedName) })
-                if resolvedPayee == nil {
-                    resolvedPayee = try await insertPayee(name: importedName, categoryId: categoryId, accountId: candidate.accountId)
-                    createdPayee = true
-                }
-            }
-            guard let resolvedPayee else { throw MobileAPIError(message: "Choose or create a payee before approving.", status: 0) }
-            // Same two-step flow as the web app. Only change the payee if edited,
-            // so retrying an approval whose response was lost reaches the idempotent RPC.
-            if resolvedPayee.id != candidate.payeeId {
-                let rows: [ReviewID] = try await api.data("bank_import_candidates", query: scoped(workspace.id) + [
-                    .init(name: "id", value: "eq.\(candidate.id)"), .init(name: "status", value: "eq.pending"), .init(name: "select", value: "id")
-                ], method: "PATCH", body: ["payee_id": resolvedPayee.id.uuidString])
-                if rows.isEmpty {
-                    // An earlier attempt may already have committed. The RPC verifies status.
-                    notice = "Checking whether this transaction was already approved."
-                }
-            }
-            let _: UUID = try await api.data("rpc/approve_bank_import_candidate", method: "POST", body: [
-                "p_workspace_id": workspace.id.uuidString, "p_candidate_id": candidate.id.uuidString,
-                "p_category_id": categoryId.uuidString, "p_remember_category": rememberCategory
-            ])
-            candidates.removeAll { $0.id == candidate.id }
+            try await approveCandidate(candidate, payeeId: payeeId, categoryId: categoryId, rememberCategory: rememberCategory, rememberMapping: rememberMapping, workspace: workspace)
             notice = "Approved and saved."
-            if rememberCategory || createdPayee {
-                payees = payees.map {
-                    $0.id == resolvedPayee.id ? ReviewPayee(id: $0.id, name: $0.name, defaultCategoryId: categoryId) : $0
-                }
-            }
-            if payeeId == nil && !createdPayee {
-                do {
-                    let rows: [ReviewPayee] = try await api.data("payees", query: scoped(workspace.id) + [
-                        .init(name: "id", value: "eq.\(resolvedPayee.id)"),
-                        .init(name: "select", value: "id,name,default_category_id")
-                    ], method: "PATCH", body: [
-                        "default_category_id": categoryId.uuidString, "default_account_id": candidate.accountId.uuidString
-                    ])
-                    if let updated = rows.first { payees = payees.map { $0.id == updated.id ? updated : $0 } }
-                } catch {
-                    errorMessage = "Transaction approved, but the payee defaults could not be saved: \(error.localizedDescription)"
-                }
-            }
-            if rememberMapping, let importedName = candidate.payeeName, !importedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                do {
-                    try await saveExactMapping(importedName, payee: resolvedPayee, replaceConflict: true)
-                    _ = try await rematchPendingCandidates(accountId: candidate.accountId)
-                } catch {
-                    errorMessage = "Transaction approved, but its bank description could not be saved as an alternative name: \(error.localizedDescription)"
-                }
-            }
             // The approval is committed even if refreshing the reports fails.
             do { budget = try await loadBudget(workspace.id); reports = try await loadReports(workspace.id) }
             catch { errorMessage = "Approval saved. Could not refresh Budget and Reports: \(error.localizedDescription)" }
         } catch { handle(error); throw error }
+    }
+
+    func approveAllReady() async {
+        guard !busy, let workspace else { return }
+        let ready = candidates.filter { reviewReadiness(for: $0) == .ready }
+        guard !ready.isEmpty else { return }
+        busy = true
+        errorMessage = nil
+        notice = nil
+        defer { busy = false }
+
+        var approved = 0
+        for candidate in ready {
+            guard let categoryId = candidate.categoryId else { continue }
+            do {
+                try await approveCandidate(candidate, payeeId: candidate.payeeId, categoryId: categoryId, rememberCategory: false, rememberMapping: false, workspace: workspace)
+                approved += 1
+            } catch {
+                let detail = error.localizedDescription
+                handle(error)
+                errorMessage = approved == 0
+                    ? "Could not approve ready transactions: \(detail)"
+                    : "Approved \(approved) of \(ready.count) ready transactions. Stopped because: \(detail)"
+                return
+            }
+        }
+
+        notice = approved == 1 ? "Approved 1 ready transaction." : "Approved \(approved) ready transactions."
+        do { budget = try await loadBudget(workspace.id); reports = try await loadReports(workspace.id) }
+        catch { errorMessage = "Approvals saved. Could not refresh Budget and Reports: \(error.localizedDescription)" }
+    }
+
+    private func approveCandidate(_ candidate: ReviewTransaction, payeeId: UUID?, categoryId: UUID, rememberCategory: Bool, rememberMapping: Bool, workspace: ReviewWorkspace) async throws {
+        var resolvedPayee = payeeId.flatMap { id in payees.first(where: { $0.id == id }) }
+        var createdPayee = false
+        if resolvedPayee == nil {
+            let importedName = candidate.payeeName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !importedName.isEmpty else { throw MobileAPIError(message: "Choose or create a payee before approving.", status: 0) }
+            resolvedPayee = payees.first(where: { Self.normalizedPayeeName($0.name) == Self.normalizedPayeeName(importedName) })
+            if resolvedPayee == nil {
+                resolvedPayee = try await insertPayee(name: importedName, categoryId: categoryId, accountId: candidate.accountId)
+                createdPayee = true
+            }
+        }
+        guard let resolvedPayee else { throw MobileAPIError(message: "Choose or create a payee before approving.", status: 0) }
+        // Same two-step flow as the web app. Only change the payee if edited,
+        // so retrying an approval whose response was lost reaches the idempotent RPC.
+        if resolvedPayee.id != candidate.payeeId {
+            let _: [ReviewID] = try await api.data("bank_import_candidates", query: scoped(workspace.id) + [
+                .init(name: "id", value: "eq.\(candidate.id)"), .init(name: "status", value: "eq.pending"), .init(name: "select", value: "id")
+            ], method: "PATCH", body: ["payee_id": resolvedPayee.id.uuidString])
+        }
+        let _: UUID = try await api.data("rpc/approve_bank_import_candidate", method: "POST", body: [
+            "p_workspace_id": workspace.id.uuidString, "p_candidate_id": candidate.id.uuidString,
+            "p_category_id": categoryId.uuidString, "p_remember_category": rememberCategory
+        ])
+        candidates.removeAll { $0.id == candidate.id }
+        if rememberCategory || createdPayee {
+            payees = payees.map {
+                $0.id == resolvedPayee.id ? ReviewPayee(id: $0.id, name: $0.name, defaultCategoryId: categoryId) : $0
+            }
+        }
+        if payeeId == nil && !createdPayee {
+            do {
+                let rows: [ReviewPayee] = try await api.data("payees", query: scoped(workspace.id) + [
+                    .init(name: "id", value: "eq.\(resolvedPayee.id)"),
+                    .init(name: "select", value: "id,name,default_category_id")
+                ], method: "PATCH", body: [
+                    "default_category_id": categoryId.uuidString, "default_account_id": candidate.accountId.uuidString
+                ])
+                if let updated = rows.first { payees = payees.map { $0.id == updated.id ? updated : $0 } }
+            } catch {
+                errorMessage = "Transaction approved, but the payee defaults could not be saved: \(error.localizedDescription)"
+            }
+        }
+        if rememberMapping, let importedName = candidate.payeeName, !importedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            do {
+                try await saveExactMapping(importedName, payee: resolvedPayee, replaceConflict: true)
+                _ = try await rematchPendingCandidates(accountId: candidate.accountId)
+            } catch {
+                errorMessage = "Transaction approved, but its bank description could not be saved as an alternative name: \(error.localizedDescription)"
+            }
+        }
     }
 
     func createPayee(name: String, categoryId: UUID?, accountId: UUID) async throws -> ReviewPayee {
@@ -338,6 +368,10 @@ final class LiveExpenseStore: ObservableObject {
 
     func canSwipeApprove(_ candidate: ReviewTransaction) -> Bool {
         reviewReadiness(for: candidate) == .ready
+    }
+
+    var readyCandidateCount: Int {
+        candidates.filter { reviewReadiness(for: $0) == .ready }.count
     }
 
     func reviewReadiness(for candidate: ReviewTransaction) -> ReviewReadiness {

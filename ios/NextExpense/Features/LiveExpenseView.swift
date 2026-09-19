@@ -7,6 +7,7 @@ struct LiveExpenseView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var selected: ReviewTransaction?
+    @State private var confirmingApproveAll = false
 
     var body: some View {
         Group {
@@ -20,6 +21,13 @@ struct LiveExpenseView: View {
                     NavigationStack {
                         List {
                             messages
+                            if store.readyCandidateCount > 0 {
+                                Button { confirmingApproveAll = true } label: {
+                                    Label("Approve all ready (\(store.readyCandidateCount))", systemImage: "checkmark.circle.fill")
+                                }
+                                .tint(.teal)
+                                .disabled(store.busy)
+                            }
                             if store.candidates.contains(where: { $0.payeeId == nil }) {
                                 Button { Task { await store.recheckPayees() } } label: {
                                     Label("Recheck payees", systemImage: "arrow.triangle.2.circlepath")
@@ -47,6 +55,18 @@ struct LiveExpenseView: View {
                         .navigationTitle("Review")
                         .refreshable { await store.refresh() }
                         .toolbar { toolbar }
+                        .confirmationDialog(
+                            "Approve \(store.readyCandidateCount) ready transactions?",
+                            isPresented: $confirmingApproveAll,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Approve \(store.readyCandidateCount)") {
+                                Task { await store.approveAllReady() }
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("Only transactions with a usable payee and active category will be approved. The others will remain in Review.")
+                        }
                     }
                     .tabItem { Label("Review", systemImage: "tray.full.fill") }
                     .badge(store.candidates.count)

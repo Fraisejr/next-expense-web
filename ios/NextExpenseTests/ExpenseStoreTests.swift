@@ -160,6 +160,7 @@ private final class MockNeonProtocol: URLProtocol {
 final class LiveReviewTests: XCTestCase {
     private let workspace = UUID(uuidString: "10000000-0000-0000-0000-000000000001")!
     private let candidate = UUID(uuidString: "10000000-0000-0000-0000-000000000002")!
+    private let secondCandidate = UUID(uuidString: "10000000-0000-0000-0000-000000000008")!
     private let category = UUID(uuidString: "10000000-0000-0000-0000-000000000003")!
     private let account = UUID(uuidString: "10000000-0000-0000-0000-000000000004")!
     private let transaction = UUID(uuidString: "10000000-0000-0000-0000-000000000005")!
@@ -167,6 +168,8 @@ final class LiveReviewTests: XCTestCase {
     private let mapping = UUID(uuidString: "10000000-0000-0000-0000-000000000007")!
     private var requests: [URLRequest] = []
     private var approvalStatus = 200
+    private var approvalCalls = 0
+    private var approvalFailOnCall: Int?
     private var ledgerFails = false
     private var expiredOnce = false
     private var expiryStatus = 401
@@ -180,6 +183,7 @@ final class LiveReviewTests: XCTestCase {
     private var rejectRows = true
     private var matchingFixtures = false
     private var candidateHasPayee = false
+    private var multipleCandidates = false
     private var transferFixture = false
     private let vault = MemoryVault()
 
@@ -269,9 +273,11 @@ final class LiveReviewTests: XCTestCase {
                 if request.httpMethod == "PATCH" {
                     return (rejectStatus, [:], rejectStatus == 200 ? (rejectRows ? [["id": candidate.uuidString]] : []) : ["message": "Write failed"])
                 }
-                return (200, [:], [row(candidate)])
+                return (200, [:], [row(candidate)] + (multipleCandidates ? [row(secondCandidate)] : []))
             case "approve_bank_import_candidate":
-                return (approvalStatus, [:], approvalStatus == 200 ? transaction.uuidString : ["message": "Approval failed"])
+                approvalCalls += 1
+                let status = approvalFailOnCall == approvalCalls ? 503 : approvalStatus
+                return (status, [:], status == 200 ? transaction.uuidString : ["message": "Approval failed"])
             case "approve_bank_import_candidate_as_transfer":
                 return (approvalStatus, [:], approvalStatus == 200 ? transaction.uuidString : ["message": "Transfer failed"])
             case "transactions":
@@ -410,7 +416,7 @@ final class LiveReviewTests: XCTestCase {
         await store.signIn(email: "test@example.com", password: "test-password")
         XCTAssertTrue(store.signedIn)
         XCTAssertNil(store.errorMessage)
-        XCTAssertEqual(store.candidates.count, 1)
+        XCTAssertEqual(store.candidates.count, multipleCandidates ? 2 : 1)
         return store
     }
     func testSignInApproveAndRefreshReports() async throws {
@@ -435,6 +441,34 @@ final class LiveReviewTests: XCTestCase {
         try await store.approve(XCTUnwrap(store.candidates.first), payeeId: nil, categoryId: category)
         XCTAssertTrue(store.candidates.isEmpty)
         XCTAssertTrue(store.errorMessage?.contains("Approval saved") == true)
+    }
+    func testApproveAllReadySavesEveryValidCandidateAndRefreshesOnce() async throws {
+        matchingFixtures = true
+        candidateHasPayee = true
+        multipleCandidates = true
+        let store = await signedInStore()
+        XCTAssertEqual(store.readyCandidateCount, 2)
+        let refreshesBefore = requests.filter { $0.url?.lastPathComponent == "workspace_account_balances" }.count
+
+        await store.approveAllReady()
+
+        XCTAssertTrue(store.candidates.isEmpty)
+        XCTAssertEqual(approvalCalls, 2)
+        XCTAssertEqual(store.notice, "Approved 2 ready transactions.")
+        XCTAssertEqual(requests.filter { $0.url?.lastPathComponent == "workspace_account_balances" }.count, refreshesBefore + 1)
+    }
+    func testApproveAllReadyStopsAfterFirstFailureAndKeepsRemainingCandidate() async throws {
+        matchingFixtures = true
+        candidateHasPayee = true
+        multipleCandidates = true
+        approvalFailOnCall = 2
+        let store = await signedInStore()
+
+        await store.approveAllReady()
+
+        XCTAssertEqual(approvalCalls, 2)
+        XCTAssertEqual(store.candidates.map(\.id), [secondCandidate])
+        XCTAssertTrue(store.errorMessage?.contains("Approved 1 of 2 ready transactions") == true)
     }
     func testExpiredJWTRefreshesOnceAndSessionRestoresFromVault() async throws {
         let api = makeAPI()
