@@ -15,6 +15,18 @@ struct ReviewAccount: Decodable, Identifiable, Hashable {
     let name: String
     let currency: String
     let closed: Bool
+    let scope: String?
+    let balanceSheetGroup: String?
+    let pension: Bool?
+    let color: String?
+    let sortOrder: Int?
+
+    var group: String {
+        if let balanceSheetGroup { return balanceSheetGroup }
+        if pension ?? false { return "Pension" }
+        if name.range(of: "apartment|mortgage|bolån", options: [.regularExpression, .caseInsensitive]) != nil { return "Real estate" }
+        return scope == "Company" ? "Company" : "Personal"
+    }
 }
 struct ReviewPayeeMapping: Decodable, Identifiable, Hashable {
     let id: UUID
@@ -84,6 +96,7 @@ final class LiveExpenseStore: ObservableObject {
     @Published private(set) var payees: [ReviewPayee] = []
     @Published private(set) var payeeMappings: [ReviewPayeeMapping] = []
     @Published private(set) var accounts: [ReviewAccount] = []
+    @Published private(set) var accountBalances: [UUID: Int] = [:]
     @Published private(set) var reviewTransfers: [ReviewTransfer] = []
     @Published var errorMessage: String?
     @Published var notice: String?
@@ -560,7 +573,10 @@ final class LiveExpenseStore: ObservableObject {
         let newCategories: [ReviewChoice] = try await all("categories", query: scope + [.init(name: "select", value: "id,name"), .init(name: "hidden", value: "eq.false"), .init(name: "order", value: "name,id")])
         let newPayees: [ReviewPayee] = try await all("payees", query: scope + [.init(name: "select", value: "id,name,default_category_id"), .init(name: "order", value: "name,id")])
         let newMappings: [ReviewPayeeMapping] = try await all("payee_mappings", query: scope + [.init(name: "select", value: "id,source_name,payee_id,match_type"), .init(name: "order", value: "id")])
-        let newAccounts: [ReviewAccount] = try await all("accounts", query: scope + [.init(name: "select", value: "id,name,currency,closed"), .init(name: "order", value: "id")])
+        let newAccounts: [ReviewAccount] = try await all("accounts", query: scope + [
+            .init(name: "select", value: "id,name,currency,closed,scope,balance_sheet_group,pension,color,sort_order"),
+            .init(name: "order", value: "sort_order,id")
+        ])
         let newCandidates: [ReviewTransaction] = try await all("bank_import_candidates", query: scope + [.init(name: "select", value: columns), .init(name: "status", value: "eq.pending"), .init(name: "order", value: "transaction_date.desc,id")])
         let newTransfers: [ReviewTransfer]
         if let firstDate = newCandidates.map(\.transactionDate).min(), let lastDate = newCandidates.map(\.transactionDate).max(),
@@ -603,6 +619,7 @@ final class LiveExpenseStore: ObservableObject {
         ])
         guard let config = configs.first else { throw MobileAPIError(message: "Report settings could not be loaded.", status: 0) }
         let balances: [ReportBalance] = try await api.data("rpc/workspace_account_balances", method: "POST", body: ["p_workspace_id": id.uuidString])
+        accountBalances = Dictionary(uniqueKeysWithValues: balances.map { ($0.accountId, $0.balanceMinor) })
         let reportAccounts: [ReportAccount] = try await all("accounts", query: scoped(id) + [.init(name: "select", value: "id,name,currency,closed,scope,balance_sheet_group,pension"), .init(name: "order", value: "id")])
         let reportCategories: [ReportCategory] = try await all("categories", query: scoped(id) + [.init(name: "select", value: "id,report_group"), .init(name: "order", value: "id")])
         let rates: [ReportRate] = try await all("fx_rates", query: scoped(id) + [.init(name: "select", value: "base_currency,quote_currency,rate_hundredths,rate_date"), .init(name: "order", value: "rate_date,id")])
@@ -622,7 +639,7 @@ final class LiveExpenseStore: ObservableObject {
         errorMessage = error.localizedDescription
     }
     private func clearWorkspace() {
-        workspace = nil; candidates = []; reports = nil; budget = nil; budgetError = nil; categories = []; payees = []; payeeMappings = []; accounts = []; reviewTransfers = []; notice = nil; bankSyncResults = []
+        workspace = nil; candidates = []; reports = nil; budget = nil; budgetError = nil; categories = []; payees = []; payeeMappings = []; accounts = []; accountBalances = [:]; reviewTransfers = []; notice = nil; bankSyncResults = []
     }
     private func reset() { signedIn = false; workspaces = []; clearWorkspace() }
 }

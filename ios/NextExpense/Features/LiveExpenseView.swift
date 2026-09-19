@@ -15,6 +15,7 @@ struct LiveExpenseView: View {
             else {
                 TabView {
                     budgetTab
+                    accountsTab
                     reportsTab
                     NavigationStack {
                         List {
@@ -105,6 +106,67 @@ struct LiveExpenseView: View {
             }
         }
         .tabItem { Label("Budget", systemImage: "chart.pie.fill") }
+    }
+
+    private var accountsTab: some View {
+        NavigationStack {
+            List {
+                messages
+                ForEach(["Personal", "Company", "Real estate", "Pension"], id: \.self) { group in
+                    let rows = store.accounts.filter { !$0.closed && $0.group == group }
+                    if !rows.isEmpty { accountSection(group, accounts: rows) }
+                }
+                let closed = store.accounts.filter(\.closed)
+                if !closed.isEmpty { accountSection("Closed accounts", accounts: closed) }
+                if store.accounts.isEmpty && !store.busy && store.errorMessage == nil {
+                    ContentUnavailableView("No accounts yet", systemImage: "wallet.pass", description: Text("Create an account in the web app."))
+                }
+            }
+            .navigationTitle("Accounts")
+            .refreshable { await store.refresh() }
+            .toolbar { toolbar }
+        }
+        .tabItem { Label("Accounts", systemImage: "wallet.pass.fill") }
+    }
+
+    private func accountSection(_ title: String, accounts: [ReviewAccount]) -> some View {
+        Section {
+            ForEach(accounts) { account in
+                HStack(spacing: 12) {
+                    Circle().fill(accountColor(account.color)).frame(width: 10, height: 10)
+                        .accessibilityHidden(true)
+                    Text(account.name).foregroundStyle(.primary)
+                    Spacer()
+                    if let balance = store.accountBalances[account.id] {
+                        Text(formattedMoney(balance, currency: account.currency))
+                            .monospacedDigit().fontWeight(.semibold)
+                            .foregroundStyle(balance < 0 ? Color.red : Color.primary)
+                    } else { Text("—").foregroundStyle(.secondary) }
+                }
+                .padding(.vertical, 2)
+            }
+        } header: {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(accountGroupSummary(accounts)).textCase(nil)
+            }
+        }
+    }
+
+    private func accountGroupSummary(_ accounts: [ReviewAccount]) -> String {
+        let currencies = Set(accounts.map(\.currency))
+        if currencies.count == 1, let currency = currencies.first,
+           accounts.allSatisfy({ store.accountBalances[$0.id] != nil }) {
+            return formattedMoney(accounts.reduce(0) { $0 + (store.accountBalances[$1.id] ?? 0) }, currency: currency)
+        }
+        return "\(accounts.count) \(accounts.count == 1 ? "account" : "accounts")"
+    }
+
+    private func accountColor(_ value: String?) -> Color {
+        let raw = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#", with: "")
+        let hex = raw.count == 6 ? UInt32(raw, radix: 16) ?? 0x5D7D91 : 0x5D7D91
+        return Color(red: Double((hex >> 16) & 255) / 255, green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255)
     }
 
     private var reportsTab: some View {

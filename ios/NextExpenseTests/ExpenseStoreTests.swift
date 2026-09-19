@@ -256,7 +256,15 @@ final class LiveReviewTests: XCTestCase {
                 }
                 return (200, [:], matchingFixtures ? [["id": mapping.uuidString, "source_name": "Market", "payee_id": payee.uuidString, "match_type": "exact"]] : [])
             case "bank_connections": return (200, [:], noBanks ? [] : ([["account_id": account.uuidString]] + (twoBanks ? [["account_id": transaction.uuidString]] : [])))
-            case "accounts": return (200, [:], [["id": account.uuidString, "name": "Main", "currency": "SEK", "closed": false, "scope": "Personal"]] + (twoBanks ? [["id": transaction.uuidString, "name": "Second", "currency": "SEK", "closed": false, "scope": "Personal"]] : []))
+            case "accounts": return (200, [:], [[
+                "id": account.uuidString, "name": "Main", "currency": "SEK", "closed": false,
+                "scope": "Personal", "balance_sheet_group": "Personal", "pension": false,
+                "color": "#234e46", "sort_order": 0
+            ]] + (twoBanks ? [[
+                "id": transaction.uuidString, "name": "Second", "currency": "SEK", "closed": false,
+                "scope": "Company", "balance_sheet_group": "Company", "pension": false,
+                "color": "#d68853", "sort_order": 1
+            ]] : []))
             case "bank_import_candidates":
                 if request.httpMethod == "PATCH" {
                     return (rejectStatus, [:], rejectStatus == 200 ? (rejectRows ? [["id": candidate.uuidString]] : []) : ["message": "Write failed"])
@@ -308,6 +316,26 @@ final class LiveReviewTests: XCTestCase {
             request.url?.lastPathComponent == "transactions" && (URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []).contains { $0.name == "and" && ($0.value ?? "").contains("transaction_date.lt.") }
         }
         XCTAssertEqual(monthly.count, 1)
+    }
+
+    func testAccountsLoadWithWebGroupsAndCurrentBalances() async throws {
+        twoBanks = true
+        let store = await signedInStore()
+        XCTAssertEqual(store.accounts.map(\.name), ["Main", "Second"])
+        XCTAssertEqual(store.accounts.map(\.group), ["Personal", "Company"])
+        XCTAssertEqual(store.accountBalances[account], 10000)
+        XCTAssertEqual(store.accountBalances[transaction], 20000)
+
+        let legacyProperty = ReviewAccount(
+            id: UUID(), name: "Apartment", currency: "EUR", closed: false,
+            scope: "Personal", balanceSheetGroup: nil, pension: false, color: nil, sortOrder: nil
+        )
+        XCTAssertEqual(legacyProperty.group, "Real estate")
+        let legacyPension = ReviewAccount(
+            id: UUID(), name: "Retirement", currency: "EUR", closed: false,
+            scope: "Personal", balanceSheetGroup: nil, pension: true, color: nil, sortOrder: nil
+        )
+        XCTAssertEqual(legacyPension.group, "Pension")
     }
 
     func testBankSyncRefreshesReportsAndReviewAndUsesOnlyJWT() async throws {

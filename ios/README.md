@@ -99,16 +99,19 @@ the Auth endpoint; only the JWT goes to the Data API. Redirects are refused.
 Sign-out clears in-memory data and local credentials even if server revocation
 fails, and reports that failure. RLS remains authoritative for workspace access.
 
-The app opens on a read-only Budget tab, followed by Reports and Review.
+The app opens on a read-only Budget tab, followed by Accounts, Reports and Review.
 Budget shows the current month by saved category group and category order, with
 saved colors/icons, net spending, monthly overrides (or default budgets), and
 uncapped usage percentages. Tap a category to see its current-month transactions;
 there are no editing controls. Hidden categories are excluded. The month appears discreetly beneath the compact
 Budget navigation title.
+Accounts mirrors the web app's Personal, Company, Real estate and Pension groups,
+followed by Closed accounts. Each row shows its current balance in the account's
+own currency; same-currency groups also show a subtotal.
 Bank sync results can be hidden using **Hide** and restored using **Show bank sync
 results** in the account menu; this preference persists across launches.
 
-The shipped UI contains real Budget, Reports and Review tabs. The original Overview,
+The shipped UI contains real Budget, Accounts, Reports and Review tabs. The original Overview,
 Accounts, and demo store remain available for SwiftUI previews and unit tests;
 they are not presented as live financial data. Bank linking and reconnection
 remain on the website. Google-only accounts do not need to create a password.
