@@ -409,7 +409,7 @@ final class LiveReviewTests: XCTestCase {
         ["id": id.uuidString, "account_id": account.uuidString, "transaction_date": "2026-09-12",
          "amount_minor": 2450, "currency": "SEK", "transaction_type": "expense", "payee_name": "Market",
          "payee_id": candidateHasPayee ? payee.uuidString as Any : NSNull() as Any, "category_id": category.uuidString,
-         "memo": matchingFixtures ? "Market Barcelona purchase" : NSNull()]
+         "memo": NSNull(), "bank_memo": matchingFixtures ? "Market Barcelona purchase" : NSNull()]
     }
     private func signedInStore() async -> LiveExpenseStore {
         let store = LiveExpenseStore(api: makeAPI())
@@ -426,6 +426,20 @@ final class LiveReviewTests: XCTestCase {
         XCTAssertEqual(store.reports?.netWorth, 10000)
         XCTAssertEqual(store.reports?.currency, "SEK")
         XCTAssertNotNil(vault.saved)
+    }
+    func testApprovalSavesEditableMemoWithoutChangingBankMemo() async throws {
+        matchingFixtures = true
+        candidateHasPayee = true
+        let store = await signedInStore()
+        let item = try XCTUnwrap(store.candidates.first)
+        XCTAssertEqual(item.bankMemo, "Market Barcelona purchase")
+
+        try await store.approve(item, payeeId: payee, categoryId: category, memo: "iPhone 17 256GB")
+
+        let update = try XCTUnwrap(requests.first(where: { $0.url?.lastPathComponent == "bank_import_candidates" && $0.httpMethod == "PATCH" }))
+        let body = try jsonBody(update)
+        XCTAssertEqual(body["memo"] as? String, "iPhone 17 256GB")
+        XCTAssertNil(body["bank_memo"])
     }
     func testFailedApprovalKeepsCandidateAndDoesNotRetryMutation() async throws {
         let store = await signedInStore()
@@ -514,7 +528,7 @@ final class LiveReviewTests: XCTestCase {
         let missingCategory = ReviewTransaction(
             id: importedPayee.id, accountId: importedPayee.accountId, transactionDate: importedPayee.transactionDate,
             amountMinor: importedPayee.amountMinor, currency: importedPayee.currency, transactionType: importedPayee.transactionType,
-            payeeName: importedPayee.payeeName, payeeId: nil, categoryId: nil, memo: importedPayee.memo
+            payeeName: importedPayee.payeeName, payeeId: nil, categoryId: nil, memo: importedPayee.memo, bankMemo: importedPayee.bankMemo
         )
         XCTAssertFalse(store.canSwipeApprove(missingCategory))
         XCTAssertEqual(store.reviewReadiness(for: missingCategory), .missingCategory)
@@ -522,14 +536,14 @@ final class LiveReviewTests: XCTestCase {
         let missingPayee = ReviewTransaction(
             id: importedPayee.id, accountId: importedPayee.accountId, transactionDate: importedPayee.transactionDate,
             amountMinor: importedPayee.amountMinor, currency: importedPayee.currency, transactionType: importedPayee.transactionType,
-            payeeName: nil, payeeId: nil, categoryId: importedPayee.categoryId, memo: importedPayee.memo
+            payeeName: nil, payeeId: nil, categoryId: importedPayee.categoryId, memo: importedPayee.memo, bankMemo: importedPayee.bankMemo
         )
         XCTAssertEqual(store.reviewReadiness(for: missingPayee), .missingPayee)
 
         let missingBoth = ReviewTransaction(
             id: importedPayee.id, accountId: importedPayee.accountId, transactionDate: importedPayee.transactionDate,
             amountMinor: importedPayee.amountMinor, currency: importedPayee.currency, transactionType: importedPayee.transactionType,
-            payeeName: nil, payeeId: nil, categoryId: nil, memo: importedPayee.memo
+            payeeName: nil, payeeId: nil, categoryId: nil, memo: importedPayee.memo, bankMemo: importedPayee.bankMemo
         )
         XCTAssertEqual(store.reviewReadiness(for: missingBoth), .missingPayeeAndCategory)
 
@@ -784,7 +798,7 @@ final class LiveBudgetTests: XCTestCase {
             MobileBudgetCategory(id: salary, name: "Salary", categoryGroupId: nil, sortOrder: 1, defaultBudgetMinor: 100000, color: nil, icon: "briefcase.fill", reportGroup: "personal_income", hidden: false)
         ]
         func transaction(_ category: UUID, _ amount: Int, _ type: String, _ date: String = "2026-09-10", _ currency: String = "EUR") -> ReviewTransaction {
-            ReviewTransaction(id: UUID(), accountId: account, transactionDate: date, amountMinor: amount, currency: currency, transactionType: type, payeeName: "Payee", payeeId: nil, categoryId: category, memo: nil)
+            ReviewTransaction(id: UUID(), accountId: account, transactionDate: date, amountMinor: amount, currency: currency, transactionType: type, payeeName: "Payee", payeeId: nil, categoryId: category, memo: nil, bankMemo: nil)
         }
         let activity = [transaction(food, 10000, "expense"), transaction(food, 2000, "income"), transaction(food, 50000, "expense", "2026-09-12", "SEK"), transaction(food, 99999, "expense", "2026-08-31"), transaction(food, 99999, "expense", "2026-10-01"), transaction(food, 99999, "transfer"), transaction(salary, 100000, "income"), transaction(salary, 5000, "expense")]
         let rates = [ReportRate(baseCurrency: "EUR", quoteCurrency: "SEK", rateHundredths: 1000, rateDate: "2026-09-30")]

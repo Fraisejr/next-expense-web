@@ -292,6 +292,7 @@ const transactions = archive.transactions.filter((transaction) => localDate(tran
     transaction_type: transaction.transfer ? 'transfer' : transaction.income ? 'income' : 'expense',
     payee_name: transaction.payeeName ?? null,
     memo: transaction.memo ?? null,
+    bank_memo: transaction.memo ?? null,
     provider_transaction_id: transaction.externalId ?? null,
     posted: transaction.posted,
     reconciled: transaction.reconciled,

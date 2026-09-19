@@ -40,6 +40,8 @@ key, or GoCardless secret to the app.
 4. Optionally save a changed category as the payee default and remember a
    manually selected payee as an alternative name. New mappings immediately
    rematch the other pending imports for that account.
+   The editable memo can describe the purchase; the original bank memo remains
+   visible and is stored separately.
    **Recheck payees** at the top of Review reloads all current mappings and
    reprocesses every unmatched pending transaction across accounts.
 5. Approve. iOS calls the same `approve_bank_import_candidate` RPC as the web

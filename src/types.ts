@@ -71,6 +71,7 @@ export type BankImportCandidate = {
   payeeId?: string
   categoryId?: string
   note?: string
+  bankMemo?: string
   posted: boolean
 }
 
@@ -187,6 +188,7 @@ export type Transaction = {
   payeeId?: string
   debtorId?: string
   note?: string
+  bankMemo?: string
   amountMinor: number
   destinationAmountMinor?: number
   type: 'expense' | 'income' | 'transfer' | 'opening_balance' | 'balance_adjustment'

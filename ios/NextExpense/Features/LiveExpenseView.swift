@@ -389,6 +389,7 @@ private struct LiveCandidateView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var payeeId: UUID?
     @State private var categoryId: UUID?
+    @State private var memo: String
     @State private var error: String?
     @State private var rejecting = false
     @State private var applyingSuggestion = false
@@ -402,6 +403,7 @@ private struct LiveCandidateView: View {
         self.candidate = candidate
         _payeeId = State(initialValue: candidate.payeeId)
         _categoryId = State(initialValue: store.categories.contains(where: { $0.id == candidate.categoryId }) ? candidate.categoryId : nil)
+        _memo = State(initialValue: candidate.memo ?? "")
         let payee = store.payees.first(where: { $0.id == candidate.payeeId })
         _rememberCategory = State(initialValue: candidate.payeeId != nil && payee?.defaultCategoryId != candidate.categoryId)
         _transferAccountId = State(initialValue: store.eligibleTransferAccounts(for: candidate).first?.id)
@@ -415,7 +417,9 @@ private struct LiveCandidateView: View {
                     LabeledContent("Type", value: candidate.transactionType.capitalized)
                     LabeledContent("Date", value: candidate.transactionDate)
                     Text(candidate.payeeName ?? "Unknown payee")
-                    if let memo = candidate.memo { Text(memo).foregroundStyle(.secondary) }
+                    if let bankMemo = candidate.bankMemo, !bankMemo.isEmpty {
+                        LabeledContent("Bank memo", value: bankMemo).foregroundStyle(.secondary)
+                    }
                 }
                 Section("Review details") {
                     NavigationLink {
@@ -435,6 +439,8 @@ private struct LiveCandidateView: View {
                         Text("Select category").tag(nil as UUID?)
                         ForEach(store.categories) { Text($0.name).tag(Optional($0.id)) }
                     }
+                    TextField("What was this purchase for?", text: $memo, axis: .vertical)
+                        .lineLimit(1...4)
                     .onChange(of: categoryId) { _, nextCategoryId in
                         if let payeeId, let nextCategoryId,
                            store.payees.first(where: { $0.id == payeeId })?.defaultCategoryId != nextCategoryId { rememberCategory = true }
@@ -478,7 +484,7 @@ private struct LiveCandidateView: View {
                     Section("Possible transfer match") {
                         Button("Match existing transfer to \(suggestedAccount.name)") {
                             Task {
-                                do { try await store.approveAsTransfer(candidate, counterpartyAccountId: suggestedAccount.id); dismiss() }
+                            do { try await store.approveAsTransfer(candidate, counterpartyAccountId: suggestedAccount.id, memo: memo); dismiss() }
                                 catch { self.error = error.localizedDescription }
                             }
                         }
@@ -495,7 +501,7 @@ private struct LiveCandidateView: View {
                             Button("Post transfer") {
                                 guard let transferAccountId else { return }
                                 Task {
-                                    do { try await store.approveAsTransfer(candidate, counterpartyAccountId: transferAccountId); dismiss() }
+                                    do { try await store.approveAsTransfer(candidate, counterpartyAccountId: transferAccountId, memo: memo); dismiss() }
                                     catch { self.error = error.localizedDescription }
                                 }
                             }.disabled(transferAccountId == nil || store.busy)
@@ -507,7 +513,7 @@ private struct LiveCandidateView: View {
                     Button("Approve") {
                         Task {
                             do {
-                                try await store.approve(candidate, payeeId: payeeId, categoryId: categoryId,
+                                try await store.approve(candidate, payeeId: payeeId, categoryId: categoryId, memo: memo,
                                                        rememberCategory: rememberCategory,
                                                        rememberMapping: shouldOfferMapping && rememberMapping)
                                 dismiss()

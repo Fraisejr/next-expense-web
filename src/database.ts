@@ -46,6 +46,7 @@ function mapTransactionRows(transactionRows: Row[]): Transaction[] {
     payeeId: (row.payee_id as string | null) ?? undefined,
     debtorId: (row.debtor_id as string | null) ?? undefined,
     note: (row.memo as string | null) ?? undefined,
+    bankMemo: (row.bank_memo as string | null) ?? undefined,
     amountMinor: number(row.amount_minor),
     destinationAmountMinor: row.destination_amount_minor ? number(row.destination_amount_minor) : undefined,
     type: row.transaction_type as Transaction['type'],
@@ -109,8 +110,8 @@ export async function loadAllTransactions(workspaceId: string, retriesRemaining 
 const transactionCacheDatabase = 'next-expense-cache'
 const transactionCacheStore = 'transaction-history'
 const transactionCacheMaxAgeMs = 60 * 60 * 1000
-// Version 3 invalidates caches that may contain only the newest transaction pages.
-const transactionCacheVersion = 3
+// Version 4 adds the preserved bank memo to cached transaction rows.
+const transactionCacheVersion = 4
 
 function openTransactionCache(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(null)
@@ -285,7 +286,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
     loadTransactionPage(workspaceId, { startDate: monthStart, endDate: monthEnd }),
     neon.rpc('workspace_account_balances', { p_workspace_id: workspaceId }),
     allRows('bank_connections', 'id,account_id,status,last_synced_at,metadata'),
-    neon.from('bank_import_candidates').select('id,account_id,transaction_date,amount_minor,currency,transaction_type,payee_name,payee_id,category_id,memo,posted,status').eq('workspace_id', workspaceId).eq('status', 'pending').order('transaction_date', { ascending: false }),
+    neon.from('bank_import_candidates').select('id,account_id,transaction_date,amount_minor,currency,transaction_type,payee_name,payee_id,category_id,memo,bank_memo,posted,status').eq('workspace_id', workspaceId).eq('status', 'pending').order('transaction_date', { ascending: false }),
     neon.rpc('list_unused_payee_ids', { p_workspace_id: workspaceId }),
   ])
   if (workspaceResult.error) throw workspaceResult.error
@@ -440,6 +441,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
       payeeId: (row.payee_id as string | null) ?? undefined,
       categoryId: (row.category_id as string | null) ?? undefined,
       note: (row.memo as string | null) ?? undefined,
+      bankMemo: (row.bank_memo as string | null) ?? undefined,
       posted: Boolean(row.posted),
     }))
   const storedYearlyGoals = workspace.yearly_spending_goals && typeof workspace.yearly_spending_goals === 'object' && !Array.isArray(workspace.yearly_spending_goals)
@@ -793,9 +795,9 @@ export async function rejectBankImportCandidate(workspaceId: string, candidateId
   if (error) throw error
 }
 
-export async function updateBankImportCandidatePayee(workspaceId: string, candidateId: string, payeeId: string | null) {
+export async function updateBankImportCandidateDetails(workspaceId: string, candidateId: string, payeeId: string | null, memo: string) {
   const { data, error } = await neon.from('bank_import_candidates')
-    .update({ payee_id: payeeId })
+    .update({ payee_id: payeeId, memo: memo.normalize('NFKC').trim() || null })
     .eq('workspace_id', workspaceId)
     .eq('id', candidateId)
     .eq('status', 'pending')
@@ -958,7 +960,7 @@ export async function ensurePayees(workspaceId: string, sourceNames: string[]): 
 
 export async function rematchPendingBankImportPayees(workspaceId: string, accountId: string) {
   const { data, error } = await neon.from('bank_import_candidates')
-    .select('id,payee_name,memo,payee_id')
+    .select('id,payee_name,bank_memo,payee_id')
     .eq('workspace_id', workspaceId)
     .eq('account_id', accountId)
     .eq('status', 'pending')
@@ -966,7 +968,7 @@ export async function rematchPendingBankImportPayees(workspaceId: string, accoun
   if (error) throw error
 
   const candidates = (data ?? []) as unknown as Row[]
-  const sourceNames = [...new Set(candidates.flatMap((candidate) => [candidate.payee_name, candidate.memo])
+  const sourceNames = [...new Set(candidates.flatMap((candidate) => [candidate.payee_name, candidate.bank_memo])
     .map((value) => String(value ?? '').normalize('NFKC').trim())
     .filter(Boolean))]
   const resolvedPayees = await findPayees(workspaceId, sourceNames)
@@ -978,7 +980,7 @@ export async function rematchPendingBankImportPayees(workspaceId: string, accoun
   let matched = 0
   for (const candidate of candidates) {
     const payee = payeeBySource.get(normalizedPayeeName(String(candidate.payee_name ?? '')))
-      ?? payeeBySource.get(normalizedPayeeName(String(candidate.memo ?? '')))
+      ?? payeeBySource.get(normalizedPayeeName(String(candidate.bank_memo ?? '')))
     if (!payee) continue
     const update = await neon.from('bank_import_candidates')
       .update({
@@ -1029,7 +1031,7 @@ async function assignPayeeMappingWithoutRpc(workspaceId: string, sourceName: str
   const pageSize = 1000
   for (let start = 0; ; start += pageSize) {
     const { data: transactionRows, error } = await neon.from('transactions')
-      .select('id,payee_name,memo,category_id')
+      .select('id,payee_name,bank_memo,category_id')
       .eq('workspace_id', workspaceId)
       .is('payee_id', null)
       .in('transaction_type', ['expense', 'income'])
@@ -1038,7 +1040,7 @@ async function assignPayeeMappingWithoutRpc(workspaceId: string, sourceName: str
     if (error) throw error
     const rows = (transactionRows ?? []) as unknown as Row[]
     for (const row of rows) {
-      const description = String(row.payee_name ?? '').trim() || String(row.memo ?? '').trim() || 'Unknown payee'
+      const description = String(row.payee_name ?? '').trim() || String(row.bank_memo ?? '').trim() || 'Unknown payee'
       if (normalizedPayeeName(description) !== normalizedName) continue
       matchedIds.push(String(row.id))
       if (!row.category_id) uncategorizedIds.push(String(row.id))

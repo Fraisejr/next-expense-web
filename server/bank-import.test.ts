@@ -12,7 +12,7 @@ const provider = '10000000-0000-0000-0000-000000000003'
 const requisition = '10000000-0000-0000-0000-000000000004'
 const config = { dataApiUrl: 'https://data.example/rest/v1', appUrl: 'https://expense.example' }
 type Row = Record<string, unknown>
-const transaction = (id: string, amount = '-12.34') => ({ internalTransactionId: id, bookingDate: '2026-09-13', transactionAmount: { amount, currency: 'SEK' }, creditorName: 'Market' })
+const transaction = (id: string, amount = '-12.34') => ({ internalTransactionId: id, bookingDate: '2026-09-13', transactionAmount: { amount, currency: 'SEK' }, creditorName: 'Market', remittanceInformationUnstructured: 'Card purchase' })
 
 function fixture(t: TestContext) {
   const db: Record<string, Row[]> = {
@@ -82,6 +82,8 @@ test('native endpoint persists review imports and balances, and repeat syncs do 
   assert.equal(first.status, 200, JSON.stringify(first.body))
   assert.equal((first.body.diagnostic as Row).staged, 1)
   assert.equal(db.bank_import_candidates.length, 1)
+  assert.equal(db.bank_import_candidates[0].bank_memo, 'Card purchase')
+  assert.equal(db.bank_import_candidates[0].memo, null)
   assert.equal(db.transactions.length, 0, 'server-read review mode overrides client')
   assert.equal((db.bank_connections[0].metadata as Row).sync_lease, undefined)
   assert.equal(((db.bank_connections[0].metadata as Row).bank_balance as Row).amount_minor, 10000)
@@ -121,6 +123,8 @@ test('automatic accounts import with a known category on the server', async t =>
   assert.equal((await sync()).status, 200)
   assert.equal(db.transactions.length, 1)
   assert.equal(db.transactions[0].category_id, 'food')
+  assert.equal(db.transactions[0].bank_memo, 'Card purchase')
+  assert.equal(db.transactions[0].memo, null)
   assert.equal(db.periods.length, 1)
   assert.equal(db.bank_import_candidates.length, 0)
 })

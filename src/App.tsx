@@ -7,7 +7,7 @@ import {
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTimeCode, createTimesheetClient, createTransaction, deleteAllUnusedPayees, deleteBudget, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadRevenueRecognitionEntries, loadTimeComments, loadTimeEntries, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveTimeCodeOrder, saveTimeComment, saveTimeEntry, saveTimesheetClientForecast, saveTimesheetClientRate, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidatePayee, updateBankImportMode, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTimeCode, updateTimesheetClient, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type LoadedWorkspace, type WorkspaceBackup } from './database'
+import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTimeCode, createTimesheetClient, createTransaction, deleteAllUnusedPayees, deleteBudget, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadRevenueRecognitionEntries, loadTimeComments, loadTimeEntries, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveTimeCodeOrder, saveTimeComment, saveTimeEntry, saveTimesheetClientForecast, saveTimesheetClientRate, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidateDetails, updateBankImportMode, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTimeCode, updateTimesheetClient, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
 import { convertMinor } from './currency'
 import { calculateRevenueForecast, earnedWorkMonthRange, type RevenueForecast } from './revenue'
@@ -1181,7 +1181,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
-  async function decideBankImportCandidate(candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory = false, payeeId?: string | null, rememberMapping = false, bankDescription = '', createdPayee = false, defaultAccountId = '') {
+  async function decideBankImportCandidate(candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory = false, payeeId?: string | null, rememberMapping = false, bankDescription = '', createdPayee = false, defaultAccountId = '', memo = '') {
     try {
       setSyncError('')
       setReviewingCandidateId(candidateId)
@@ -1194,7 +1194,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           resolvedPayeeId = createdPayee.id
           payeeCreatedDuringApproval = true
         }
-        await updateBankImportCandidatePayee(workspace.workspaceId, candidateId, resolvedPayeeId)
+        await updateBankImportCandidateDetails(workspace.workspaceId, candidateId, resolvedPayeeId, memo)
         await approveBankImportCandidate(workspace.workspaceId, candidateId, categoryId, rememberCategory)
         if ((createdPayee || payeeCreatedDuringApproval) && defaultAccountId) {
           try {
@@ -1246,10 +1246,12 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     }
   }
 
-  async function postBankImportAsTransfer(candidateId: string, counterpartyAccountId: string) {
+  async function postBankImportAsTransfer(candidateId: string, counterpartyAccountId: string, memo: string) {
     try {
       setSyncError('')
       setReviewingCandidateId(candidateId)
+      const candidate = data.bankImportCandidates.find((item) => item.id === candidateId)
+      await updateBankImportCandidateDetails(workspace.workspaceId, candidateId, candidate?.payeeId ?? null, memo)
       await approveBankImportCandidateAsTransfer(workspace.workspaceId, candidateId, counterpartyAccountId)
       void clearTransactionCache(workspace.workspaceId)
       const refreshed = await reloadWorkspaceSnapshot()
@@ -2297,7 +2299,7 @@ function TransactionsPage({ transactions, allTransactions, accounts, categories,
     const sourceAccount = accounts.find((account) => account.id === transaction.accountId)?.name ?? ''
     const destinationAccount = accounts.find((account) => account.id === transaction.toAccountId)?.name ?? ''
     const category = categories.find((item) => item.id === transaction.categoryId)?.name ?? ''
-    return !normalizedSearch || `${transaction.payee} ${transaction.payeeRaw ?? ''} ${transaction.note ?? ''} ${category} ${sourceAccount} ${destinationAccount} ${transaction.date}`.toLocaleLowerCase('en').includes(normalizedSearch)
+    return !normalizedSearch || `${transaction.payee} ${transaction.payeeRaw ?? ''} ${transaction.note ?? ''} ${transaction.bankMemo ?? ''} ${category} ${sourceAccount} ${destinationAccount} ${transaction.date}`.toLocaleLowerCase('en').includes(normalizedSearch)
   })
   const pageCount = Math.max(1, Math.ceil(filtered.length / detailTransactionPageSize))
   const displayedTransactions = view === 'all'
@@ -3577,7 +3579,7 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
   return <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}><div className="modal"><div className="modal-heading"><div><span className="eyebrow">Next Expense</span><h2>{title}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></div>{children}</div></div>
 }
 
-function AccountDetailPage({ account, transactions, allTransactions, candidates, categories, payees, mappings, accounts, historyLoaded, historyLoading, onRequestHistory, onBack, onSelectAccount, onEditAccount, onAdjustBalance, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, onPostTransfer, onRematchPayees, onCreatePayee, onPromoteMapping, onAddAlternativeName, onUnhideCategory, onEditTransaction, reviewingCandidateId, rematchingPayees, syncing, syncNotice }: { account: Account; transactions: Transaction[]; allTransactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onBack: () => void; onSelectAccount: (id: string) => void; onEditAccount: () => void; onAdjustBalance: () => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string) => void; onPostTransfer: (candidateId: string, counterpartyAccountId: string) => Promise<void>; onRematchPayees: () => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onAddAlternativeName: (sourceName: string, payeeId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void>; onEditTransaction: (transaction: Transaction) => void; reviewingCandidateId: string; rematchingPayees: boolean; syncing: boolean; syncNotice: string }) {
+function AccountDetailPage({ account, transactions, allTransactions, candidates, categories, payees, mappings, accounts, historyLoaded, historyLoading, onRequestHistory, onBack, onSelectAccount, onEditAccount, onAdjustBalance, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, onPostTransfer, onRematchPayees, onCreatePayee, onPromoteMapping, onAddAlternativeName, onUnhideCategory, onEditTransaction, reviewingCandidateId, rematchingPayees, syncing, syncNotice }: { account: Account; transactions: Transaction[]; allTransactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onBack: () => void; onSelectAccount: (id: string) => void; onEditAccount: () => void; onAdjustBalance: () => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string, memo?: string) => void; onPostTransfer: (candidateId: string, counterpartyAccountId: string, memo: string) => Promise<void>; onRematchPayees: () => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onAddAlternativeName: (sourceName: string, payeeId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void>; onEditTransaction: (transaction: Transaction) => void; reviewingCandidateId: string; rematchingPayees: boolean; syncing: boolean; syncNotice: string }) {
   return <div className="page-content narrow-page entity-page">
     <div className="entity-page-toolbar">
       <button className="entity-back" onClick={onBack}><ChevronLeft size={16} />All accounts</button>
@@ -3645,12 +3647,13 @@ function CategorySearchPicker({ ariaLabel, value, categories, allowEmpty = false
   </div>
 }
 
-function BankImportReview({ account, accounts, transactions, candidates, categories, payees, mappings, reviewingCandidateId, rematchingPayees, onModeChange, onReview, onPostTransfer, onRematchPayees, onCreatePayee, onPromoteMapping, onAddAlternativeName, onUnhideCategory }: { account: Account; accounts: Account[]; transactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; reviewingCandidateId: string; rematchingPayees: boolean; onModeChange: (mode: 'review' | 'automatic') => void; onReview: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string) => void; onPostTransfer: (candidateId: string, counterpartyAccountId: string) => Promise<void>; onRematchPayees: () => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onAddAlternativeName: (sourceName: string, payeeId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void> }) {
+function BankImportReview({ account, accounts, transactions, candidates, categories, payees, mappings, reviewingCandidateId, rematchingPayees, onModeChange, onReview, onPostTransfer, onRematchPayees, onCreatePayee, onPromoteMapping, onAddAlternativeName, onUnhideCategory }: { account: Account; accounts: Account[]; transactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; reviewingCandidateId: string; rematchingPayees: boolean; onModeChange: (mode: 'review' | 'automatic') => void; onReview: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string, memo?: string) => void; onPostTransfer: (candidateId: string, counterpartyAccountId: string, memo: string) => Promise<void>; onRematchPayees: () => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onAddAlternativeName: (sourceName: string, payeeId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void> }) {
   const mode = account.bankImportMode ?? 'review'
   const [categoryAssignments, setCategoryAssignments] = useState<Record<string, string>>({})
   const [payeeAssignments, setPayeeAssignments] = useState<Record<string, string>>({})
   const [rememberChoices, setRememberChoices] = useState<Record<string, boolean>>({})
   const [mappingChoices, setMappingChoices] = useState<Record<string, boolean>>({})
+  const [memoAssignments, setMemoAssignments] = useState<Record<string, string>>({})
   const [createdPayeeIds, setCreatedPayeeIds] = useState<Record<string, string>>({})
   const [promotingMappingId, setPromotingMappingId] = useState('')
   const [addingAlternativeNameId, setAddingAlternativeNameId] = useState('')
@@ -3682,10 +3685,12 @@ function BankImportReview({ account, accounts, transactions, candidates, categor
         const rememberMapping = mappingChoices[candidate.id] ?? true
         const selectedCategory = categories.find((category) => category.id === categoryId)
         const hiddenCategory = selectedCategory?.hidden ? selectedCategory : undefined
-        const distinctNote = candidate.note?.trim().toLocaleLowerCase('en') === candidate.payee.trim().toLocaleLowerCase('en') ? '' : candidate.note
+        const memo = memoAssignments[candidate.id] ?? candidate.note ?? ''
+        const bankMemo = candidate.bankMemo?.trim() ?? ''
+        const distinctBankMemo = bankMemo.toLocaleLowerCase('en') === candidate.payee.trim().toLocaleLowerCase('en') ? '' : bankMemo
         const suggestedMapping = (() => {
           if (payeeId) return undefined
-          const sourceTexts = [candidate.payee, candidate.note ?? ''].filter(Boolean)
+          const sourceTexts = [candidate.payee, candidate.bankMemo ?? ''].filter(Boolean)
           const candidates = mappings.flatMap((mapping) => mapping.matchType === 'exact' ? sourceTexts.filter((sourceText) => prefixMappingMatches(normalizedPayeeName(sourceText), normalizedPayeeName(mapping.sourceName))).map((sourceText) => ({ mapping, sourceText })) : []).sort((left, right) => normalizedPayeeName(right.mapping.sourceName).length - normalizedPayeeName(left.mapping.sourceName).length)
           if (!candidates.length) return undefined
           const longestLength = normalizedPayeeName(candidates[0].mapping.sourceName).length
@@ -3710,7 +3715,7 @@ function BankImportReview({ account, accounts, transactions, candidates, categor
         const existingTransferCounterpartyId = existingTransfer ? (candidate.type === 'expense' ? existingTransfer.toAccountId : existingTransfer.accountId) : undefined
         const existingTransferCounterparty = accounts.find((item) => item.id === existingTransferCounterpartyId)
         return <div className="bank-review-row" key={candidate.id}>
-          <div className="bank-review-description"><strong>{selectedPayee?.name ?? candidate.payee}{candidate.posted ? null : <em className="pending-badge">Pending</em>}</strong><span>{formatShortDate(candidate.date)} · {selectedPayee ? `Bank: ${candidate.payee}` : 'Bank description'}{distinctNote ? ` · ${distinctNote}` : ''}</span><div className="bank-review-description-actions"><em className={selectedPayee ? 'payee-match-badge matched' : 'payee-match-badge'}>{selectedPayee ? 'Matched payee' : 'New payee on approval'}</em>{!transferMode && existingTransfer && existingTransferCounterpartyId && existingTransferCounterparty ? <button type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => void onPostTransfer(candidate.id, existingTransferCounterpartyId)}><ArrowLeftRight size={12} />Match existing transfer to {existingTransferCounterparty.name}</button> : !transferMode && eligibleTransferAccounts.length > 0 && <button type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => setTransferCandidateId(candidate.id)}><ArrowLeftRight size={12} />Post as transfer</button>}</div></div>
+          <div className="bank-review-description"><strong>{selectedPayee?.name ?? candidate.payee}{candidate.posted ? null : <em className="pending-badge">Pending</em>}</strong><span>{formatShortDate(candidate.date)} · {selectedPayee ? `Bank: ${candidate.payee}` : 'Bank description'}{distinctBankMemo ? ` · ${distinctBankMemo}` : ''}</span><div className="bank-review-description-actions"><em className={selectedPayee ? 'payee-match-badge matched' : 'payee-match-badge'}>{selectedPayee ? 'Matched payee' : 'New payee on approval'}</em>{!transferMode && existingTransfer && existingTransferCounterpartyId && existingTransferCounterparty ? <button type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => void onPostTransfer(candidate.id, existingTransferCounterpartyId, memo)}><ArrowLeftRight size={12} />Match existing transfer to {existingTransferCounterparty.name}</button> : !transferMode && eligibleTransferAccounts.length > 0 && <button type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => setTransferCandidateId(candidate.id)}><ArrowLeftRight size={12} />Post as transfer</button>}</div></div>
           <b className={candidate.type === 'income' ? 'positive' : ''}>{candidate.type === 'income' ? '+' : '−'}{formatMoney(candidate.amountMinor, candidate.currency)}</b>
           {transferMode ? <div className="bank-review-transfer-choice">
             <label><span>{candidate.type === 'expense' ? 'Transfer to account' : 'Transfer from account'}</span><select aria-label={`${candidate.type === 'expense' ? 'Destination' : 'Source'} account for ${candidate.payee}`} value={transferAccountId} onChange={(event) => setTransferAccountAssignments((current) => ({ ...current, [candidate.id]: event.target.value }))}>{eligibleTransferAccounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
@@ -3735,7 +3740,7 @@ function BankImportReview({ account, accounts, transactions, candidates, categor
             }} />
             <span className="payee-default-summary">Default category: {payeeDefaultCategory ? <CategoryLabel category={payeeDefaultCategory} /> : 'None'}</span>
             {payeeDefaultCategory && payeeDefaultCategory.id !== categoryId && !payeeDefaultCategory.hidden && <button type="button" onClick={() => setCategoryAssignments((current) => ({ ...current, [candidate.id]: payeeDefaultCategory.id }))}>Use default</button>}
-            {suggestedMapping && suggestedPayee && <div className="prefix-match-suggestion"><Sparkles size={13} /><p><strong>Possible match: {suggestedPayee.name}</strong><span>“{suggestedMapping.mapping.sourceName}” matches the start of the {suggestedMapping.sourceText === candidate.note ? 'bank memo' : 'bank description'}.</span><span className="prefix-match-actions"><button type="button" disabled={Boolean(promotingMappingId || addingAlternativeNameId)} onClick={async () => {
+            {suggestedMapping && suggestedPayee && <div className="prefix-match-suggestion"><Sparkles size={13} /><p><strong>Possible match: {suggestedPayee.name}</strong><span>“{suggestedMapping.mapping.sourceName}” matches the start of the {suggestedMapping.sourceText === candidate.bankMemo ? 'bank memo' : 'bank description'}.</span><span className="prefix-match-actions"><button type="button" disabled={Boolean(promotingMappingId || addingAlternativeNameId)} onClick={async () => {
               setPromotingMappingId(suggestedMapping.mapping.id)
               try {
                 await onPromoteMapping(suggestedMapping.mapping.id)
@@ -3774,13 +3779,14 @@ function BankImportReview({ account, accounts, transactions, candidates, categor
               }
             }}>{unhidingCategoryId === hiddenCategory.id ? 'unhiding…' : 'unhide this category'}</button>.</p></div>}
           </div></>}
+          <label className="bank-review-memo"><span>Memo <i>Optional</i></span><input value={memo} onChange={(event) => setMemoAssignments((current) => ({ ...current, [candidate.id]: event.target.value }))} placeholder="What was this purchase for?" /></label>
           <div className="bank-review-actions">
             {transferMode ? <>
               <button className="secondary-button" type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => setTransferCandidateId('')}><X size={14} />Cancel</button>
-              <button className="primary-button" type="button" disabled={!transferAccountId || Boolean(reviewingCandidateId)} onClick={() => void onPostTransfer(candidate.id, transferAccountId)}>{reviewingCandidateId === candidate.id ? <LoaderCircle className="spin-icon" size={14} /> : <ArrowLeftRight size={14} />}Post transfer</button>
+              <button className="primary-button" type="button" disabled={!transferAccountId || Boolean(reviewingCandidateId)} onClick={() => void onPostTransfer(candidate.id, transferAccountId, memo)}>{reviewingCandidateId === candidate.id ? <LoaderCircle className="spin-icon" size={14} /> : <ArrowLeftRight size={14} />}Post transfer</button>
             </> : <>
               <button className="secondary-button" type="button" disabled={Boolean(reviewingCandidateId)} onClick={() => onReview(candidate.id, 'reject')}><X size={14} />Reject</button>
-              <button className="primary-button" type="button" disabled={!categoryId || Boolean(hiddenCategory) || Boolean(reviewingCandidateId)} onClick={() => onReview(candidate.id, 'approve', categoryId, rememberCategory, payeeId || null, offerMapping && rememberMapping, candidate.payee, createdPayeeIds[candidate.id] === payeeId, account.id)}>{reviewingCandidateId === candidate.id ? <LoaderCircle className="spin-icon" size={14} /> : <Check size={14} />}Approve</button>
+              <button className="primary-button" type="button" disabled={!categoryId || Boolean(hiddenCategory) || Boolean(reviewingCandidateId)} onClick={() => onReview(candidate.id, 'approve', categoryId, rememberCategory, payeeId || null, offerMapping && rememberMapping, candidate.payee, createdPayeeIds[candidate.id] === payeeId, account.id, memo)}>{reviewingCandidateId === candidate.id ? <LoaderCircle className="spin-icon" size={14} /> : <Check size={14} />}Approve</button>
             </>}
           </div>
         </div>
@@ -4119,12 +4125,10 @@ function TransactionDetailsForm({ transaction, transactions, categories, payees,
     : !transaction.payeeId || payeeQuery.trim().localeCompare(transaction.payee, undefined, { sensitivity: 'accent' }) !== 0
   const memoChanged = memo.normalize('NFKC').trim() !== (transaction.note ?? '').normalize('NFKC').trim()
   const changed = date !== transaction.date || payeeChanged || categoryId !== transaction.categoryId || memoChanged
-  // `payeeRaw` is the counterparty/description supplied by the bank. Older
-  // imports can have that text only in `memo`, so retain it as a fallback.
-  // Prefer the raw payee because a remittance memo can be a payment reference
-  // that should not become a reusable payee alias.
+  // Keep matching anchored to immutable bank fields. The editable memo may
+  // describe the purchase and must never become a reusable payee alias.
   const bankDescription = transaction.payeeRaw?.trim() || ''
-  const bankMemo = transaction.note?.trim() || ''
+  const bankMemo = transaction.bankMemo?.trim() || ''
   const bankMappingSource = transaction.source === 'manual' ? '' : bankDescription || bankMemo
   const bankMappingLabel = bankDescription ? 'bank description' : 'bank memo'
   const mappingAlreadyExists = Boolean(selectedPayee && mappings.some((mapping) => mapping.payeeId === selectedPayee.id && normalizedPayeeName(mapping.sourceName) === normalizedPayeeName(bankMappingSource)))
@@ -4169,6 +4173,7 @@ function TransactionDetailsForm({ transaction, transactions, categories, payees,
     <div className="selected-payee-default"><div><span>Selected payee default</span><strong>{selectedPayee ? (defaultCategory ? `${defaultCategory.name}${defaultCategory.hidden ? ' (hidden)' : ''}` : 'No default category') : payeeQuery.trim() ? 'New payee · transaction category will become its default' : 'Choose or enter a payee'}</strong></div></div>
     <label><span>Category</span><CategorySearchPicker ariaLabel="Category" value={categoryId} categories={availableCategories} onChange={(nextCategoryId) => { setCategoryId(nextCategoryId); setSelectedRelatedIds([]); setRememberDefault(Boolean(selectedPayee && nextCategoryId && selectedPayee.defaultCategoryId !== nextCategoryId)) }} /></label>
     <label><span>Memo <i>Optional</i></span><input value={memo} onChange={(event) => setMemo(event.target.value)} placeholder="Add a note about this transaction" /></label>
+    {bankMemo && <p className="form-help">Original bank memo: {bankMemo}</p>}
     {selectedCategory?.hidden && <p className="category-edit-warning"><ShieldAlert size={15} />This category is hidden. Choose an active category to keep future reporting easier to understand.</p>}
     {selectedPayee && categoryId && selectedPayee.defaultCategoryId !== categoryId && <label className="remember-category transaction-default-choice"><input type="checkbox" checked={rememberDefault} onChange={(event) => setRememberDefault(event.target.checked)} />Make {selectedCategory?.name ?? 'this category'} the default for {selectedPayee.name}</label>}
     {offerMapping && <label className="remember-category transaction-default-choice transaction-mapping-choice"><input type="checkbox" checked={rememberMapping} onChange={(event) => setRememberMapping(event.target.checked)} /><span>Add the {bankMappingLabel} “{bankMappingSource}” as an alternative name for <strong>{targetPayeeName}</strong></span></label>}
@@ -4226,6 +4231,7 @@ function TransferDetailsForm({ transaction, accounts, onSubmit }: { transaction:
       <label><span>To account</span><select required value={destinationAccountId} onChange={(event) => setDestinationAccountId(event.target.value)}>{destinationAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}{account.closed ? ' (closed)' : ''}</option>)}</select></label>
     </div>
     <label><span>Memo <i>Optional</i></span><input value={memo} onChange={(event) => setMemo(event.target.value)} placeholder="Add a note about this transfer" /></label>
+    {transaction.bankMemo?.trim() && <p className="form-help">Original bank memo: {transaction.bankMemo.trim()}</p>}
     <p className="form-help">The amount, source account, and attached bank transaction IDs remain unchanged.</p>
     {error && <p className="auth-error" role="alert">{error}</p>}
     <button className="primary-button form-submit" type="submit" disabled={!changed || !destinationAccountId || saving}>{saving ? 'Saving…' : 'Save transfer'}<ArrowRight size={18} /></button>

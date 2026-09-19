@@ -57,6 +57,7 @@ struct ReviewTransaction: Decodable, Identifiable {
     let payeeId: UUID?
     let categoryId: UUID?
     let memo: String?
+    let bankMemo: String?
 }
 struct ReviewTransfer: Decodable, Identifiable {
     let id: UUID
@@ -103,7 +104,7 @@ final class LiveExpenseStore: ObservableObject {
     @Published private(set) var bankSyncResults: [MobileBankSyncResult] = []
     @Published private(set) var syncingBanks = false
     private let api: NeonAPI
-    private let columns = "id,account_id,transaction_date,amount_minor,currency,transaction_type,payee_name,payee_id,category_id,memo"
+    private let columns = "id,account_id,transaction_date,amount_minor,currency,transaction_type,payee_name,payee_id,category_id,memo,bank_memo"
 
     init(api: NeonAPI? = nil) { self.api = api ?? NeonAPI() }
 
@@ -217,7 +218,7 @@ final class LiveExpenseStore: ObservableObject {
         } catch { handle(error) }
     }
 
-    func approve(_ candidate: ReviewTransaction, payeeId: UUID?, categoryId: UUID?, rememberCategory: Bool = false, rememberMapping: Bool = false) async throws {
+    func approve(_ candidate: ReviewTransaction, payeeId: UUID?, categoryId: UUID?, memo: String? = nil, rememberCategory: Bool = false, rememberMapping: Bool = false) async throws {
         guard !busy, let workspace else { throw MobileAPIError(message: "Wait for the current request to finish.", status: 0) }
         guard let categoryId, categories.contains(where: { $0.id == categoryId }) else {
             throw MobileAPIError(message: "Choose an active category.", status: 0)
@@ -229,7 +230,7 @@ final class LiveExpenseStore: ObservableObject {
         errorMessage = nil
         defer { busy = false }
         do {
-            try await approveCandidate(candidate, payeeId: payeeId, categoryId: categoryId, rememberCategory: rememberCategory, rememberMapping: rememberMapping, workspace: workspace)
+            try await approveCandidate(candidate, payeeId: payeeId, categoryId: categoryId, memo: memo, rememberCategory: rememberCategory, rememberMapping: rememberMapping, workspace: workspace)
             notice = "Approved and saved."
             // The approval is committed even if refreshing the reports fails.
             do { budget = try await loadBudget(workspace.id); reports = try await loadReports(workspace.id) }
@@ -250,7 +251,7 @@ final class LiveExpenseStore: ObservableObject {
         for candidate in ready {
             guard let categoryId = candidate.categoryId else { continue }
             do {
-                try await approveCandidate(candidate, payeeId: candidate.payeeId, categoryId: categoryId, rememberCategory: false, rememberMapping: false, workspace: workspace)
+                try await approveCandidate(candidate, payeeId: candidate.payeeId, categoryId: categoryId, memo: nil, rememberCategory: false, rememberMapping: false, workspace: workspace)
                 approved += 1
             } catch {
                 let detail = error.localizedDescription
@@ -267,7 +268,7 @@ final class LiveExpenseStore: ObservableObject {
         catch { errorMessage = "Approvals saved. Could not refresh Budget and Reports: \(error.localizedDescription)" }
     }
 
-    private func approveCandidate(_ candidate: ReviewTransaction, payeeId: UUID?, categoryId: UUID, rememberCategory: Bool, rememberMapping: Bool, workspace: ReviewWorkspace) async throws {
+    private func approveCandidate(_ candidate: ReviewTransaction, payeeId: UUID?, categoryId: UUID, memo: String?, rememberCategory: Bool, rememberMapping: Bool, workspace: ReviewWorkspace) async throws {
         var resolvedPayee = payeeId.flatMap { id in payees.first(where: { $0.id == id }) }
         var createdPayee = false
         if resolvedPayee == nil {
@@ -282,10 +283,12 @@ final class LiveExpenseStore: ObservableObject {
         guard let resolvedPayee else { throw MobileAPIError(message: "Choose or create a payee before approving.", status: 0) }
         // Same two-step flow as the web app. Only change the payee if edited,
         // so retrying an approval whose response was lost reaches the idempotent RPC.
-        if resolvedPayee.id != candidate.payeeId {
+        if resolvedPayee.id != candidate.payeeId || memo != nil {
+            var body: [String: Any] = ["payee_id": resolvedPayee.id.uuidString]
+            if let memo { body["memo"] = memo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? NSNull() : memo.trimmingCharacters(in: .whitespacesAndNewlines) }
             let _: [ReviewID] = try await api.data("bank_import_candidates", query: scoped(workspace.id) + [
                 .init(name: "id", value: "eq.\(candidate.id)"), .init(name: "status", value: "eq.pending"), .init(name: "select", value: "id")
-            ], method: "PATCH", body: ["payee_id": resolvedPayee.id.uuidString])
+            ], method: "PATCH", body: body)
         }
         let _: UUID = try await api.data("rpc/approve_bank_import_candidate", method: "POST", body: [
             "p_workspace_id": workspace.id.uuidString, "p_candidate_id": candidate.id.uuidString,
@@ -347,7 +350,7 @@ final class LiveExpenseStore: ObservableObject {
         return accounts.first(where: { $0.id == closestMatches[0].1 })
     }
 
-    func approveAsTransfer(_ candidate: ReviewTransaction, counterpartyAccountId: UUID) async throws {
+    func approveAsTransfer(_ candidate: ReviewTransaction, counterpartyAccountId: UUID, memo: String? = nil) async throws {
         guard !busy, let workspace else { throw MobileAPIError(message: "Wait for the current request to finish.", status: 0) }
         guard accounts.contains(where: { $0.id == counterpartyAccountId && $0.id != candidate.accountId && $0.currency == candidate.currency }) else {
             throw MobileAPIError(message: "Choose another account in \(candidate.currency).", status: 0)
@@ -355,6 +358,11 @@ final class LiveExpenseStore: ObservableObject {
         busy = true; errorMessage = nil
         defer { busy = false }
         do {
+            if let memo {
+                let _: [ReviewID] = try await api.data("bank_import_candidates", query: scoped(workspace.id) + [
+                    .init(name: "id", value: "eq.\(candidate.id)"), .init(name: "status", value: "eq.pending"), .init(name: "select", value: "id")
+                ], method: "PATCH", body: ["memo": memo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? NSNull() : memo.trimmingCharacters(in: .whitespacesAndNewlines)])
+            }
             let _: UUID = try await api.data("rpc/approve_bank_import_candidate_as_transfer", method: "POST", body: [
                 "p_workspace_id": workspace.id.uuidString, "p_candidate_id": candidate.id.uuidString,
                 "p_counterparty_account_id": counterpartyAccountId.uuidString
@@ -389,7 +397,7 @@ final class LiveExpenseStore: ObservableObject {
 
     func possiblePayeeMatch(for candidate: ReviewTransaction) -> ReviewPayeeSuggestion? {
         guard candidate.payeeId == nil else { return nil }
-        let sources = [(candidate.payeeName ?? "", false), (candidate.memo ?? "", true)].filter { !$0.0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let sources = [(candidate.payeeName ?? "", false), (candidate.bankMemo ?? "", true)].filter { !$0.0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         let matches = payeeMappings.flatMap { mapping -> [ReviewPayeeSuggestion] in
             guard mapping.matchType == "exact", let payee = payees.first(where: { $0.id == mapping.payeeId }) else { return [] }
             let prefix = Self.normalizedPayeeName(mapping.sourceName)
@@ -498,7 +506,7 @@ final class LiveExpenseStore: ObservableObject {
         guard let workspace else { return 0 }
         var matchedCount = 0
         for candidate in candidates where candidate.accountId == accountId && candidate.payeeId == nil {
-            let matched = [candidate.payeeName, candidate.memo].compactMap { $0 }.compactMap(matchedPayee).first
+            let matched = [candidate.payeeName, candidate.bankMemo].compactMap { $0 }.compactMap(matchedPayee).first
             guard let matched else { continue }
             var body: [String: Any] = ["payee_id": matched.id.uuidString]
             if let categoryId = matched.defaultCategoryId { body["category_id"] = categoryId.uuidString }
@@ -513,7 +521,7 @@ final class LiveExpenseStore: ObservableObject {
                     id: item.id, accountId: item.accountId, transactionDate: item.transactionDate,
                     amountMinor: item.amountMinor, currency: item.currency, transactionType: item.transactionType,
                     payeeName: item.payeeName, payeeId: matched.id,
-                    categoryId: matched.defaultCategoryId ?? item.categoryId, memo: item.memo
+                    categoryId: matched.defaultCategoryId ?? item.categoryId, memo: item.memo, bankMemo: item.bankMemo
                 ) : item
             }
         }

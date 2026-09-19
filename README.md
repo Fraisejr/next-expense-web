@@ -89,6 +89,10 @@ before approval. Rejections remain as provider-ID tombstones so later syncs do
 not offer them again. Exact duplicates and confident transfers bypass the inbox
 and continue to reconcile automatically in either mode.
 
+The provider's original remittance text is retained separately as `bank_memo`.
+The editable memo can be changed during Review on web and iOS, and later from
+the web transaction editor, without altering that original bank text.
+
 Transactions retain both GoCardless's `internalTransactionId` as the canonical
 provider identifier and the financial institution's `transactionId` as a
 secondary audit and deduplication identifier.

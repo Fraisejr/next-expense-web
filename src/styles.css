@@ -621,6 +621,10 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .bank-review-transfer-choice select { width: 100%; height: 34px; padding: 0 28px 0 9px; border: 1px solid #cbd8d1; border-radius: 7px; color: var(--ink); background: #f8fbf9; font-size: 10px; }
 .bank-review-transfer-choice p { margin: 0 0 6px; color: var(--muted); font-size: 8.5px; line-height: 1.4; }
 .bank-review-transfer-choice .auth-error { grid-column: 1 / -1; margin: 0; }
+.bank-review-memo { grid-column: 3 / 5; display: grid; gap: 5px; }
+.bank-review-memo > span { margin: 0; color: var(--muted); font-size: 8.5px; font-weight: 700; }
+.bank-review-memo i { font-weight: 400; }
+.bank-review-memo input { width: 100%; height: 34px; padding: 0 9px; border: 1px solid #cbd8d1; border-radius: 7px; color: var(--ink); background: #f8fbf9; font-size: 10px; }
 .hidden-category-warning { display: flex; align-items: flex-start; gap: 6px; padding: 7px 8px; border: 1px solid #e5c9b2; border-radius: 6px; color: #9a563b; background: #fff4e9; }
 .hidden-category-warning svg { flex: 0 0 auto; margin-top: 1px; }
 .hidden-category-warning p { margin: 0; font-size: 8.5px; line-height: 1.45; }
@@ -1397,6 +1401,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .bank-review-row { grid-template-columns: 1fr auto; }
   .bank-review-payee { grid-column: 1 / -1; }
   .bank-review-category { grid-column: 1 / -1; }
+  .bank-review-memo { grid-column: 1 / -1; }
   .bank-review-actions { grid-column: 1 / -1; }
   .account-balance-summary { grid-template-columns: 1fr 1fr; }
   .account-balance-summary > div:first-child { grid-column: 1 / -1; }

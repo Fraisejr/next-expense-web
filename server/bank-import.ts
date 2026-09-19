@@ -101,7 +101,7 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
   const pageSize = 1000
   for (let start = 0; ; start += pageSize) {
     const { data, error } = await neon.from('transactions')
-      .select('id,provider_transaction_id,bank_transaction_id,transaction_date,source,amount_minor,currency,transaction_type,category_id,payee_id,payee_name,memo,posted')
+      .select('id,provider_transaction_id,bank_transaction_id,transaction_date,source,amount_minor,currency,transaction_type,category_id,payee_id,payee_name,memo,bank_memo,posted')
       .eq('workspace_id', workspaceId)
       .eq('account_id', account.id)
       .order('id', { ascending: true })
@@ -142,7 +142,7 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
       const values = {
         transaction_date: transaction.date, amount_minor: 0, currency: transaction.currency,
         transaction_type: transaction.type, payee_name: transaction.payee,
-        memo: transaction.note || null, posted: transaction.status === 'booked',
+        bank_memo: transaction.note || null, posted: transaction.status === 'booked',
         fetched_at: sync.fetchedAt, raw_payload: transaction.rawPayload ?? null,
         provider_transaction_id: transaction.providerTransactionId,
         bank_transaction_id: transaction.bankTransactionId ?? null,
@@ -155,7 +155,7 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
       } else if (!candidate && !existingIds.has(transaction.providerTransactionId)
         && (!transaction.bankTransactionId || !existingBankIds.has(transaction.bankTransactionId))) {
         const result = await neon.from('bank_import_candidates').insert({
-          ...values, id: crypto.randomUUID(), workspace_id: workspaceId,
+          ...values, memo: null, id: crypto.randomUUID(), workspace_id: workspaceId,
           account_id: account.id, provider: 'gocardless_bank_account_data',
         })
         if (result.error) throw result.error
@@ -173,7 +173,7 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
         currency: transaction.currency,
         transaction_type: transaction.type,
         payee_name: transaction.payee,
-        memo: transaction.note || null,
+        bank_memo: transaction.note || null,
         posted: transaction.status === 'booked',
         fetched_at: sync.fetchedAt,
         raw_payload: transaction.rawPayload ?? null,
@@ -202,7 +202,7 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
         transaction_type: transaction.type,
         payee_id: row.payee_id ?? null,
         payee_name: transaction.payee,
-        memo: transaction.note || null,
+        bank_memo: transaction.note || null,
         posted: true,
         fetched_at: sync.fetchedAt,
         raw_payload: transaction.rawPayload ?? null,
@@ -221,6 +221,7 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
           provider: 'gocardless_bank_account_data',
           category_id: null,
           status: 'pending',
+          memo: null,
           ...candidateValues,
         })
         if (candidateInsert.error) throw candidateInsert.error
@@ -238,7 +239,7 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
       currency: transaction.currency,
       transaction_type: transaction.type,
       payee_name: transaction.payee,
-      memo: transaction.note || null,
+      bank_memo: transaction.note || null,
       provider_transaction_id: transaction.providerTransactionId,
       bank_transaction_id: transaction.bankTransactionId ?? null,
       posted: true,
@@ -321,11 +322,11 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
       && (transaction.payee !== 'Bank transaction' || transaction.note)) {
       const repairResult = await neon.from('transactions').update({
         payee_name: transaction.payee,
-        memo: transaction.note || existing.memo || null,
+        bank_memo: transaction.note || existing.bank_memo || existing.memo || null,
       }).eq('workspace_id', workspaceId).eq('id', existing.id)
       if (repairResult.error) throw repairResult.error
       existing.payee_name = transaction.payee
-      existing.memo = transaction.note || existing.memo || null
+      existing.bank_memo = transaction.note || existing.bank_memo || existing.memo || null
     }
   }
 
@@ -427,7 +428,8 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
       category_id: defaultCategoryFor(transaction),
       payee_id: payeeIdFor(transaction) ?? null,
       payee_name: transaction.payee,
-      memo: transaction.note || null,
+      memo: null,
+      bank_memo: transaction.note || null,
       provider_transaction_id: transaction.providerTransactionId,
       bank_transaction_id: transaction.bankTransactionId ?? null,
       posted: transaction.status === 'booked',
@@ -454,7 +456,8 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
     category_id: defaultCategoryFor(transaction) ?? null,
     payee_id: payeeIdFor(transaction) ?? null,
     payee_name: transaction.payee,
-    memo: transaction.note || null,
+    memo: null,
+    bank_memo: transaction.note || null,
     posted: transaction.status === 'booked',
     status: 'pending',
     fetched_at: sync.fetchedAt,
