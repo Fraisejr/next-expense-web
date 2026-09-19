@@ -21,7 +21,7 @@ function fixture(t: TestContext) {
     bank_connections: [{ id: requisition, workspace_id: workspace, account_id: account, provider: 'gocardless_bank_account_data', provider_connection_id: requisition, status: 'active', metadata: {}, updated_at: 'version-0' }],
     bank_import_candidates: [], bank_transaction_refs: [], transactions: [], bank_account_aliases: [], payees: [], payee_mappings: [], categories: [], periods: [],
   }
-  const state = { booked: [transaction('new')], transactionsFail: false, writesFail: false, providerCalls: 0, queries: [] as URL[] }
+  const state = { booked: [transaction('new')], transactionsFail: false, writesFail: false, candidateInsertRace: false, providerCalls: 0, queries: [] as URL[] }
   const original = globalThis.fetch
   globalThis.fetch = async (input, init) => {
     const url = new URL(String(input))
@@ -45,7 +45,21 @@ function fixture(t: TestContext) {
       }
       if (method === 'POST') {
         if (state.writesFail && table === 'bank_import_candidates') return Response.json({ message: 'Fixture write failure' }, { status: 500 })
-        const body = JSON.parse(String(init?.body)); for (const row of Array.isArray(body) ? body : [body]) assert.equal(row.workspace_id, workspace); db[table].push(...(Array.isArray(body) ? body : [body]))
+        const body = JSON.parse(String(init?.body)); const rows = Array.isArray(body) ? body : [body]
+        for (const row of rows) assert.equal(row.workspace_id, workspace)
+        if (table === 'bank_import_candidates') {
+          if (state.candidateInsertRace) {
+            state.candidateInsertRace = false
+            db[table].push({ ...rows[0], id: 'concurrent-candidate' })
+            return Response.json({ code: '23505', message: 'duplicate key value violates unique constraint "bank_import_candidates_provider_id_idx"' }, { status: 409 })
+          }
+          const duplicate = rows.some(row => db[table].some(existing => existing.workspace_id === row.workspace_id
+            && existing.account_id === row.account_id && existing.provider === row.provider
+            && ((row.provider_transaction_id && existing.provider_transaction_id === row.provider_transaction_id)
+              || (row.bank_transaction_id && existing.bank_transaction_id === row.bank_transaction_id))))
+          if (duplicate) return Response.json({ code: '23505', message: 'duplicate key value violates unique constraint "bank_import_candidates_provider_id_idx"' }, { status: 409 })
+        }
+        db[table].push(...rows)
         return Response.json(null)
       }
       const offset = Number(url.searchParams.get('offset') ?? 0)
@@ -90,6 +104,17 @@ test('native endpoint persists review imports and balances, and repeat syncs do 
   assert.equal((await sync()).status, 200)
   assert.equal(db.bank_import_candidates.length, 1)
   assert.equal(state.providerCalls, 2)
+})
+
+test('a candidate inserted by an overlapping sync is treated as a duplicate', async t => {
+  const { db, state, sync } = fixture(t)
+  state.candidateInsertRace = true
+  const result = await sync()
+  assert.equal(result.status, 200, JSON.stringify(result.body))
+  assert.equal((result.body.diagnostic as Row).staged, 0)
+  assert.equal((result.body.diagnostic as Row).duplicates, 1)
+  assert.equal(db.bank_import_candidates.length, 1)
+  assert.equal(db.bank_import_candidates[0].provider_transaction_id, 'new')
 })
 
 test('past matches, manual rejections and zero decisions survive a server sync', async t => {

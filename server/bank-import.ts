@@ -7,6 +7,50 @@ import type { Account, BankSyncDiagnostic } from '../src/types.ts'
 type Row = Record<string, unknown>
 const number = (value: unknown) => Number(value ?? 0)
 
+type CandidateInsertResult = { inserted: number; conflicts: number }
+
+async function candidateExists(neon: BankDatabase, row: Row) {
+  for (const column of ['provider_transaction_id', 'bank_transaction_id'] as const) {
+    const value = row[column]
+    if (!value) continue
+    const existing = await neon.from('bank_import_candidates').select('id')
+      .eq('workspace_id', row.workspace_id).eq('account_id', row.account_id)
+      .eq('provider', row.provider).eq(column, value).limit(1)
+    if (existing.error) throw existing.error
+    if (existing.data?.length) return true
+  }
+  return false
+}
+
+// The sync lease prevents normal overlap, but an expired request can still
+// finish after a newer web or iOS sync has claimed the lease. Keep bulk writes
+// fast, then recover only the conflicting batch row by row. A verified unique
+// conflict means the other request already staged that bank transaction.
+async function insertBankImportCandidates(neon: BankDatabase, rows: Row[]): Promise<CandidateInsertResult> {
+  let inserted = 0
+  let conflicts = 0
+  for (let start = 0; start < rows.length; start += 500) {
+    const batch = rows.slice(start, start + 500)
+    const result = await neon.from('bank_import_candidates').insert(batch)
+    if (!result.error) {
+      inserted += batch.length
+      continue
+    }
+    if (result.error.code !== '23505') throw result.error
+
+    for (const row of batch) {
+      const retry = await neon.from('bank_import_candidates').insert(row)
+      if (!retry.error) {
+        inserted += 1
+        continue
+      }
+      if (retry.error.code !== '23505' || !await candidateExists(neon, row)) throw retry.error
+      conflicts += 1
+    }
+  }
+  return { inserted, conflicts }
+}
+
 export async function saveBankSync(neon: BankDatabase, workspaceId: string, account: Pick<Account, 'id' | 'currency' | 'providerAccountId' | 'bankImportMode'>, sync: BankSyncPayload): Promise<BankSyncSummary> {
   const { ensurePeriod, findPayees } = bankData(neon)
   if (!account.providerAccountId) throw new Error('This account is not connected to a bank.')
@@ -154,11 +198,10 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
         if (result.error) throw result.error
       } else if (!candidate && !existingIds.has(transaction.providerTransactionId)
         && (!transaction.bankTransactionId || !existingBankIds.has(transaction.bankTransactionId))) {
-        const result = await neon.from('bank_import_candidates').insert({
+        await insertBankImportCandidates(neon, [{
           ...values, memo: null, id: crypto.randomUUID(), workspace_id: workspaceId,
           account_id: account.id, provider: 'gocardless_bank_account_data',
-        })
-        if (result.error) throw result.error
+        }])
       }
       unique.delete(transaction.providerTransactionId)
       zeroIgnored += 1
@@ -213,8 +256,9 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
         if (candidate.status !== 'pending') return
         const candidateUpdate = await neon.from('bank_import_candidates').update(candidateValues).eq('workspace_id', workspaceId).eq('id', candidate.id)
         if (candidateUpdate.error) throw candidateUpdate.error
+        pendingStaged += 1
       } else {
-        const candidateInsert = await neon.from('bank_import_candidates').insert({
+        const candidateInsert = await insertBankImportCandidates(neon, [{
           id: crypto.randomUUID(),
           workspace_id: workspaceId,
           account_id: account.id,
@@ -223,10 +267,9 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
           status: 'pending',
           memo: null,
           ...candidateValues,
-        })
-        if (candidateInsert.error) throw candidateInsert.error
+        }])
+        pendingStaged += candidateInsert.inserted
       }
-      pendingStaged += 1
       return
     }
     const periodId = await ensurePeriod(workspaceId, transaction.date.slice(0, 7))
@@ -463,10 +506,7 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
     fetched_at: sync.fetchedAt,
     raw_payload: transaction.rawPayload ?? null,
   }))
-  for (let start = 0; start < candidateRowsToInsert.length; start += 500) {
-    const { error } = await neon.from('bank_import_candidates').insert(candidateRowsToInsert.slice(start, start + 500))
-    if (error) throw error
-  }
+  const candidateInsert = await insertBankImportCandidates(neon, candidateRowsToInsert)
 
   const receivedDates = sync.transactions.map((transaction) => transaction.date).sort()
   if (receivedDates.length && aliasAccountIds.size) {
@@ -530,10 +570,10 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
     pendingReturned: sync.providerDiagnostics?.pendingReturned ?? sync.transactions.filter((transaction) => transaction.status === 'pending').length,
     malformedIgnored: sync.providerDiagnostics?.malformedIgnored ?? 0,
     imported: rows.length,
-    staged: candidateRowsToInsert.length + pendingStaged + zeroReopened,
+    staged: candidateInsert.inserted + pendingStaged + zeroReopened,
     bookedImported,
     pendingImported,
-    duplicates,
+    duplicates: duplicates + candidateInsert.conflicts,
     transfersMatched,
     pendingPromoted,
     cutoffIgnored,
