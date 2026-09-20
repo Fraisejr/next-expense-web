@@ -126,15 +126,23 @@ export function createAutomaticBankSyncHandler(config: CronConfig) {
     }
 
     try {
-      const client = createClient({
+      let jwt = ''
+      const authClient = createClient({
         auth: {
           url: config.authUrl,
-          adapter: BetterAuthVanillaAdapter({ fetchOptions: { headers: { Origin: new URL(config.appUrl).origin } } }),
+          adapter: BetterAuthVanillaAdapter({
+            fetchOptions: {
+              headers: { Origin: new URL(config.appUrl).origin },
+              onSuccess: (context) => { jwt = context.response.headers.get('set-auth-jwt') ?? jwt },
+            },
+          }),
         },
         dataApi: { url: config.dataApiUrl },
       })
-      const signIn = await client.auth.signIn.email({ email: config.email, password: config.password })
+      const signIn = await authClient.auth.signIn.email({ email: config.email, password: config.password })
       if (signIn.error) throw new Error('The automatic bank sync account could not sign in.')
+      if (!jwt) throw new Error('The automatic bank sync account did not receive a database token.')
+      const client = createClient({ dataApi: { url: config.dataApiUrl, getToken: async () => jwt } })
       const service = createGoCardlessService(config.gocardlessSecretId, config.gocardlessSecretKey)
       const db = client as unknown as BankDatabase
       const url = new URL(request.url ?? '/api/cron/bank-sync', config.appUrl)
