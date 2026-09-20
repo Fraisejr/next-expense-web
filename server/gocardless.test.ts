@@ -34,7 +34,7 @@ function mockFetch(t: TestContext, options: { member?: boolean; account?: boolea
   globalThis.fetch = async (input, init) => {
     const url = new URL(String(input)); calls.push(url)
     if (url.host === 'data.example') {
-      assert.equal((init?.headers as Record<string,string>).Authorization, 'Bearer test-jwt')
+      assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer test-jwt')
       assert.equal(url.searchParams.get('workspace_id'), `eq.${workspace}`)
       switch(url.pathname.split('/').pop()) {
         case 'workspace_members': return Response.json(options.member === false ? [] : [{workspace_id:workspace}])

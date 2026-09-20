@@ -1,5 +1,6 @@
 import { saveBankSync } from './bank-import.ts'
-import type { BankSyncPayload } from '../shared/bank-types.ts'
+import type { BankSyncPayload, BankSyncSummary } from '../shared/bank-types.ts'
+import type { BankDatabase } from '../shared/bank-data.ts'
 import { bankClient, acquireSyncLease } from './bank-sync.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createHash } from 'node:crypto'
@@ -95,7 +96,7 @@ function normalizeTransactions(transactions: Record<string, unknown>[], status: 
   })
 }
 
-export function createGoCardlessHandler(secretId: string | undefined, secretKey: string | undefined, config: BankServerConfig) {
+export function createGoCardlessService(secretId: string | undefined, secretKey: string | undefined) {
   let token: Token | null = null
 
   async function accessToken() {
@@ -146,8 +147,119 @@ export function createGoCardlessHandler(secretId: string | undefined, secretKey:
     return (await gcRequestWithMeta(path, init)).payload
   }
 
+  async function syncAccount(db: BankDatabase, workspaceId: string, accountId: string): Promise<BankSyncSummary> {
+    let releaseSync: (() => Promise<void>) | undefined
+    try {
+      const accountResult = await db.from('accounts').select('id,provider_account_id,currency,bank_import_mode,closed')
+        .eq('workspace_id', workspaceId).eq('id', accountId).limit(1)
+      if (accountResult.error) throw accountResult.error
+      const savedAccount = accountResult.data?.[0] as Record<string, unknown> | undefined
+      if (!savedAccount || savedAccount.closed) throw new BankHttpError('This account is closed or unavailable.', 409)
+      const providerAccountId = savedAccount.provider_account_id ? assertUUID(savedAccount.provider_account_id, 'Linked bank account') : null
+      if (!providerAccountId) throw new BankHttpError('This account is not connected to a bank.', 403)
+
+      const connectionResult = await db.from('bank_connections').select('id,provider_connection_id,last_synced_at')
+        .eq('workspace_id', workspaceId).eq('account_id', accountId)
+        .eq('provider', 'gocardless_bank_account_data').eq('status', 'active').limit(1)
+      if (connectionResult.error) throw connectionResult.error
+      const connection = connectionResult.data?.[0] as Record<string, unknown> | undefined
+      if (!connection) throw new BankHttpError('There is no active bank connection for this account.', 403)
+
+      const requisitionId = assertUUID(connection.provider_connection_id, 'Bank connection')
+      const requisition = await gcRequest(`/requisitions/${requisitionId}/`) as Record<string, unknown>
+      if (!secretKey || !verifyBankReference(requisition.reference, workspaceId, accountId, secretKey)) throw new BankHttpError('Reconnect this bank account to authorize secure hosted sync.', 403)
+      if (!Array.isArray(requisition.accounts) || !requisition.accounts.includes(providerAccountId)) throw new BankHttpError('This bank account is not part of your authorization.', 403)
+
+      releaseSync = await acquireSyncLease(db, workspaceId, accountId)
+      const lastSync = connection.last_synced_at ? new Date(String(connection.last_synced_at)) : null
+      if (lastSync && Number.isFinite(lastSync.getTime())) lastSync.setUTCDate(lastSync.getUTCDate() - 14)
+      const dateFrom = lastSync && Number.isFinite(lastSync.getTime()) ? lastSync.toISOString().slice(0, 10) : ''
+      if (dateFrom && !/^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) throw new Error('The transaction start date is invalid.')
+
+      const transactionPath = `/accounts/${providerAccountId}/transactions/${dateFrom ? `?date_from=${encodeURIComponent(dateFrom)}` : ''}`
+      const [transactionAttempt, balanceAttempt] = await Promise.allSettled([
+        gcRequestWithMeta(transactionPath),
+        gcRequestWithMeta(`/accounts/${providerAccountId}/balances/`),
+      ])
+      if (transactionAttempt.status === 'rejected' && balanceAttempt.status === 'rejected') throw transactionAttempt.reason
+
+      const transactionResponse = transactionAttempt.status === 'fulfilled' ? transactionAttempt.value : null
+      const balanceResponse = balanceAttempt.status === 'fulfilled' ? balanceAttempt.value : null
+      const transactionPayload = (transactionResponse?.payload ?? {}) as Record<string, unknown>
+      const transactionGroups = transactionPayload.transactions && typeof transactionPayload.transactions === 'object'
+        ? transactionPayload.transactions as Record<string, unknown>
+        : {}
+      const booked = Array.isArray(transactionGroups.booked) ? transactionGroups.booked as Record<string, unknown>[] : []
+      const pending = Array.isArray(transactionGroups.pending) ? transactionGroups.pending as Record<string, unknown>[] : []
+      const normalizedBooked = normalizeTransactions(booked, 'booked')
+      const normalizedPending = normalizeTransactions(pending, 'pending')
+      const normalizedTransactions = [...normalizedPending, ...normalizedBooked]
+
+      const balancePayload = (balanceResponse?.payload ?? {}) as Record<string, unknown>
+      const balances = Array.isArray(balancePayload.balances) ? balancePayload.balances as Record<string, unknown>[] : []
+      const balancePriority = ['interimAvailable', 'expected', 'interimBooked', 'closingBooked', 'closingAvailable']
+      const sortedBalances = [...balances].sort((left, right) => {
+        const leftRank = balancePriority.indexOf(String(left.balanceType))
+        const rightRank = balancePriority.indexOf(String(right.balanceType))
+        return (leftRank < 0 ? 99 : leftRank) - (rightRank < 0 ? 99 : rightRank)
+      })
+      const selectedBalance = sortedBalances.find((balance) => {
+        const value = balance.balanceAmount && typeof balance.balanceAmount === 'object'
+          ? balance.balanceAmount as Record<string, unknown>
+          : {}
+        return /^-?\d+(\.\d+)?$/.test(String(value.amount ?? '')) && /^[A-Z]{3}$/.test(String(value.currency ?? ''))
+      })
+      const balanceAmount = selectedBalance?.balanceAmount && typeof selectedBalance.balanceAmount === 'object'
+        ? selectedBalance.balanceAmount as Record<string, unknown>
+        : null
+
+      const payload: BankSyncPayload = {
+        transactions: normalizedTransactions,
+        rawProviderResponse: {
+          transactions: transactionResponse?.payload ?? null,
+          balances: balanceResponse?.payload ?? null,
+        },
+        providerDiagnostics: {
+          bookedReturned: booked.length,
+          pendingReturned: pending.length,
+          malformedIgnored: booked.length + pending.length - normalizedTransactions.length,
+        },
+        balance: balanceAmount ? {
+          amount: String(balanceAmount.amount),
+          currency: String(balanceAmount.currency).toUpperCase(),
+          type: String(selectedBalance?.balanceType ?? ''),
+        } : null,
+        rateLimits: {
+          transactions: transactionResponse?.rateLimit,
+          balances: balanceResponse?.rateLimit,
+        },
+        errors: {
+          transactions: transactionAttempt.status === 'rejected' ? cleanError(transactionAttempt.reason, transactionAttempt.reason instanceof Error ? transactionAttempt.reason.message : 'Transactions could not be retrieved.') : null,
+          balances: balanceAttempt.status === 'rejected' ? cleanError(balanceAttempt.reason, balanceAttempt.reason instanceof Error ? balanceAttempt.reason.message : 'The balance could not be retrieved.') : null,
+        },
+        fetchedAt: new Date().toISOString(),
+      }
+      const result = await saveBankSync(db, workspaceId, {
+        id: accountId,
+        providerAccountId,
+        currency: String(savedAccount.currency),
+        bankImportMode: savedAccount.bank_import_mode === 'automatic' ? 'automatic' : 'review',
+      }, payload)
+      await releaseSync().catch(() => {})
+      releaseSync = undefined
+      return result
+    } finally {
+      if (releaseSync) await releaseSync().catch(() => {})
+    }
+  }
+
+  return { gcRequest, syncAccount }
+}
+
+export function createGoCardlessHandler(secretId: string | undefined, secretKey: string | undefined, config: BankServerConfig) {
+  const { gcRequest, syncAccount } = createGoCardlessService(secretId, secretKey)
+
   return async (request: IncomingMessage, response: ServerResponse) => {
-        let releaseSync: (() => Promise<void>) | undefined
         try {
           if (!['GET', 'POST'].includes(request.method ?? '')) throw new BankHttpError('Method not allowed.', 405)
           const origin = request.headers.origin
@@ -212,105 +324,14 @@ export function createGoCardlessHandler(secretId: string | undefined, secretKey:
 
           if (request.method === 'POST' && url.pathname === '/sync-import') {
             if (!auth.accountId || !auth.providerAccountId) throw new BankHttpError('This account is not connected to a bank.', 403)
-            const connections = await auth.read('bank_connections', { select: 'id,provider_connection_id,last_synced_at', workspace_id: `eq.${auth.workspaceId}`, account_id: `eq.${auth.accountId}`, provider: 'eq.gocardless_bank_account_data', status: 'eq.active', limit: '1' })
-            if (!connections.length) throw new BankHttpError('There is no active bank connection for this account.', 403)
-            // Account/connection rows are client-editable. Prove the binding
-            // against the provider's signed reference before reading bank data.
-            const requisitionId = assertUUID(connections[0].provider_connection_id, 'Bank connection')
-            const requisition = await gcRequest(`/requisitions/${requisitionId}/`) as Record<string, unknown>
-            if (!secretKey || !verifyBankReference(requisition.reference, auth.workspaceId, auth.accountId, secretKey)) throw new BankHttpError('Reconnect this bank account to authorize secure hosted sync.', 403)
-            if (!Array.isArray(requisition.accounts) || !requisition.accounts.includes(auth.providerAccountId)) throw new BankHttpError('This bank account is not part of your authorization.', 403)
-            const accountId = auth.providerAccountId
             const db = bankClient(config.dataApiUrl!, request.headers.authorization!)
-            releaseSync = await acquireSyncLease(db, auth.workspaceId, auth.accountId)
-            const accounts = await auth.read('accounts', { select: 'id,currency,bank_import_mode,closed', workspace_id: `eq.${auth.workspaceId}`, id: `eq.${auth.accountId}`, limit: '1' })
-            const savedAccount = accounts[0]
-            if (!savedAccount || savedAccount.closed) throw new BankHttpError('This account is closed or unavailable.', 409)
-            const lastSync = connections[0].last_synced_at ? new Date(String(connections[0].last_synced_at)) : null
-            if (lastSync && Number.isFinite(lastSync.getTime())) lastSync.setUTCDate(lastSync.getUTCDate() - 14)
-            const dateFrom = lastSync && Number.isFinite(lastSync.getTime()) ? lastSync.toISOString().slice(0, 10) : ''
-            if (!/^[0-9a-f-]{36}$/i.test(accountId)) throw new Error('The connected bank account reference is invalid.')
-            if (dateFrom && !/^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) throw new Error('The transaction start date is invalid.')
-
-            const transactionPath = `/accounts/${accountId}/transactions/${dateFrom ? `?date_from=${encodeURIComponent(dateFrom)}` : ''}`
-            const [transactionAttempt, balanceAttempt] = await Promise.allSettled([
-              gcRequestWithMeta(transactionPath),
-              gcRequestWithMeta(`/accounts/${accountId}/balances/`),
-            ])
-            if (transactionAttempt.status === 'rejected' && balanceAttempt.status === 'rejected') throw transactionAttempt.reason
-
-            const transactionResponse = transactionAttempt.status === 'fulfilled' ? transactionAttempt.value : null
-            const balanceResponse = balanceAttempt.status === 'fulfilled' ? balanceAttempt.value : null
-            const transactionPayload = (transactionResponse?.payload ?? {}) as Record<string, unknown>
-            const transactionGroups = transactionPayload.transactions && typeof transactionPayload.transactions === 'object'
-              ? transactionPayload.transactions as Record<string, unknown>
-              : {}
-            const booked = Array.isArray(transactionGroups.booked) ? transactionGroups.booked as Record<string, unknown>[] : []
-            const pending = Array.isArray(transactionGroups.pending) ? transactionGroups.pending as Record<string, unknown>[] : []
-            const normalizedBooked = normalizeTransactions(booked, 'booked')
-            const normalizedPending = normalizeTransactions(pending, 'pending')
-            const normalizedTransactions = [...normalizedPending, ...normalizedBooked]
-
-            const balancePayload = (balanceResponse?.payload ?? {}) as Record<string, unknown>
-            const balances = Array.isArray(balancePayload.balances) ? balancePayload.balances as Record<string, unknown>[] : []
-            const balancePriority = ['interimAvailable', 'expected', 'interimBooked', 'closingBooked', 'closingAvailable']
-            const sortedBalances = [...balances].sort((left, right) => {
-              const leftRank = balancePriority.indexOf(String(left.balanceType))
-              const rightRank = balancePriority.indexOf(String(right.balanceType))
-              return (leftRank < 0 ? 99 : leftRank) - (rightRank < 0 ? 99 : rightRank)
-            })
-            const selectedBalance = sortedBalances.find((balance) => {
-              const value = balance.balanceAmount && typeof balance.balanceAmount === 'object' ? balance.balanceAmount as Record<string, unknown> : {}
-              return /^-?\d+(\.\d+)?$/.test(String(value.amount ?? '')) && /^[A-Z]{3}$/.test(String(value.currency ?? ''))
-            })
-            const balanceAmount = selectedBalance?.balanceAmount && typeof selectedBalance.balanceAmount === 'object'
-              ? selectedBalance.balanceAmount as Record<string, unknown>
-              : null
-
-            const payload: BankSyncPayload = {
-              transactions: normalizedTransactions,
-              rawProviderResponse: {
-                transactions: transactionResponse?.payload ?? null,
-                balances: balanceResponse?.payload ?? null,
-              },
-              providerDiagnostics: {
-                bookedReturned: booked.length,
-                pendingReturned: pending.length,
-                malformedIgnored: booked.length + pending.length - normalizedTransactions.length,
-              },
-              balance: balanceAmount ? {
-                amount: String(balanceAmount.amount),
-                currency: String(balanceAmount.currency).toUpperCase(),
-                type: String(selectedBalance?.balanceType ?? ''),
-              } : null,
-              rateLimits: {
-                transactions: transactionResponse?.rateLimit,
-                balances: balanceResponse?.rateLimit,
-              },
-              errors: {
-                transactions: transactionAttempt.status === 'rejected' ? cleanError(transactionAttempt.reason, transactionAttempt.reason instanceof Error ? transactionAttempt.reason.message : 'Transactions could not be retrieved.') : null,
-                balances: balanceAttempt.status === 'rejected' ? cleanError(balanceAttempt.reason, balanceAttempt.reason instanceof Error ? balanceAttempt.reason.message : 'The balance could not be retrieved.') : null,
-              },
-              fetchedAt: new Date().toISOString(),
-            }
-            const result = await saveBankSync(db, auth.workspaceId, {
-              id: auth.accountId, providerAccountId: auth.providerAccountId,
-              currency: String(savedAccount.currency),
-              bankImportMode: savedAccount.bank_import_mode === 'automatic' ? 'automatic' : 'review',
-            }, payload)
-            if (releaseSync) { await releaseSync().catch(() => {}); releaseSync = undefined }
-            json(response, 200, result)
+            json(response, 200, await syncAccount(db, auth.workspaceId, auth.accountId))
             return
           }
 
           json(response, 404, { error: 'Unknown GoCardless endpoint.' })
         } catch (error) {
-          if (releaseSync) { await releaseSync().catch(() => {}); releaseSync = undefined }
           json(response, error instanceof GoCardlessRequestError ? (error.status === 401 ? 502 : error.status) : error instanceof BankHttpError ? error.status : error instanceof SyntaxError ? 400 : 500, { error: error && typeof error === 'object' && 'message' in error ? String(error.message) : 'The GoCardless request failed.' })
-        } finally {
-          // A failed release expires automatically; never turn a completed import
-          // into an apparent failure that encourages an immediate retry.
-          if (releaseSync) await releaseSync().catch(() => {})
         }
   }
 }

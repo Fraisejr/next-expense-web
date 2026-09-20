@@ -1,6 +1,7 @@
 import { PostgrestClient } from '@supabase/postgrest-js'
 import { randomUUID } from 'node:crypto'
 import { BankHttpError } from './bank-authorization.ts'
+import type { BankDatabase } from '../shared/bank-data.ts'
 
 type Row = Record<string, unknown>
 export function bankClient(url: string, authorization: string) {
@@ -17,7 +18,7 @@ export function bankClient(url: string, authorization: string) {
 // Compare-and-swap on the connection row works across server instances. The
 // updated_at is maintained by the database trigger, so large bank payloads
 // never need to be sent in a URL filter. The lease outlives Vercel's 300-second execution limit, including abandoned calls.
-export async function acquireSyncLease(db: ReturnType<typeof bankClient>, workspaceId: string, accountId: string) {
+export async function acquireSyncLease(db: BankDatabase, workspaceId: string, accountId: string) {
   const query = () => db.from('bank_connections').select('id,metadata,last_synced_at,updated_at')
     .eq('workspace_id', workspaceId).eq('account_id', accountId)
     .eq('provider', 'gocardless_bank_account_data').eq('status', 'active').limit(1)
@@ -45,4 +46,52 @@ export async function acquireSyncLease(db: ReturnType<typeof bankClient>, worksp
       .eq('workspace_id', workspaceId).eq('id', connection.id).eq('updated_at', row!.updated_at)
     if (released.error) throw released.error
   }
+}
+
+type AutomaticSyncResult = {
+  date: string
+  status: 'running' | 'completed' | 'failed'
+  startedAt: string
+  completedAt?: string
+  error?: string
+  imported?: number
+  warnings?: string[]
+}
+
+async function connectionForUpdate(db: BankDatabase, workspaceId: string, accountId: string) {
+  const result = await db.from('bank_connections').select('id,metadata,updated_at')
+    .eq('workspace_id', workspaceId).eq('account_id', accountId)
+    .eq('provider', 'gocardless_bank_account_data').eq('status', 'active').limit(1)
+  if (result.error) throw result.error
+  return result.data?.[0] as Row | undefined
+}
+
+export async function claimAutomaticSync(db: BankDatabase, workspaceId: string, accountId: string, date: string, startedAt: string) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const connection = await connectionForUpdate(db, workspaceId, accountId)
+    if (!connection) throw new BankHttpError('Reconnect this account on the website before syncing.', 409)
+    const metadata = (connection.metadata ?? {}) as Row
+    const previous = metadata.last_automatic_sync as AutomaticSyncResult | undefined
+    if (previous?.date === date) return false
+    const update = await db.from('bank_connections').update({
+      metadata: { ...metadata, last_automatic_sync: { date, status: 'running', startedAt } satisfies AutomaticSyncResult },
+    }).eq('workspace_id', workspaceId).eq('id', connection.id).eq('updated_at', connection.updated_at).select('id')
+    if (update.error) throw update.error
+    if (update.data?.length) return true
+  }
+  throw new BankHttpError('This account changed while automatic sync was starting.', 409)
+}
+
+export async function finishAutomaticSync(db: BankDatabase, workspaceId: string, accountId: string, result: AutomaticSyncResult) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const connection = await connectionForUpdate(db, workspaceId, accountId)
+    if (!connection) return
+    const metadata = (connection.metadata ?? {}) as Row
+    const update = await db.from('bank_connections').update({
+      metadata: { ...metadata, last_automatic_sync: result },
+    }).eq('workspace_id', workspaceId).eq('id', connection.id).eq('updated_at', connection.updated_at).select('id')
+    if (update.error) throw update.error
+    if (update.data?.length) return
+  }
+  throw new Error('Could not save the automatic bank sync result.')
 }

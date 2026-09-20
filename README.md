@@ -73,6 +73,13 @@ new schema migration. Stale browser bundles are asked to refresh before syncing.
 Opening an account or refreshing Reports does not request bank data. iOS shows
 per-account results and refreshes Reports and Review after partial successes too.
 
+Vercel Cron calls `/api/cron/bank-sync` daily at 05:00 UTC (approximately 06:00
+CET). The route signs in with a dedicated automation user, selects open linked
+accounts with `auto_sync = true`, and syncs them sequentially. A per-account CET
+date marker in bank connection metadata prevents duplicate Vercel deliveries
+from consuming provider quota twice. Manual sync remains available and uses the
+same verified provider and import pipeline.
+
 Bank counterparties can be mapped to owned accounts for transfer detection.
 Matching is conservative: direction, currency, amount, a unique date-near
 candidate, and the counterparty alias must agree. Provider references are kept
@@ -112,6 +119,9 @@ and imported transactions are preserved.
 Vercel production environment variables:
 - `VITE_NEON_AUTH_URL` and `VITE_NEON_DATA_API_URL`: public Neon endpoints.
 - `GOCARDLESS_SECRET_ID` and `GOCARDLESS_SECRET_KEY`: server-only secrets.
+- `CRON_SECRET`: random server-only secret used by Vercel Cron.
+- `BANK_SYNC_AUTH_EMAIL` and `BANK_SYNC_AUTH_PASSWORD`: credentials for a
+  dedicated Neon Auth user that belongs to each workspace it should sync.
 - `APP_URL`: `https://next-expense-web.vercel.app`, used for bank return URLs.
 
 Deploy source with `vercel deploy --prod` from the linked project. GitHub is
