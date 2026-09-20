@@ -127,13 +127,22 @@ export function createAutomaticBankSyncHandler(config: CronConfig) {
 
     try {
       let jwt = ''
+      const cookies = new Map<string, string>()
+      const origin = new URL(config.appUrl).origin
       const authClient = createClient({
         auth: {
           url: config.authUrl,
           adapter: BetterAuthVanillaAdapter({
             fetchOptions: {
-              headers: { Origin: new URL(config.appUrl).origin },
-              onSuccess: (context) => { jwt = context.response.headers.get('set-auth-jwt') ?? jwt },
+              headers: { Origin: origin },
+              onSuccess: (context) => {
+                jwt = context.response.headers.get('set-auth-jwt') ?? jwt
+                for (const value of context.response.headers.getSetCookie()) {
+                  const pair = value.split(';', 1)[0]
+                  const name = pair.slice(0, pair.indexOf('='))
+                  if (name) cookies.set(name, pair)
+                }
+              },
             },
           }),
         },
@@ -141,6 +150,13 @@ export function createAutomaticBankSyncHandler(config: CronConfig) {
       })
       const signIn = await authClient.auth.signIn.email({ email: config.email, password: config.password })
       if (signIn.error) throw new Error('The automatic bank sync account could not sign in.')
+      if (!jwt && cookies.size) {
+        const session = await fetch(`${config.authUrl.replace(/\/$/, '')}/get-session`, {
+          headers: { Accept: 'application/json', Cookie: [...cookies.values()].join('; '), Origin: origin },
+          signal: AbortSignal.timeout(15_000),
+        })
+        if (session.ok) jwt = session.headers.get('set-auth-jwt') ?? ''
+      }
       if (!jwt) throw new Error('The automatic bank sync account did not receive a database token.')
       const client = createClient({ dataApi: { url: config.dataApiUrl, getToken: async () => jwt } })
       const service = createGoCardlessService(config.gocardlessSecretId, config.gocardlessSecretKey)
