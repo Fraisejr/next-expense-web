@@ -163,8 +163,20 @@ export function createAutomaticBankSyncHandler(config: CronConfig) {
       const db = client as unknown as BankDatabase
       const url = new URL(request.url ?? '/api/cron/bank-sync', config.appUrl)
       if (url.searchParams.get('dryRun') === '1') {
-        const accounts = await automaticAccounts(db)
-        json(response, 200, { dryRun: true, eligible: accounts.length })
+        const [memberships, visibleAccounts, accounts] = await Promise.all([
+          db.from('workspace_members').select('workspace_id'),
+          db.from('accounts').select('id,provider_account_id,auto_sync,closed'),
+          automaticAccounts(db),
+        ])
+        if (memberships.error) throw memberships.error
+        if (visibleAccounts.error) throw visibleAccounts.error
+        json(response, 200, {
+          dryRun: true,
+          memberships: memberships.data?.length ?? 0,
+          visibleAccounts: visibleAccounts.data?.length ?? 0,
+          connectedAccounts: (visibleAccounts.data ?? []).filter((account) => Boolean(account.provider_account_id)).length,
+          eligible: accounts.length,
+        })
         return
       }
       const result = await runAutomaticBankSync(db, service.syncAccount)
