@@ -1,6 +1,7 @@
 import { bankData, normalizedPayeeName, recentSyncRuns } from '../shared/bank-data.ts'
 export { normalizedPayeeName, prefixMappingMatches } from '../shared/bank-data.ts'
 import { neon } from './neon'
+import { retryAfterExpiredSession } from './auth-bootstrap'
 import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankSyncDiagnostic, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, TimeCode, TimeComment, TimeEntry, TimesheetClient, TimesheetClientForecast, TimesheetClientRate, Transaction, YearlyFinancialPlan } from './types'
 
@@ -253,7 +254,7 @@ export async function loadWorkspace(month?: string): Promise<LoadedWorkspace> {
   const selectedMonth = month && /^\d{4}-\d{2}$/.test(month)
     ? month
     : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-  return loadWorkspaceWithRetries(3, selectedMonth)
+  return retryAfterExpiredSession(() => loadWorkspaceWithRetries(3, selectedMonth), neon.auth)
 }
 
 async function loadWorkspaceWithRetries(retriesRemaining: number, month: string): Promise<LoadedWorkspace> {

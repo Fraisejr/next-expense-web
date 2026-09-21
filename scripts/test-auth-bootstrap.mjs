@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { completeAuthCallback } from '../src/auth-bootstrap.ts'
+import { completeAuthCallback, isExpiredJwtError, retryAfterExpiredSession } from '../src/auth-bootstrap.ts'
 
 const browser = {
   location: new URL('https://expense.example/?month=2026-09&neon_auth_session_verifier=one-use#ledger'),
@@ -50,4 +50,27 @@ assert.equal(calls,0,'Normal visits need no extra bootstrap request')
 browser.location = new URL('https://expense.example/?neon_auth_session_verifier=invalid')
 await assert.rejects(completeAuthCallback({getSession:async()=>({data:null,error:Error('Rejected')})}, browser), /Rejected/)
 await assert.rejects(completeAuthCallback({getSession:async()=>({data:null,error:null})}, browser), /did not establish/)
-console.log('Auth bootstrap passed: one exchange, 15 authenticated reads, failed callbacks blocked')
+
+assert.equal(isExpiredJwtError(new Error('JWT token has expired (exp=1789939827)')), true)
+assert.equal(isExpiredJwtError({ message: 'Token expired while the tab was asleep' }), true)
+assert.equal(isExpiredJwtError(new Error('Network request failed')), false)
+
+let attempts = 0
+let refreshes = 0
+const recovered = await retryAfterExpiredSession(async () => {
+  attempts++
+  if (attempts === 1) throw new Error('JWT token has expired (exp=1789939827)')
+  return 'workspace'
+}, { getSession: async () => { refreshes++; return { data: { session: true }, error: null } } })
+assert.equal(recovered, 'workspace')
+assert.equal(attempts, 2, 'An expired request should be replayed once')
+assert.equal(refreshes, 1, 'The session should refresh before replaying the request')
+
+let unrelatedAttempts = 0
+await assert.rejects(retryAfterExpiredSession(async () => {
+  unrelatedAttempts++
+  throw new Error('Database unavailable')
+}, { getSession: async () => { throw new Error('unexpected refresh') } }), /Database unavailable/)
+assert.equal(unrelatedAttempts, 1, 'Unrelated failures must not be retried')
+
+console.log('Auth bootstrap passed: callback exchange and expired background sessions recover safely')
