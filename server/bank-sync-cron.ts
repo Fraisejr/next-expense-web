@@ -22,6 +22,8 @@ type AutomaticAccount = {
   workspace_id: string
   name: string
   provider_account_id: string | null
+  auto_sync: boolean
+  closed: boolean
 }
 
 type AccountResult = {
@@ -60,10 +62,12 @@ function cleanError(error: unknown) {
 }
 
 async function automaticAccounts(db: BankDatabase) {
-  const accountsResult = await db.from('accounts').select('id,workspace_id,name,provider_account_id')
-    .eq('auto_sync', true).eq('closed', false).order('sort_order', { ascending: true })
+  const accountsResult = await db.from('accounts').select('id,workspace_id,name,provider_account_id,auto_sync,closed')
+    .order('sort_order', { ascending: true })
   if (accountsResult.error) throw accountsResult.error
-  return ((accountsResult.data ?? []) as AutomaticAccount[]).filter((account) => Boolean(account.provider_account_id))
+  return ((accountsResult.data ?? []) as AutomaticAccount[]).filter((account) => (
+    account.auto_sync === true && account.closed !== true && Boolean(account.provider_account_id)
+  ))
 }
 
 export async function runAutomaticBankSync(

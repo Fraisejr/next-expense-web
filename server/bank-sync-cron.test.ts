@@ -68,3 +68,22 @@ test('automatic bank sync records a failure and continues without retrying the s
   assert.equal(calls, 1)
   assert.equal(((connections[0].metadata as Row).last_automatic_sync as Row).status, 'failed')
 })
+
+test('automatic bank sync skips disabled, closed, and unconnected accounts', async t => {
+  const { db } = fixture(t)
+  const original = globalThis.fetch
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input))
+    if (url.pathname.endsWith('/accounts')) {
+      return Response.json([
+        { id: 'disabled', workspace_id: workspaceId, name: 'Disabled', provider_account_id: 'provider', auto_sync: false, closed: false },
+        { id: 'closed', workspace_id: workspaceId, name: 'Closed', provider_account_id: 'provider', auto_sync: true, closed: true },
+        { id: 'unconnected', workspace_id: workspaceId, name: 'Unconnected', provider_account_id: null, auto_sync: true, closed: false },
+      ])
+    }
+    return original(input, init)
+  }
+  const result = await runAutomaticBankSync(db, async () => summary, new Date('2026-09-20T05:00:00.000Z'))
+  assert.equal(result.eligible, 0)
+  assert.deepEqual(result.results, [])
+})
