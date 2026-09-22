@@ -78,7 +78,10 @@ CET). The route signs in with a dedicated automation user, selects open linked
 accounts with `auto_sync = true`, and syncs them sequentially. A per-account CET
 date marker in bank connection metadata prevents duplicate Vercel deliveries
 from consuming provider quota twice. Manual sync remains available and uses the
-same verified provider and import pipeline.
+same verified provider and import pipeline. Each authorized cron request also
+writes durable phase checkpoints to `bank_sync_cron_runs`, including whether it
+reached authentication, account enumeration, per-account syncing, or a sanitized
+failure. Account pages show the latest automatic result from connection metadata.
 
 Bank counterparties can be mapped to owned accounts for transfer detection.
 Matching is conservative: direction, currency, amount, a unique date-near
@@ -120,6 +123,8 @@ Vercel production environment variables:
 - `VITE_NEON_AUTH_URL` and `VITE_NEON_DATA_API_URL`: public Neon endpoints.
 - `GOCARDLESS_SECRET_ID` and `GOCARDLESS_SECRET_KEY`: server-only secrets.
 - `CRON_SECRET`: random server-only secret used by Vercel Cron.
+- `CRON_DIAGNOSTICS_DATABASE_URL`: server-only Postgres connection used only to
+  persist cron checkpoints before the automation user has authenticated.
 - `BANK_SYNC_AUTH_EMAIL` and `BANK_SYNC_AUTH_PASSWORD`: credentials for a
   dedicated Neon Auth user that belongs to each workspace it should sync.
 - `APP_URL`: `https://next-expense-web.vercel.app`, used for bank return URLs.

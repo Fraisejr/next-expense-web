@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { BankDatabase } from '../shared/bank-data.ts'
 import type { BankSyncSummary } from '../shared/bank-types.ts'
 import { claimAutomaticSync, finishAutomaticSync } from './bank-sync.ts'
+import { createCronRunReporter, type CronAccountResult } from './cron-diagnostics.ts'
 import { createGoCardlessService } from './gocardless.ts'
 
 type CronConfig = {
@@ -15,6 +16,10 @@ type CronConfig = {
   appUrl?: string
   gocardlessSecretId?: string
   gocardlessSecretKey?: string
+  diagnosticsDatabaseUrl?: string
+  deploymentId?: string
+  deploymentUrl?: string
+  gitCommitSha?: string
 }
 
 type AutomaticAccount = {
@@ -26,14 +31,7 @@ type AutomaticAccount = {
   closed: boolean
 }
 
-type AccountResult = {
-  accountId: string
-  accountName: string
-  status: 'completed' | 'failed' | 'skipped'
-  imported?: number
-  warnings?: string[]
-  error?: string
-}
+type AccountResult = CronAccountResult
 
 function json(response: ServerResponse, status: number, body: unknown) {
   response.statusCode = status
@@ -74,8 +72,10 @@ export async function runAutomaticBankSync(
   db: BankDatabase,
   syncAccount: (db: BankDatabase, workspaceId: string, accountId: string) => Promise<BankSyncSummary>,
   now = new Date(),
+  onProgress?: (results: AccountResult[]) => Promise<void>,
+  suppliedAccounts?: AutomaticAccount[],
 ) {
-  const accounts = await automaticAccounts(db)
+  const accounts = suppliedAccounts ?? await automaticAccounts(db)
   const date = cetDate(now)
   const results: AccountResult[] = []
 
@@ -85,6 +85,7 @@ export async function runAutomaticBankSync(
       const claimed = await claimAutomaticSync(db, account.workspace_id, account.id, date, startedAt)
       if (!claimed) {
         results.push({ accountId: account.id, accountName: account.name, status: 'skipped' })
+        await onProgress?.([...results])
         continue
       }
       const summary = await syncAccount(db, account.workspace_id, account.id)
@@ -109,6 +110,7 @@ export async function runAutomaticBankSync(
       }).catch(() => {})
       results.push({ accountId: account.id, accountName: account.name, status: 'failed', error: message })
     }
+    await onProgress?.([...results])
   }
 
   return { date, eligible: accounts.length, results }
@@ -124,12 +126,29 @@ export function createAutomaticBankSyncHandler(config: CronConfig) {
       json(response, 401, { error: 'Unauthorized.' })
       return
     }
+    const url = new URL(request.url ?? '/api/cron/bank-sync', config.appUrl ?? 'https://next-expense.invalid')
+    const dryRun = url.searchParams.get('dryRun') === '1'
+    const now = new Date()
+    const reporter = createCronRunReporter(config.diagnosticsDatabaseUrl, {
+      runDate: cetDate(now),
+      dryRun,
+      deploymentId: config.deploymentId,
+      deploymentUrl: config.deploymentUrl,
+      gitCommitSha: config.gitCommitSha,
+      requestId: typeof request.headers['x-vercel-id'] === 'string' ? request.headers['x-vercel-id'] : undefined,
+      userAgent: request.headers['user-agent'],
+    })
+    await reporter.start()
     if (!config.authUrl || !config.dataApiUrl || !config.email || !config.password || !config.appUrl) {
+      await reporter.checkpoint({
+        phase: 'failed', status: 'failed', error: 'Automatic bank sync authentication is not configured.', responseStatus: 503,
+      })
       json(response, 503, { error: 'Automatic bank sync authentication is not configured.' })
       return
     }
 
     try {
+      await reporter.checkpoint({ phase: 'authenticating' })
       let jwt = ''
       const cookies = new Map<string, string>()
       const origin = new URL(config.appUrl).origin
@@ -165,29 +184,50 @@ export function createAutomaticBankSyncHandler(config: CronConfig) {
       const client = createClient({ dataApi: { url: config.dataApiUrl, getToken: async () => jwt } })
       const service = createGoCardlessService(config.gocardlessSecretId, config.gocardlessSecretKey)
       const db = client as unknown as BankDatabase
-      const url = new URL(request.url ?? '/api/cron/bank-sync', config.appUrl)
-      if (url.searchParams.get('dryRun') === '1') {
-        const [memberships, visibleAccounts, accounts] = await Promise.all([
-          db.from('workspace_members').select('workspace_id'),
+      const memberships = await db.from('workspace_members').select('workspace_id')
+      if (memberships.error) throw memberships.error
+      const workspaceIds = (memberships.data ?? []).map((membership) => String(membership.workspace_id))
+      await reporter.checkpoint({ phase: 'authenticated', workspaceIds })
+      if (dryRun) {
+        const [visibleAccounts, accounts] = await Promise.all([
           db.from('accounts').select('id,provider_account_id,auto_sync,closed'),
           automaticAccounts(db),
         ])
-        if (memberships.error) throw memberships.error
         if (visibleAccounts.error) throw visibleAccounts.error
+        await reporter.checkpoint({
+          phase: 'completed', status: 'completed', workspaceIds, eligible: accounts.length, responseStatus: 200,
+        })
         json(response, 200, {
           dryRun: true,
-          memberships: memberships.data?.length ?? 0,
+          runId: reporter.id,
+          memberships: workspaceIds.length,
           visibleAccounts: visibleAccounts.data?.length ?? 0,
           connectedAccounts: (visibleAccounts.data ?? []).filter((account) => Boolean(account.provider_account_id)).length,
           eligible: accounts.length,
         })
         return
       }
-      const result = await runAutomaticBankSync(db, service.syncAccount)
+      const accounts = await automaticAccounts(db)
+      await reporter.checkpoint({ phase: 'enumerated', workspaceIds, eligible: accounts.length })
+      const result = await runAutomaticBankSync(db, service.syncAccount, now, async (results) => {
+        await reporter.checkpoint({ phase: 'syncing', workspaceIds, eligible: accounts.length, results })
+      }, accounts)
       const failed = result.results.filter((item) => item.status === 'failed')
-      json(response, failed.length ? 500 : 200, { ...result, failed: failed.length })
+      const status = failed.length ? 500 : 200
+      await reporter.checkpoint({
+        phase: failed.length ? 'failed' : 'completed',
+        status: failed.length ? 'failed' : 'completed',
+        workspaceIds,
+        eligible: accounts.length,
+        results: result.results,
+        error: failed.length ? `${failed.length} account sync${failed.length === 1 ? '' : 's'} failed.` : undefined,
+        responseStatus: status,
+      })
+      json(response, status, { ...result, runId: reporter.id, failed: failed.length })
     } catch (error) {
-      json(response, 500, { error: cleanError(error) })
+      const message = cleanError(error)
+      await reporter.checkpoint({ phase: 'failed', status: 'failed', error: message, responseStatus: 500 })
+      json(response, 500, { runId: reporter.id, error: message })
     }
   }
 }

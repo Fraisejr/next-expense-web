@@ -27,11 +27,22 @@ export type Account = {
   bankBalanceCurrency?: string
   bankBalanceUpdatedAt?: string
   lastSyncDiagnostic?: BankSyncDiagnostic
+  lastAutomaticSync?: BankAutomaticSyncStatus
   connectionStatus?: 'active' | 'expired' | 'revoked' | 'error'
   rateLimits?: {
     transactions?: BankRateLimit
     balances?: BankRateLimit
   }
+}
+
+export type BankAutomaticSyncStatus = {
+  date: string
+  status: 'running' | 'completed' | 'failed'
+  startedAt: string
+  completedAt?: string
+  imported?: number
+  warnings?: string[]
+  error?: string
 }
 
 export type BankRateLimit = {

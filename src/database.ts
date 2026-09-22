@@ -324,6 +324,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
     const metadata = connection?.metadata && typeof connection.metadata === 'object' ? connection.metadata as Row : undefined
     const bankBalance = metadata?.bank_balance && typeof metadata.bank_balance === 'object' ? metadata.bank_balance as Row : undefined
     const lastSyncDiagnostic = metadata?.last_sync_diagnostic && typeof metadata.last_sync_diagnostic === 'object' ? metadata.last_sync_diagnostic as BankSyncDiagnostic : undefined
+    const automaticSync = metadata?.last_automatic_sync && typeof metadata.last_automatic_sync === 'object' ? metadata.last_automatic_sync as Row : undefined
     const calculatedBalanceMinor = accountBalances.get(row.id as string) ?? 0
     return {
       id: row.id as string,
@@ -354,6 +355,20 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
       bankBalanceCurrency: typeof bankBalance?.currency === 'string' ? bankBalance.currency : undefined,
       bankBalanceUpdatedAt: typeof bankBalance?.fetched_at === 'string' ? bankBalance.fetched_at : undefined,
       lastSyncDiagnostic,
+      lastAutomaticSync: automaticSync
+        && typeof automaticSync.date === 'string'
+        && ['running', 'completed', 'failed'].includes(String(automaticSync.status))
+        && typeof automaticSync.startedAt === 'string'
+        ? {
+            date: automaticSync.date,
+            status: automaticSync.status as 'running' | 'completed' | 'failed',
+            startedAt: automaticSync.startedAt,
+            completedAt: typeof automaticSync.completedAt === 'string' ? automaticSync.completedAt : undefined,
+            imported: typeof automaticSync.imported === 'number' ? automaticSync.imported : undefined,
+            warnings: Array.isArray(automaticSync.warnings) ? automaticSync.warnings.filter((warning): warning is string => typeof warning === 'string') : undefined,
+            error: typeof automaticSync.error === 'string' ? automaticSync.error : undefined,
+          }
+        : undefined,
       connectionStatus: (connection?.status as Account['connectionStatus'] | undefined),
       rateLimits: (metadata?.rate_limits as Account['rateLimits'] | undefined),
     }

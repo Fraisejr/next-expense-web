@@ -9,4 +9,8 @@ export default createAutomaticBankSyncHandler({
   appUrl: process.env.APP_URL || (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : undefined),
   gocardlessSecretId: process.env.GOCARDLESS_SECRET_ID,
   gocardlessSecretKey: process.env.GOCARDLESS_SECRET_KEY,
+  diagnosticsDatabaseUrl: process.env.CRON_DIAGNOSTICS_DATABASE_URL,
+  deploymentId: process.env.VERCEL_DEPLOYMENT_ID,
+  deploymentUrl: process.env.VERCEL_URL,
+  gitCommitSha: process.env.VERCEL_GIT_COMMIT_SHA,
 })

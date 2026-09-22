@@ -18,14 +18,15 @@
   },
   "dependencies": {
     "@neondatabase/neon-js": "^0.7.0-beta",
+    "@neondatabase/serverless": "^1.1.0",
+    "@supabase/postgrest-js": "2.79.0",
     "@vitejs/plugin-react": "latest",
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
     "react-router-dom": "^7.18.3",
     "typescript": "latest",
-    "vite": "latest",
-    "@supabase/postgrest-js": "2.79.0"
+    "vite": "latest"
   },
   "devDependencies": {
     "@eslint/js": "latest",
