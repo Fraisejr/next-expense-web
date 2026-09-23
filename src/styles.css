@@ -574,6 +574,7 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .bank-sync-status { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 14px; margin-top: 14px; border: 1px solid #dce5df; border-radius: 8px; background: #f2f6f3; color: var(--muted); font-size: 9.5px; }
 .bank-sync-status div { display: grid; gap: 3px; }
 .bank-sync-status strong { color: var(--green); font-size: 10.5px; }
+.bank-sync-outcome { color: var(--ink); font-weight: 600; }
 .bank-sync-status > span { text-align: right; }
 .bank-sync-status-error { border-color: #e2c7bd; background: #fff6f2; }
 .bank-sync-status-error strong { color: #984b38; }

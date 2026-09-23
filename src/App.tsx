@@ -3587,7 +3587,14 @@ function AccountDetailPage({ account, transactions, allTransactions, candidates,
     </div>
     <section className="panel entity-detail-panel">
       <div className="entity-heading"><div className="entity-heading-icon" style={{ background: account.color }}><CreditCard size={20} /></div><div><span className="eyebrow">{accountBalanceSheetGroup(account)} · {account.type}{account.providerAccountId ? ' · Bank connected' : ''}</span><div className="entity-heading-title"><h2>{account.name}</h2>{accountIsReconciled(account) && <AccountReconciledIndicator label />}</div></div><div className="entity-heading-actions"><button className="secondary-button" onClick={onAdjustBalance}><RefreshCw size={16} />Adjust balance</button><button className="secondary-button" onClick={onEditAccount}><Pencil size={16} />Edit account</button>{account.providerAccountId && <button className="primary-button" disabled={syncing} onClick={onSyncBank}>{syncing ? <LoaderCircle className="spin-icon" size={16} /> : <RefreshCw size={16} />}{syncing ? 'Syncing…' : 'Sync now'}</button>}<button className="secondary-button" onClick={onLinkBank}><Link2 size={16} />{account.providerAccountId ? 'Reconnect' : 'Connect bank'}</button></div></div>
-      {account.providerAccountId && <div className={`bank-sync-status${account.lastAutomaticSync?.status === 'failed' ? ' bank-sync-status-error' : ''}`}><div><strong>{account.connectionStatus === 'active' ? 'Bank connection active' : 'Bank connected'}</strong><span>{account.lastSyncedAt ? `Last synced ${new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(account.lastSyncedAt))}` : 'Not synced yet'}</span>{account.lastAutomaticSync && <span>{formatAutomaticSyncStatus(account.lastAutomaticSync)}</span>}{account.lastSyncDiagnostic && !syncNotice && <span>{formatSyncDiagnostic(account.lastSyncDiagnostic)}</span>}</div><span>{syncNotice || formatRateLimits(account)}</span></div>}
+      {account.providerAccountId && <div className={`bank-sync-status${account.lastAutomaticSync?.status === 'failed' ? ' bank-sync-status-error' : ''}`}>
+        <div>
+          <strong>{account.connectionStatus === 'active' ? 'Bank connection active' : 'Bank connected'}</strong>
+          <span>{formatBankSyncTimestamp(account.lastSyncedAt)}</span>
+          {!syncNotice && <span className="bank-sync-outcome">{formatBankSyncOutcome(account)}</span>}
+        </div>
+        <span>{syncNotice || formatRateLimits(account)}</span>
+      </div>}
       {account.providerAccountId && <BankImportReview account={account} accounts={accounts} transactions={transactions} candidates={candidates} categories={categories} payees={payees} mappings={mappings} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingPayees} onModeChange={onImportModeChange} onReview={onReviewCandidate} onPostTransfer={onPostTransfer} onRematchPayees={onRematchPayees} onCreatePayee={onCreatePayee} onPromoteMapping={onPromoteMapping} onAddAlternativeName={onAddAlternativeName} onUnhideCategory={onUnhideCategory} />}
       <AccountDetail account={account} transactions={transactions} allTransactions={allTransactions} categories={categories} accounts={accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={onRequestHistory} onEditTransaction={onEditTransaction} />
     </section>
@@ -3805,16 +3812,52 @@ function formatRateLimits(account: Account) {
   return `${count} sync${count === 1 ? '' : 's'} in the past 24 hours`
 }
 
-function formatAutomaticSyncStatus(sync: NonNullable<Account['lastAutomaticSync']>) {
-  const timestamp = sync.completedAt ?? sync.startedAt
-  const when = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(timestamp))
-  if (sync.status === 'failed') return `Automatic sync failed ${when}: ${sync.error ?? 'Open the connection and try Sync now.'}`
-  if (sync.status === 'running') return `Automatic sync started ${when}`
-  const details = [
-    `${sync.imported ?? 0} imported`,
-    ...(sync.warnings ?? []).map((warning) => `Warning: ${warning}`),
-  ]
-  return `Automatic sync completed ${when} · ${details.join(' · ')}`
+function formatBankSyncTimestamp(value?: string) {
+  if (!value) return 'Not synced yet'
+  const syncedAt = new Date(value)
+  if (Number.isNaN(syncedAt.getTime())) return 'Sync time unavailable'
+  const today = new Date()
+  const time = new Intl.DateTimeFormat('en', { timeStyle: 'short' }).format(syncedAt)
+  const isToday = syncedAt.getFullYear() === today.getFullYear()
+    && syncedAt.getMonth() === today.getMonth()
+    && syncedAt.getDate() === today.getDate()
+  if (isToday) return `Synced today at ${time}`
+  const date = new Intl.DateTimeFormat('en', { dateStyle: 'medium' }).format(syncedAt)
+  return `Synced ${date} at ${time}`
+}
+
+function formatBankSyncOutcome(account: Account) {
+  const automaticSync = account.lastAutomaticSync
+  if (automaticSync?.status === 'failed') return `Automatic sync failed: ${automaticSync.error ?? 'Reconnect the bank and try again.'}`
+  if (automaticSync?.status === 'running') return 'Automatic sync in progress'
+
+  const diagnostic = account.lastSyncDiagnostic
+  const changes = diagnostic ? [
+    account.bankImportMode === 'review' && diagnostic.staged
+      ? `${diagnostic.staged} new transaction${diagnostic.staged === 1 ? '' : 's'} ready for review`
+      : null,
+    account.bankImportMode !== 'review' && diagnostic.imported
+      ? `${diagnostic.imported} new transaction${diagnostic.imported === 1 ? '' : 's'} added`
+      : null,
+    diagnostic.pendingPromoted
+      ? `${diagnostic.pendingPromoted} pending transaction${diagnostic.pendingPromoted === 1 ? '' : 's'} updated`
+      : null,
+    diagnostic.transfersMatched
+      ? `${diagnostic.transfersMatched} transfer${diagnostic.transfersMatched === 1 ? '' : 's'} matched`
+      : null,
+  ].filter(Boolean) : []
+  const issues = diagnostic ? [
+    diagnostic.transactionError ? `Transactions error: ${diagnostic.transactionError}` : null,
+    diagnostic.balanceError ? `Balance error: ${diagnostic.balanceError}` : null,
+  ].filter(Boolean) : []
+  const warnings = (automaticSync?.warnings ?? []).map((warning) => `Warning: ${warning}`)
+
+  if (changes.length || issues.length || warnings.length) return [...changes, ...issues, ...warnings].join(' · ')
+  if (!diagnostic && (automaticSync?.imported ?? 0) > 0) {
+    const imported = automaticSync?.imported ?? 0
+    return `${imported} new transaction${imported === 1 ? '' : 's'} added`
+  }
+  return 'No new transactions'
 }
 
 function formatSyncDiagnostic(diagnostic: NonNullable<Account['lastSyncDiagnostic']>) {
