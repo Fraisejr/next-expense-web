@@ -106,6 +106,22 @@ test('native endpoint persists review imports and balances, and repeat syncs do 
   assert.equal(state.providerCalls, 2)
 })
 
+test('daily sync rematches an existing pending candidate when its bank description changes', async t => {
+  const { db, state, sync } = fixture(t)
+  assert.equal((await sync()).status, 200)
+  assert.equal(db.bank_import_candidates[0].payee_id, null)
+
+  db.payees.push({ id: 'glovo', workspace_id: workspace, name: 'Glovo', default_category_id: 'food' })
+  db.payee_mappings.push({ id: 'glovo-prefix', workspace_id: workspace, normalized_name: 'glovo', payee_id: 'glovo', match_type: 'starts_with' })
+  state.booked = [{ ...transaction('new'), creditorName: 'Glovo 24sep B4g1rliq' }]
+
+  assert.equal((await sync()).status, 200)
+  assert.equal(db.bank_import_candidates.length, 1)
+  assert.equal(db.bank_import_candidates[0].payee_name, 'Glovo 24sep B4g1rliq')
+  assert.equal(db.bank_import_candidates[0].payee_id, 'glovo')
+  assert.equal(db.bank_import_candidates[0].category_id, 'food')
+})
+
 test('a candidate inserted by an overlapping sync is treated as a duplicate', async t => {
   const { db, state, sync } = fixture(t)
   state.candidateInsertRace = true

@@ -1,7 +1,7 @@
 import { saveTransferReference } from './bank-reference.ts'
 import type { BankSyncPayload, BankSyncSummary } from '../shared/bank-types.ts'
 import { zeroAmountAction, zeroAmountReason } from '../src/bank-import-policy.ts'
-import { bankData, amountToMinor, todayInParis, recentSyncRuns, normalizedPayeeName, daysApart, shiftedDate } from '../shared/bank-data.ts'
+import { bankData, amountToMinor, todayInParis, recentSyncRuns, normalizedPayeeName, daysApart, shiftedDate, rematchPendingBankImportPayees } from '../shared/bank-data.ts'
 import type { BankDatabase } from '../shared/bank-data.ts'
 import type { Account, BankSyncDiagnostic } from '../src/types.ts'
 type Row = Record<string, unknown>
@@ -507,6 +507,9 @@ export async function saveBankSync(neon: BankDatabase, workspaceId: string, acco
     raw_payload: transaction.rawPayload ?? null,
   }))
   const candidateInsert = await insertBankImportCandidates(neon, candidateRowsToInsert)
+  // A pending transaction may have been seen before its bank description or
+  // matching rule changed. Apply the same rematch used by Review on every sync.
+  await rematchPendingBankImportPayees(neon, workspaceId, account.id)
 
   const receivedDates = sync.transactions.map((transaction) => transaction.date).sort()
   if (receivedDates.length && aliasAccountIds.size) {

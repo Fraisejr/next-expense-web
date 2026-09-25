@@ -1,11 +1,11 @@
-import { bankData, normalizedPayeeName, recentSyncRuns } from '../shared/bank-data.ts'
+import { bankData, normalizedPayeeName, recentSyncRuns, rematchPendingBankImportPayees as rematchPendingPayees } from '../shared/bank-data.ts'
 export { normalizedPayeeName, prefixMappingMatches } from '../shared/bank-data.ts'
 import { neon } from './neon'
 import { retryAfterExpiredSession } from './auth-bootstrap'
 import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankSyncDiagnostic, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, TimeCode, TimeComment, TimeEntry, TimesheetClient, TimesheetClientForecast, TimesheetClientRate, Transaction, YearlyFinancialPlan } from './types'
 
-const { ensurePeriod, resolvePayees, findPayees } = bankData(neon)
+const { ensurePeriod, resolvePayees } = bankData(neon)
 type Row = Record<string, unknown>
 
 export class WorkspaceNotLinkedError extends Error {
@@ -975,43 +975,7 @@ export async function ensurePayees(workspaceId: string, sourceNames: string[]): 
 }
 
 export async function rematchPendingBankImportPayees(workspaceId: string, accountId: string) {
-  const { data, error } = await neon.from('bank_import_candidates')
-    .select('id,payee_name,bank_memo,payee_id')
-    .eq('workspace_id', workspaceId)
-    .eq('account_id', accountId)
-    .eq('status', 'pending')
-    .is('payee_id', null)
-  if (error) throw error
-
-  const candidates = (data ?? []) as unknown as Row[]
-  const sourceNames = [...new Set(candidates.flatMap((candidate) => [candidate.payee_name, candidate.bank_memo])
-    .map((value) => String(value ?? '').normalize('NFKC').trim())
-    .filter(Boolean))]
-  const resolvedPayees = await findPayees(workspaceId, sourceNames)
-  const payeeBySource = new Map(sourceNames.flatMap((sourceName, index) => {
-    const payee = resolvedPayees[index]
-    return payee ? [[normalizedPayeeName(sourceName), payee] as const] : []
-  }))
-
-  let matched = 0
-  for (const candidate of candidates) {
-    const payee = payeeBySource.get(normalizedPayeeName(String(candidate.payee_name ?? '')))
-      ?? payeeBySource.get(normalizedPayeeName(String(candidate.bank_memo ?? '')))
-    if (!payee) continue
-    const update = await neon.from('bank_import_candidates')
-      .update({
-        payee_id: payee.id,
-        ...(payee.defaultCategoryId ? { category_id: payee.defaultCategoryId } : {}),
-      })
-      .eq('workspace_id', workspaceId)
-      .eq('id', candidate.id)
-      .eq('status', 'pending')
-      .is('payee_id', null)
-      .select('id')
-    if (update.error) throw update.error
-    matched += update.data?.length ?? 0
-  }
-  return matched
+  return rematchPendingPayees(neon, workspaceId, accountId)
 }
 
 export async function assignPayeeMapping(workspaceId: string, sourceName: string, payeeId: string): Promise<string[]> {
