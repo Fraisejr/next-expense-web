@@ -122,6 +122,20 @@ test('daily sync rematches an existing pending candidate when its bank descripti
   assert.equal(db.bank_import_candidates[0].category_id, 'food')
 })
 
+test('a fresh review import finds a starts-with mapping after hundreds of earlier rows', async t => {
+  const { db, state, sync } = fixture(t)
+  for (let index = 0; index < 820; index++) {
+    db.payees.push({ id: `payee-${index}`, workspace_id: workspace, name: `Other ${index}` })
+    db.payee_mappings.push({ id: `mapping-${index}`, workspace_id: workspace, normalized_name: `other ${index}`, payee_id: `payee-${index}`, match_type: 'exact' })
+  }
+  db.payees.push({ id: 'glovo', workspace_id: workspace, name: 'Glovo' })
+  db.payee_mappings.push({ id: 'glovo-prefix', workspace_id: workspace, normalized_name: 'glovo', payee_id: 'glovo', match_type: 'starts_with' })
+  state.booked = [{ ...transaction('glovo-new'), creditorName: 'Glovo 24sep B4q1rljq' }]
+
+  assert.equal((await sync()).status, 200)
+  assert.equal(db.bank_import_candidates[0].payee_id, 'glovo')
+})
+
 test('a candidate inserted by an overlapping sync is treated as a duplicate', async t => {
   const { db, state, sync } = fixture(t)
   state.candidateInsertRace = true

@@ -3,7 +3,7 @@ import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { BankDatabase } from '../shared/bank-data.ts'
 import type { BankSyncSummary } from '../shared/bank-types.ts'
-import { claimAutomaticSync, finishAutomaticSync } from './bank-sync.ts'
+import { bankClient, claimAutomaticSync, finishAutomaticSync } from './bank-sync.ts'
 import { createCronRunReporter, type CronAccountResult } from './cron-diagnostics.ts'
 import { createGoCardlessService } from './gocardless.ts'
 
@@ -181,9 +181,10 @@ export function createAutomaticBankSyncHandler(config: CronConfig) {
         if (session.ok) jwt = session.headers.get('set-auth-jwt') ?? ''
       }
       if (!jwt) throw new Error('The automatic bank sync account did not receive a database token.')
-      const client = createClient({ dataApi: { url: config.dataApiUrl, getToken: async () => jwt } })
       const service = createGoCardlessService(config.gocardlessSecretId, config.gocardlessSecretKey)
-      const db = client as unknown as BankDatabase
+      // Use the same Data API client as a manual sync, including its query
+      // semantics, while authenticating with the cron account's JWT.
+      const db = bankClient(config.dataApiUrl, `Bearer ${jwt}`)
       const memberships = await db.from('workspace_members').select('workspace_id')
       if (memberships.error) throw memberships.error
       const workspaceIds = (memberships.data ?? []).map((membership) => String(membership.workspace_id))
