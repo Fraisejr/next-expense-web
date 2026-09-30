@@ -7,7 +7,7 @@ import {
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTimeCode, createTimesheetClient, createTransaction, deleteAllUnusedPayees, deleteBudget, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadRevenueRecognitionEntries, loadTimeComments, loadTimeEntries, loadTransactionPage, loadWorkspace, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveTimeCodeOrder, saveTimeComment, saveTimeEntry, saveTimesheetClientForecast, saveTimesheetClientRate, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidateDetails, updateBankImportMode, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTimeCode, updateTimesheetClient, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type LoadedWorkspace, type WorkspaceBackup } from './database'
+import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, cleanedMappingName, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTimeCode, createTimesheetClient, createTransaction, deleteAllUnusedPayees, deleteBudget, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadRevenueRecognitionEntries, loadTimeComments, loadTimeEntries, loadTransactionPage, loadWorkspace, normalizedMappingName, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveTimeCodeOrder, saveTimeComment, saveTimeEntry, saveTimesheetClientForecast, saveTimesheetClientRate, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidateDetails, updateBankImportMode, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTimeCode, updateTimesheetClient, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
 import { convertMinor } from './currency'
 import { calculateRevenueForecast, earnedWorkMonthRange, type RevenueForecast } from './revenue'
@@ -892,7 +892,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       if (rememberMapping && mappingSource.trim()) {
         try {
           const normalizedSource = normalizedPayeeName(mappingSource)
-          const existingMapping = data.payeeMappings.find((mapping) => normalizedPayeeName(mapping.sourceName) === normalizedSource)
+          const existingMapping = data.payeeMappings.find((mapping) => normalizedMappingName(mapping.sourceName, mapping.matchType) === normalizedSource)
           if (existingMapping && existingMapping.payeeId !== payee.id) await updatePayeeMapping(workspace.workspaceId, existingMapping.id, mappingSource, payee.id, existingMapping.matchType)
           else if (!existingMapping) await createPayeeMapping(workspace.workspaceId, mappingSource, payee.id)
         } catch (mappingError) {
@@ -1114,7 +1114,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       await updatePayeeMapping(workspace.workspaceId, mappingId, sourceName, payeeId, matchType)
       setData((current) => ({
         ...current,
-        payeeMappings: current.payeeMappings.map((mapping) => mapping.id === mappingId ? { ...mapping, sourceName: sourceName.normalize('NFKC').trim(), payeeId, matchType } : mapping),
+        payeeMappings: current.payeeMappings.map((mapping) => mapping.id === mappingId ? { ...mapping, sourceName: cleanedMappingName(sourceName, matchType), payeeId, matchType } : mapping),
       }))
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not update the mapping.'))
@@ -2624,12 +2624,12 @@ function PayeeMappingRow({ mapping, payees, categories, onUpdate, onRemove }: { 
   const [matchType, setMatchType] = useState(mapping.matchType)
   const [pending, setPending] = useState<'save' | 'remove' | ''>('')
   const [error, setError] = useState('')
-  const changed = sourceName.trim() !== mapping.sourceName || payeeId !== mapping.payeeId || matchType !== mapping.matchType
+  const changed = cleanedMappingName(sourceName, matchType) !== mapping.sourceName || payeeId !== mapping.payeeId || matchType !== mapping.matchType
   return <div className="payee-mapping-row">
     <label><span>Bank description</span><input value={sourceName} onChange={(event) => setSourceName(event.target.value)} /></label>
     <label><span>Maps to</span><PayeeSearchPicker ariaLabel={`Payee for mapping ${mapping.sourceName}`} value={payeeId} payees={payees} categories={categories} onChange={setPayeeId} /></label>
     <label><span>Match rule</span><select value={matchType} onChange={(event) => setMatchType(event.target.value as PayeeMapping['matchType'])}><option value="exact">Exact</option><option value="starts_with">Starts with</option></select></label>
-    <div className="payee-mapping-actions"><button type="button" className="secondary-button" disabled={!changed || !sourceName.trim() || !payeeId || Boolean(pending)} onClick={async () => { setPending('save'); setError(''); try { await onUpdate(mapping.id, sourceName.trim(), payeeId, matchType) } catch (cause) { setError(getErrorMessage(cause, 'Could not save this mapping.')) } finally { setPending('') } }}>{pending === 'save' ? 'Saving…' : 'Save'}</button><button type="button" className="mapping-remove" disabled={Boolean(pending)} onClick={async () => { setPending('remove'); setError(''); try { await onRemove(mapping.id) } catch (cause) { setError(getErrorMessage(cause, 'Could not remove this mapping.')) } finally { setPending('') } }}>{pending === 'remove' ? 'Removing…' : 'Remove'}</button></div>
+    <div className="payee-mapping-actions"><button type="button" className="secondary-button" disabled={!changed || !sourceName.trim() || !payeeId || Boolean(pending)} onClick={async () => { setPending('save'); setError(''); try { await onUpdate(mapping.id, sourceName, payeeId, matchType) } catch (cause) { setError(getErrorMessage(cause, 'Could not save this mapping.')) } finally { setPending('') } }}>{pending === 'save' ? 'Saving…' : 'Save'}</button><button type="button" className="mapping-remove" disabled={Boolean(pending)} onClick={async () => { setPending('remove'); setError(''); try { await onRemove(mapping.id) } catch (cause) { setError(getErrorMessage(cause, 'Could not remove this mapping.')) } finally { setPending('') } }}>{pending === 'remove' ? 'Removing…' : 'Remove'}</button></div>
     {error && <p className="unmatched-error" role="alert">{error}</p>}
   </div>
 }
@@ -3698,10 +3698,10 @@ function BankImportReview({ account, accounts, transactions, candidates, categor
         const suggestedMapping = (() => {
           if (payeeId) return undefined
           const sourceTexts = [candidate.payee, candidate.bankMemo ?? ''].filter(Boolean)
-          const candidates = mappings.flatMap((mapping) => mapping.matchType === 'exact' ? sourceTexts.filter((sourceText) => prefixMappingMatches(normalizedPayeeName(sourceText), normalizedPayeeName(mapping.sourceName))).map((sourceText) => ({ mapping, sourceText })) : []).sort((left, right) => normalizedPayeeName(right.mapping.sourceName).length - normalizedPayeeName(left.mapping.sourceName).length)
+          const candidates = mappings.flatMap((mapping) => mapping.matchType === 'exact' ? sourceTexts.filter((sourceText) => prefixMappingMatches(normalizedPayeeName(sourceText), normalizedMappingName(mapping.sourceName, mapping.matchType))).map((sourceText) => ({ mapping, sourceText })) : []).sort((left, right) => normalizedMappingName(right.mapping.sourceName, right.mapping.matchType).length - normalizedMappingName(left.mapping.sourceName, left.mapping.matchType).length)
           if (!candidates.length) return undefined
-          const longestLength = normalizedPayeeName(candidates[0].mapping.sourceName).length
-          const longest = candidates.filter(({ mapping }) => normalizedPayeeName(mapping.sourceName).length === longestLength)
+          const longestLength = normalizedMappingName(candidates[0].mapping.sourceName, candidates[0].mapping.matchType).length
+          const longest = candidates.filter(({ mapping }) => normalizedMappingName(mapping.sourceName, mapping.matchType).length === longestLength)
           return new Set(longest.map(({ mapping }) => mapping.payeeId)).size === 1 ? longest[0] : undefined
         })()
         const suggestedPayee = payees.find((payee) => payee.id === suggestedMapping?.mapping.payeeId)
@@ -4186,7 +4186,7 @@ function TransactionDetailsForm({ transaction, transactions, categories, payees,
   const bankMemo = transaction.bankMemo?.trim() || ''
   const bankMappingSource = transaction.source === 'manual' ? '' : bankDescription || bankMemo
   const bankMappingLabel = bankDescription ? 'bank description' : 'bank memo'
-  const mappingAlreadyExists = Boolean(selectedPayee && mappings.some((mapping) => mapping.payeeId === selectedPayee.id && normalizedPayeeName(mapping.sourceName) === normalizedPayeeName(bankMappingSource)))
+  const mappingAlreadyExists = Boolean(selectedPayee && mappings.some((mapping) => mapping.payeeId === selectedPayee.id && normalizedMappingName(mapping.sourceName, mapping.matchType) === normalizedPayeeName(bankMappingSource)))
   const targetPayeeName = selectedPayee?.name ?? payeeQuery.trim()
   const offerMapping = Boolean(payeeChanged && targetPayeeName && bankMappingSource && normalizedPayeeName(bankMappingSource) !== normalizedPayeeName(targetPayeeName) && !mappingAlreadyExists)
   const normalizedTargetPayee = normalizedPayeeName(targetPayeeName)

@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createGoCardlessHandler } from './gocardless.ts'
 import { bankReference } from './bank-authorization.ts'
 import { bankClient, acquireSyncLease } from './bank-sync.ts'
+import { cleanedMappingName, normalizedMappingName } from '../shared/bank-data.ts'
 
 const workspace = '10000000-0000-0000-0000-000000000001'
 const account = '10000000-0000-0000-0000-000000000002'
@@ -120,6 +121,45 @@ test('daily sync rematches an existing pending candidate when its bank descripti
   assert.equal(db.bank_import_candidates[0].payee_name, 'Glovo 24sep B4g1rliq')
   assert.equal(db.bank_import_candidates[0].payee_id, 'glovo')
   assert.equal(db.bank_import_candidates[0].category_id, 'food')
+})
+
+test('starts-with mapping matches a bank suffix without a separator', async t => {
+  const { db, state, sync } = fixture(t)
+  db.payees.push({ id: 'glovo', workspace_id: workspace, name: 'Glovo' })
+  db.payee_mappings.push({ id: 'glovo-prefix', workspace_id: workspace, normalized_name: 'glovo', payee_id: 'glovo', match_type: 'starts_with' })
+  state.booked = [{ ...transaction('glovo-new'), creditorName: 'Glovo29Sep B4xx' }]
+
+  assert.equal((await sync()).status, 200)
+  assert.equal(db.bank_import_candidates[0].payee_id, 'glovo')
+})
+
+test('trailing space in a starts-with mapping requires a separator', async t => {
+  const { db, state, sync } = fixture(t)
+  assert.equal(cleanedMappingName('  Uber   ', 'starts_with'), 'Uber ')
+  assert.equal(normalizedMappingName('  Uber   ', 'starts_with'), 'uber ')
+  assert.equal(normalizedMappingName('  Uber   ', 'exact'), 'uber')
+  db.payees.push({ id: 'uber', workspace_id: workspace, name: 'Uber' })
+  db.payee_mappings.push({ id: 'uber-prefix', workspace_id: workspace, normalized_name: normalizedMappingName('Uber ', 'starts_with'), payee_id: 'uber', match_type: 'starts_with' })
+  state.booked = [{ ...transaction('uber-no-space'), creditorName: 'Ubereats 12' }, { ...transaction('uber-space'), creditorName: 'Uber eats' }]
+
+  assert.equal((await sync()).status, 200)
+  assert.equal(db.bank_import_candidates.find(row => row.provider_transaction_id === 'uber-no-space')?.payee_id, null)
+  assert.equal(db.bank_import_candidates.find(row => row.provider_transaction_id === 'uber-space')?.payee_id, 'uber')
+})
+
+test('exact mapping wins over starts-with and the longest starts-with mapping wins otherwise', async t => {
+  const { db, state, sync } = fixture(t)
+  db.payees.push({ id: 'short', workspace_id: workspace, name: 'Short' }, { id: 'long', workspace_id: workspace, name: 'Long' }, { id: 'exact', workspace_id: workspace, name: 'Exact' })
+  db.payee_mappings.push(
+    { id: 'short-prefix', workspace_id: workspace, normalized_name: 'glovo', payee_id: 'short', match_type: 'starts_with' },
+    { id: 'long-prefix', workspace_id: workspace, normalized_name: 'glovo29', payee_id: 'long', match_type: 'starts_with' },
+    { id: 'exact-name', workspace_id: workspace, normalized_name: 'glovo29sep b4xx', payee_id: 'exact', match_type: 'exact' },
+  )
+  state.booked = [{ ...transaction('exact-case'), creditorName: 'Glovo29Sep B4xx' }, { ...transaction('long-case'), creditorName: 'Glovo29Sep B4xy' }]
+
+  assert.equal((await sync()).status, 200)
+  assert.equal(db.bank_import_candidates.find(row => row.provider_transaction_id === 'exact-case')?.payee_id, 'exact')
+  assert.equal(db.bank_import_candidates.find(row => row.provider_transaction_id === 'long-case')?.payee_id, 'long')
 })
 
 test('a fresh review import finds a starts-with mapping after hundreds of earlier rows', async t => {

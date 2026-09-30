@@ -400,16 +400,16 @@ final class LiveExpenseStore: ObservableObject {
         let sources = [(candidate.payeeName ?? "", false), (candidate.bankMemo ?? "", true)].filter { !$0.0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         let matches = payeeMappings.flatMap { mapping -> [ReviewPayeeSuggestion] in
             guard mapping.matchType == "exact", let payee = payees.first(where: { $0.id == mapping.payeeId }) else { return [] }
-            let prefix = Self.normalizedPayeeName(mapping.sourceName)
+            let prefix = Self.normalizedMappingName(mapping.sourceName, matchType: mapping.matchType)
             return sources.compactMap { source, isMemo in
                 Self.prefixMappingMatches(Self.normalizedPayeeName(source), prefix)
                     ? ReviewPayeeSuggestion(mapping: mapping, payee: payee, sourceText: source, sourceIsMemo: isMemo)
                     : nil
             }
-        }.sorted { Self.normalizedPayeeName($0.mapping.sourceName).count > Self.normalizedPayeeName($1.mapping.sourceName).count }
+        }.sorted { Self.normalizedMappingName($0.mapping.sourceName, matchType: $0.mapping.matchType).count > Self.normalizedMappingName($1.mapping.sourceName, matchType: $1.mapping.matchType).count }
         guard let first = matches.first else { return nil }
-        let longest = Self.normalizedPayeeName(first.mapping.sourceName).count
-        let best = matches.filter { Self.normalizedPayeeName($0.mapping.sourceName).count == longest }
+        let longest = Self.normalizedMappingName(first.mapping.sourceName, matchType: first.mapping.matchType).count
+        let best = matches.filter { Self.normalizedMappingName($0.mapping.sourceName, matchType: $0.mapping.matchType).count == longest }
         return Set(best.map { $0.payee.id }).count == 1 ? first : nil
     }
 
@@ -420,7 +420,7 @@ final class LiveExpenseStore: ObservableObject {
         do {
             let rows: [ReviewPayeeMapping] = try await api.data("payee_mappings", query: scoped(workspace.id) + [
                 .init(name: "id", value: "eq.\(suggestion.mapping.id)"), .init(name: "select", value: "id,source_name,payee_id,match_type")
-            ], method: "PATCH", body: ["match_type": "starts_with"])
+            ], method: "PATCH", body: ["match_type": "starts_with", "normalized_name": Self.normalizedMappingName(suggestion.mapping.sourceName, matchType: "starts_with")])
             guard let updated = rows.first else { throw MobileAPIError(message: "This payee match changed. Refresh and try again.", status: 409) }
             payeeMappings = payeeMappings.map { $0.id == updated.id ? updated : $0 }
         } catch { handle(error); throw error }
@@ -478,8 +478,8 @@ final class LiveExpenseStore: ObservableObject {
         guard let workspace else { throw MobileAPIError(message: "Choose a workspace first.", status: 0) }
         let cleaned = sourceName.precomposedStringWithCompatibilityMapping.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw MobileAPIError(message: "A bank description is required.", status: 0) }
-        let normalized = Self.normalizedPayeeName(cleaned)
-        if let existing = payeeMappings.first(where: { Self.normalizedPayeeName($0.sourceName) == normalized }) {
+        let normalized = Self.normalizedMappingName(cleaned, matchType: "exact")
+        if let existing = payeeMappings.first(where: { Self.normalizedMappingName($0.sourceName, matchType: $0.matchType) == normalized }) {
             if existing.payeeId == payee.id { return }
             guard replaceConflict else { throw MobileAPIError(message: "That alternative name already belongs to another payee.", status: 409) }
             let rows: [ReviewPayeeMapping] = try await api.data("payee_mappings", query: scoped(workspace.id) + [
@@ -530,15 +530,15 @@ final class LiveExpenseStore: ObservableObject {
 
     private func matchedPayee(_ sourceName: String) -> ReviewPayee? {
         let normalized = Self.normalizedPayeeName(sourceName)
-        if let mapping = payeeMappings.first(where: { $0.matchType == "exact" && Self.normalizedPayeeName($0.sourceName) == normalized }),
+        if let mapping = payeeMappings.first(where: { $0.matchType == "exact" && Self.normalizedMappingName($0.sourceName, matchType: $0.matchType) == normalized }),
            let payee = payees.first(where: { $0.id == mapping.payeeId }) { return payee }
         if let payee = payees.first(where: { Self.normalizedPayeeName($0.name) == normalized }) { return payee }
         let prefixMatches = payeeMappings.filter {
-            $0.matchType == "starts_with" && Self.prefixMappingMatches(normalized, Self.normalizedPayeeName($0.sourceName))
-        }.sorted { Self.normalizedPayeeName($0.sourceName).count > Self.normalizedPayeeName($1.sourceName).count }
+            $0.matchType == "starts_with" && Self.prefixMappingMatches(normalized, Self.normalizedMappingName($0.sourceName, matchType: $0.matchType))
+        }.sorted { Self.normalizedMappingName($0.sourceName, matchType: $0.matchType).count > Self.normalizedMappingName($1.sourceName, matchType: $1.matchType).count }
         guard let first = prefixMatches.first else { return nil }
-        let length = Self.normalizedPayeeName(first.sourceName).count
-        let ids = Set(prefixMatches.filter { Self.normalizedPayeeName($0.sourceName).count == length }.map(\.payeeId))
+        let length = Self.normalizedMappingName(first.sourceName, matchType: first.matchType).count
+        let ids = Set(prefixMatches.filter { Self.normalizedMappingName($0.sourceName, matchType: $0.matchType).count == length }.map(\.payeeId))
         guard ids.count == 1, let id = ids.first else { return nil }
         return payees.first(where: { $0.id == id })
     }
@@ -549,10 +549,12 @@ final class LiveExpenseStore: ObservableObject {
             .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ").lowercased()
     }
 
+    private static func normalizedMappingName(_ value: String, matchType: String) -> String {
+        normalizedPayeeName(value) + (matchType == "starts_with" && value.last?.isWhitespace == true && !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? " " : "")
+    }
+
     private static func prefixMappingMatches(_ source: String, _ prefix: String) -> Bool {
-        guard source.hasPrefix(prefix), source.count > prefix.count else { return false }
-        let boundary = source[source.index(source.startIndex, offsetBy: prefix.count)]
-        return !boundary.isLetter && !boundary.isNumber
+        source.hasPrefix(prefix) && source.count > prefix.count
     }
 
     private static func daysApart(_ left: String, _ right: String) -> Int? {

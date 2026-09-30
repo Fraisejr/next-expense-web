@@ -182,6 +182,7 @@ final class LiveReviewTests: XCTestCase {
     private var rejectStatus = 200
     private var rejectRows = true
     private var matchingFixtures = false
+    private var matchingBankMemo = "Market Barcelona purchase"
     private var candidateHasPayee = false
     private var multipleCandidates = false
     private var transferFixture = false
@@ -409,7 +410,7 @@ final class LiveReviewTests: XCTestCase {
         ["id": id.uuidString, "account_id": account.uuidString, "transaction_date": "2026-09-12",
          "amount_minor": 2450, "currency": "SEK", "transaction_type": "expense", "payee_name": "Market",
          "payee_id": candidateHasPayee ? payee.uuidString as Any : NSNull() as Any, "category_id": category.uuidString,
-         "memo": NSNull(), "bank_memo": matchingFixtures ? "Market Barcelona purchase" : NSNull()]
+         "memo": NSNull(), "bank_memo": matchingFixtures ? matchingBankMemo : NSNull()]
     }
     private func signedInStore() async -> LiveExpenseStore {
         let store = LiveExpenseStore(api: makeAPI())
@@ -570,6 +571,15 @@ final class LiveReviewTests: XCTestCase {
         XCTAssertEqual(store.candidates.first?.payeeId, payee)
         XCTAssertEqual(store.candidates.first?.categoryId, category)
         XCTAssertEqual(requests.filter { $0.url?.lastPathComponent == "payee_mappings" && $0.httpMethod == "POST" }.count, 1)
+    }
+
+    func testPossiblePrefixMatchWithoutSeparator() async throws {
+        matchingFixtures = true
+        matchingBankMemo = "MarketBarcelona purchase"
+        let store = await signedInStore()
+        let suggestion = try XCTUnwrap(store.possiblePayeeMatch(for: try XCTUnwrap(store.candidates.first)))
+        XCTAssertEqual(suggestion.sourceText, "MarketBarcelona purchase")
+        XCTAssertEqual(suggestion.payee.id, payee)
     }
 
     func testRecheckPayeesReloadsMappingsAndRematchesPendingCandidates() async throws {

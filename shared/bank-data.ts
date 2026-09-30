@@ -12,9 +12,21 @@ export function normalizedPayeeName(value: string) {
   return decoded.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en')
 }
 
+export function cleanedMappingName(value: string, matchType: 'exact' | 'starts_with') {
+  const normalized = value.normalize('NFKC')
+  const cleaned = normalized.trim()
+  return matchType === 'starts_with' && /\s$/.test(normalized) && cleaned
+    ? `${cleaned.replace(/\s+/g, ' ')} `
+    : cleaned
+}
+
+export function normalizedMappingName(value: string, matchType: 'exact' | 'starts_with') {
+  const cleaned = cleanedMappingName(value, matchType)
+  return normalizedPayeeName(cleaned) + (matchType === 'starts_with' && cleaned.endsWith(' ') ? ' ' : '')
+}
+
 export function prefixMappingMatches(sourceName: string, mappingName: string) {
-  if (!sourceName.startsWith(mappingName) || sourceName.length === mappingName.length) return false
-  return !/[\p{L}\p{N}]/u.test(sourceName.slice(mappingName.length, mappingName.length + 1))
+  return sourceName.startsWith(mappingName) && sourceName.length > mappingName.length
 }
 
 export function daysApart(left: unknown, right: string) {

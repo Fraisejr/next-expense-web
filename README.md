@@ -89,6 +89,12 @@ candidate, and the counterparty alias must agree. Provider references are kept
 per account-side so a single logical transfer can retain the different IDs
 reported by both banks. Unlinked bank legs are reconsidered after later syncs.
 
+Payee alternative names can match a full bank description (**Exact**) or the
+start of a longer description (**Starts with**). Starts with accepts any suffix:
+`Glovo` matches `Glovo29Sep`. A trailing space in a Starts with rule is kept,
+so `Uber ` matches `Uber eats` but not `Ubereats`. Exact matches and payee names
+take priority, followed by the longest matching Starts with rule.
+
 Each connected account can either add categorized bank transactions automatically
 or hold them for review. Review mode is the default. Approvals require a category
 and create ledger rows atomically; the chosen category can be remembered on the

@@ -1,5 +1,5 @@
-import { bankData, normalizedPayeeName, recentSyncRuns, rematchPendingBankImportPayees as rematchPendingPayees } from '../shared/bank-data.ts'
-export { normalizedPayeeName, prefixMappingMatches } from '../shared/bank-data.ts'
+import { bankData, cleanedMappingName, normalizedMappingName, normalizedPayeeName, recentSyncRuns, rematchPendingBankImportPayees as rematchPendingPayees } from '../shared/bank-data.ts'
+export { cleanedMappingName, normalizedMappingName, normalizedPayeeName, prefixMappingMatches } from '../shared/bank-data.ts'
 import { neon } from './neon'
 import { retryAfterExpiredSession } from './auth-bootstrap'
 import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
@@ -979,7 +979,7 @@ export async function rematchPendingBankImportPayees(workspaceId: string, accoun
 }
 
 export async function assignPayeeMapping(workspaceId: string, sourceName: string, payeeId: string): Promise<string[]> {
-  const normalizedName = normalizedPayeeName(sourceName)
+  const normalizedName = normalizedMappingName(sourceName, 'exact')
   const { data, error } = await neon.rpc('assign_payee_mapping', {
     p_workspace_id: workspaceId,
     p_source_name: sourceName.normalize('NFKC').trim(),
@@ -994,10 +994,10 @@ export async function assignPayeeMapping(workspaceId: string, sourceName: string
 }
 
 export async function createPayeeMapping(workspaceId: string, sourceName: string, payeeId: string): Promise<PayeeMapping> {
-  const cleanedName = sourceName.normalize('NFKC').trim()
+  const cleanedName = cleanedMappingName(sourceName, 'exact')
   if (!cleanedName) throw new Error('A bank description is required.')
   const { data, error } = await neon.from('payee_mappings')
-    .insert({ id: crypto.randomUUID(), workspace_id: workspaceId, normalized_name: normalizedPayeeName(cleanedName), source_name: cleanedName, payee_id: payeeId })
+    .insert({ id: crypto.randomUUID(), workspace_id: workspaceId, normalized_name: normalizedMappingName(cleanedName, 'exact'), source_name: cleanedName, payee_id: payeeId })
     .select('id,source_name,payee_id')
   if (error) throw error
   const row = data?.[0]
@@ -1370,10 +1370,10 @@ export async function updatePayeeDefaults(workspaceId: string, payeeId: string, 
 }
 
 export async function updatePayeeMapping(workspaceId: string, mappingId: string, sourceName: string, payeeId: string, matchType: PayeeMapping['matchType'] = 'exact') {
-  const cleanedName = sourceName.normalize('NFKC').trim()
+  const cleanedName = cleanedMappingName(sourceName, matchType)
   if (!cleanedName) throw new Error('A bank description is required.')
   const { data, error } = await neon.from('payee_mappings')
-    .update({ source_name: cleanedName, normalized_name: normalizedPayeeName(cleanedName), payee_id: payeeId, match_type: matchType })
+    .update({ source_name: cleanedName, normalized_name: normalizedMappingName(cleanedName, matchType), payee_id: payeeId, match_type: matchType })
     .eq('workspace_id', workspaceId)
     .eq('id', mappingId)
     .select('id')
