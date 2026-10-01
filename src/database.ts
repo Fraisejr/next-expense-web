@@ -188,7 +188,17 @@ export type LoadedWorkspace = {
   workspaceId: string
   workspaceName: string
   defaultCurrency: string
+  loadedMonthKey: string
+  snapshotRevision: number | null
   data: AppData
+}
+
+export async function workspaceSnapshotRevision(workspaceId: string): Promise<number | null> {
+  return retryAfterExpiredSession(async () => {
+    const { data, error } = await neon.rpc('workspace_snapshot_revision', { p_workspace_id: workspaceId })
+    if (error) throw error
+    return data === null ? null : Number(data)
+  }, neon.auth)
 }
 
 export const workspaceBackupTableNames = [
@@ -270,7 +280,10 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
   const nextMonthDate = new Date(`${monthStart}T12:00:00Z`)
   nextMonthDate.setUTCMonth(nextMonthDate.getUTCMonth() + 1)
   const monthEnd = nextMonthDate.toISOString().slice(0, 10)
-  const [workspaceResult, accountRows, categoryGroupRows, categoryRows, periodRows, budgetRows, fxRateRows, payeeRows, mappingRows, clientRows, clientRateRows, clientForecastRows, timeCodeRows, transactionPage, balanceResult, connectionRows, candidateRows, unusedPayeeResult] = await Promise.all([
+  const [revisionResult, workspaceResult, accountRows, categoryGroupRows, categoryRows, periodRows, budgetRows, fxRateRows, payeeRows, mappingRows, clientRows, clientRateRows, clientForecastRows, timeCodeRows, transactionPage, balanceResult, connectionRows, candidateRows, unusedPayeeResult] = await Promise.all([
+    // Start this read before the snapshot reads. A concurrent write then makes
+    // the cached revision conservative and the next check loads again.
+    neon.rpc('workspace_snapshot_revision', { p_workspace_id: workspaceId }),
     neon.from('workspaces').select('name,default_currency,estimated_company_tax_rate_bps,yearly_spending_goals').eq('id', workspaceId).limit(1),
     allRows('accounts', 'id,name,display_type,scope,balance_sheet_group,currency,color,sort_order,closed,investment,pension,auto_sync,bank_import_mode,provider_account_id,institution_id,country', 'sort_order'),
     allRows('category_groups', 'id,name,sort_order,show_categories', 'sort_order'),
@@ -499,6 +512,8 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
     workspaceId,
     workspaceName: workspace.name as string,
     defaultCurrency: workspace.default_currency as string,
+    loadedMonthKey: month,
+    snapshotRevision: revisionResult.error || revisionResult.data === null ? null : Number(revisionResult.data),
     data: {
       accounts,
       categoryGroups,

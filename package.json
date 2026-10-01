@@ -14,7 +14,8 @@
     "test:ios-callback": "node scripts/test-ios-callback.mjs",
     "test:auth": "node --experimental-strip-types scripts/test-auth-bootstrap.mjs",
     "test:bank-policy": "node --experimental-strip-types scripts/test-bank-import-policy.mjs",
-    "test:revenue": "node --experimental-strip-types scripts/test-revenue-forecast.mjs"
+    "test:revenue": "node --experimental-strip-types scripts/test-revenue-forecast.mjs",
+    "test:workspace-cache": "node --experimental-strip-types scripts/test-workspace-cache.mjs"
   },
   "dependencies": {
     "@neondatabase/neon-js": "^0.7.0-beta",

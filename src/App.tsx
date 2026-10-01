@@ -7,8 +7,11 @@ import {
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, cleanedMappingName, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTimeCode, createTimesheetClient, createTransaction, deleteAllUnusedPayees, deleteBudget, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadRevenueRecognitionEntries, loadTimeComments, loadTimeEntries, loadTransactionPage, loadWorkspace, normalizedMappingName, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveTimeCodeOrder, saveTimeComment, saveTimeEntry, saveTimesheetClientForecast, saveTimesheetClientRate, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidateDetails, updateBankImportMode, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTimeCode, updateTimesheetClient, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type LoadedWorkspace, type WorkspaceBackup } from './database'
+import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, cleanedMappingName, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTimeCode, createTimesheetClient, createTransaction, deleteAllUnusedPayees, deleteBudget, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, exportWorkspaceBackup, isWorkspaceBackup, linkBankAccount, loadCachedAllTransactions, loadRevenueRecognitionEntries, loadTimeComments, loadTimeEntries, loadTransactionPage, loadWorkspace, workspaceSnapshotRevision, normalizedMappingName, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, restoreWorkspaceBackup, saveAccountOrder, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveTimeCodeOrder, saveTimeComment, saveTimeEntry, saveTimesheetClientForecast, saveTimesheetClientRate, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidateDetails, updateBankImportMode, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTimeCode, updateTimesheetClient, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type LoadedWorkspace, type WorkspaceBackup } from './database'
 import { neon } from './neon'
+import { isExpiredJwtError } from './auth-bootstrap'
+import { todayInParis } from '../shared/bank-data.ts'
+import { clearWorkspaceCache, invalidateWorkspaceCache, readWorkspaceCache, refreshWasOvertaken, shouldReloadWorkspace, workspaceCacheVersion, writeWorkspaceCache, type CachedWorkspace } from './workspace-cache'
 import { convertMinor } from './currency'
 import { calculateRevenueForecast, earnedWorkMonthRange, type RevenueForecast } from './revenue'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, TimeCode, TimeComment, TimeEntry, TimesheetClient, TimesheetClientForecast, TimesheetClientRate, Transaction, YearlyFinancialPlan } from './types'
@@ -212,12 +215,6 @@ function fromMonthKey(value: string | null) {
   return new Date(year, month - 1, 1)
 }
 
-function todayInParis() {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(new Date()).map((part) => [part.type, part.value]))
-  return `${parts.year}-${parts.month}-${parts.day}`
-}
 
 function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error && error.message) return error.message
@@ -227,6 +224,13 @@ function getErrorMessage(error: unknown, fallback: string) {
   const parts = [details.message, details.details, details.hint, details.code]
     .filter((part): part is string => typeof part === 'string' && part.length > 0)
   return parts.length > 0 ? parts.join(' · ') : fallback
+}
+
+function isSessionError(error: unknown) {
+  const details = error && typeof error === 'object' ? error as Record<string, unknown> : {}
+  const message = getErrorMessage(error, '').toLowerCase()
+  return isExpiredJwtError(error) || details.status === 401 || details.code === 'PGRST301'
+    || message.includes('invalid jwt') || message.includes('session expired') || message.includes('no active session')
 }
 
 function handleClientNavigation(event: React.MouseEvent<HTMLAnchorElement>, navigate: () => void) {
@@ -255,27 +259,126 @@ function AuthenticatedApp() {
   if (session.isPending) return <FullPageStatus message="Checking your secure session…" />
   if (!session.data) return <AuthScreen />
 
-  return <WorkspaceApp userName={session.data.user.name ?? session.data.user.email ?? 'Michael'} />
+  return <WorkspaceApp key={session.data.user.id} userId={session.data.user.id} userName={session.data.user.name ?? session.data.user.email ?? 'Michael'} />
 }
 
-function WorkspaceApp({ userName }: { userName: string }) {
+function WorkspaceApp({ userId, userName }: { userId: string; userName: string }) {
   const [workspace, setWorkspace] = useState<LoadedWorkspace | null>(null)
   const [error, setError] = useState<Error | null>(null)
   const [loading, setLoading] = useState(true)
+  const [refreshState, setRefreshState] = useState<'idle' | 'refreshing' | 'failed'>('idle')
+  const [refreshStartedMutation, setRefreshStartedMutation] = useState(0)
+  const mutationCount = useRef(0)
+  const refreshRun = useRef(0)
+  const mounted = useRef(true)
+
+  const saveCache = useCallback((loaded: LoadedWorkspace) => writeWorkspaceCache({
+    version: workspaceCacheVersion, userId, workspaceId: loaded.workspaceId,
+    parisDate: todayInParis(), revision: loaded.snapshotRevision, workspace: loaded,
+  }), [userId])
+
+  const backgroundRefresh = useCallback(async (cached: CachedWorkspace, force = false) => {
+    const run = ++refreshRun.current
+    setRefreshState('refreshing')
+    try {
+      if (!force && cached.parisDate === todayInParis()) {
+        let revision: number | null = null
+        try { revision = await workspaceSnapshotRevision(cached.workspaceId) }
+        catch (cause) {
+          // Older deployments lack migration 071. Session errors need a session check.
+          if (isSessionError(cause)) throw cause
+        }
+        if (!shouldReloadWorkspace(cached, todayInParis(), revision)) {
+          if (mounted.current && run === refreshRun.current) setRefreshState('idle')
+          return
+        }
+      }
+      while (mounted.current && run === refreshRun.current) {
+        const startedAt = mutationCount.current
+        const loaded = await loadWorkspace(new URLSearchParams(window.location.search).get('month') ?? undefined)
+        if (refreshWasOvertaken(startedAt, mutationCount.current)) continue
+        // ExpenseApp applies this without remounting and confirms after its effect.
+        setRefreshStartedMutation(startedAt)
+        setWorkspace(loaded)
+        return
+      }
+    } catch (cause) {
+      if (!mounted.current || run !== refreshRun.current) return
+      if (isSessionError(cause)) {
+        let hasNoSession = false
+        try {
+          const session = await neon.auth.getSession()
+          hasNoSession = !session.error && !session.data
+        } catch {
+          // A failed session check cannot confirm that the session is gone.
+        }
+        if (!mounted.current || run !== refreshRun.current) return
+        if (hasNoSession) {
+          try {
+            await Promise.all([clearWorkspaceCache(userId), clearTransactionCache(cached.workspaceId)])
+            await neon.auth.signOut()
+            return
+          } catch {
+            // Keep the retry control available if the auth flow does not update.
+          }
+        }
+      }
+      if (mounted.current && run === refreshRun.current) setRefreshState('failed')
+    }
+  }, [userId])
 
   const refresh = useCallback(async () => {
     setLoading(true)
     setError(null)
-    try {
-      setWorkspace(await loadWorkspace(new URLSearchParams(window.location.search).get('month') ?? undefined))
-    } catch (caught) {
-      setError(new Error(getErrorMessage(caught, 'Could not load your workspace.')))
-    } finally {
+    const cached = await readWorkspaceCache(userId)
+    if (!mounted.current) return
+    if (cached) {
+      setWorkspace(cached.workspace)
       setLoading(false)
+      void backgroundRefresh(cached)
+      return
     }
-  }, [])
+    try {
+      const loaded = await loadWorkspace(new URLSearchParams(window.location.search).get('month') ?? undefined)
+      if (!mounted.current) return
+      setWorkspace(loaded)
+      void saveCache(loaded)
+    } catch (caught) {
+      if (mounted.current) setError(caught instanceof WorkspaceNotLinkedError ? caught : new Error(getErrorMessage(caught, 'Could not load your workspace.')))
+    } finally {
+      if (mounted.current) setLoading(false)
+    }
+  }, [backgroundRefresh, saveCache, userId])
 
-  useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => {
+    mounted.current = true
+    const runCounter = refreshRun
+    void refresh()
+    return () => { mounted.current = false; runCounter.current++ }
+  }, [refresh])
+
+  const onLocalMutation = useCallback(() => {
+    mutationCount.current++
+    void invalidateWorkspaceCache(userId)
+  }, [userId])
+
+  const onRefreshApplied = useCallback((loaded: LoadedWorkspace) => {
+    setRefreshState('idle')
+    void saveCache(loaded)
+  }, [saveCache])
+
+  const onRefreshConflict = useCallback(() => {
+    void readWorkspaceCache(userId).then((cached) => {
+      if (cached && mounted.current) void backgroundRefresh(cached, true)
+    })
+  }, [backgroundRefresh, userId])
+
+  const signOut = useCallback(async (workspaceId: string) => {
+    mounted.current = false
+    refreshRun.current++
+    await Promise.all([clearWorkspaceCache(userId), clearTransactionCache(workspaceId)])
+    await neon.auth.signOut()
+  }, [userId])
 
   if (loading) return <FullPageStatus message="Loading your imported transactions…" />
   if (error instanceof WorkspaceNotLinkedError) {
@@ -285,10 +388,13 @@ function WorkspaceApp({ userName }: { userName: string }) {
     return <FullPageStatus message={error?.message ?? 'Could not load your workspace.'} actionLabel="Try again" onAction={refresh} />
   }
 
-  return <ExpenseApp key={workspace.workspaceId} workspace={workspace} userName={userName} />
+  return <ExpenseApp key={workspace.workspaceId} workspace={workspace} userId={userId} userName={userName}
+    refreshState={refreshState} refreshStartedMutation={refreshStartedMutation} onLocalMutation={onLocalMutation} onRefreshApplied={onRefreshApplied}
+    onRefreshConflict={onRefreshConflict} onRetryRefresh={() => void readWorkspaceCache(userId).then((cached) => { if (cached) void backgroundRefresh(cached, true) })}
+    onSignOut={() => void signOut(workspace.workspaceId)} />
 }
 
-function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userName: string }) {
+function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedMutation, onLocalMutation, onRefreshApplied, onRefreshConflict, onRetryRefresh, onSignOut }: { workspace: LoadedWorkspace; userId: string; userName: string; refreshState: 'idle' | 'refreshing' | 'failed'; refreshStartedMutation: number; onLocalMutation: () => void; onRefreshApplied: (loaded: LoadedWorkspace) => void; onRefreshConflict: () => void; onRetryRefresh: () => void; onSignOut: () => void }) {
   const location = useLocation()
   const navigate = useNavigate()
   const [data, setData] = useState<AppData>(workspace.data)
@@ -310,6 +416,15 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   const historyLoadedRef = useRef(false)
   const historyRequest = useRef<Promise<void> | null>(null)
   const monthCache = useRef(new Map<string, Transaction[]>())
+  const localMutationCount = useRef(0)
+  const snapshotGeneration = useRef(0)
+  const appliedWorkspace = useRef(workspace)
+  const setWrittenData: typeof setData = (value) => {
+    localMutationCount.current++
+    snapshotGeneration.current++
+    onLocalMutation()
+    setData(value)
+  }
 
   const accountMatch = matchPath('/accounts/:accountId', location.pathname)
   const categoryMatch = matchPath('/categories/:categoryId', location.pathname)
@@ -331,14 +446,17 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   const selectedMonthKey = toMonthKey(viewedMonth)
   const reportView: ReportView = location.pathname === '/reports/net-worth' ? 'net-worth' : 'profit-loss'
 
-  if (!monthCache.current.size) monthCache.current.set(selectedMonthKey, workspace.data.transactions)
+
+  if (!monthCache.current.size) monthCache.current.set(workspace.loadedMonthKey, workspace.data.transactions)
 
   const ensureFullHistory = useCallback(async (revalidate = false) => {
     if (historyLoadedRef.current && !revalidate) return
     if (historyRequest.current) return historyRequest.current
     setHistoryLoading(true)
+    const generation = snapshotGeneration.current
     const request = loadCachedAllTransactions(workspace.workspaceId, data.transactions, revalidate)
       .then((allTransactions) => {
+        if (generation !== snapshotGeneration.current) return
         historyLoadedRef.current = true
         setData((current) => ({ ...current, transactions: allTransactions }))
         setHistoryLoaded(true)
@@ -348,6 +466,44 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     historyRequest.current = request
     return request
   }, [data.transactions, workspace.workspaceId])
+
+  useEffect(() => {
+    if (appliedWorkspace.current === workspace) return
+    appliedWorkspace.current = workspace
+    // Parent checks before committing. This second check covers an edit between
+    // the parent render and this effect.
+    if (refreshWasOvertaken(refreshStartedMutation, localMutationCount.current)) {
+      onRefreshConflict()
+      return
+    }
+    snapshotGeneration.current++
+    monthCache.current.clear()
+    monthCache.current.set(workspace.loadedMonthKey, workspace.data.transactions)
+    setData((current) => ({ ...workspace.data, transactions: historyLoadedRef.current || selectedMonthKey !== workspace.loadedMonthKey
+      ? current.transactions : workspace.data.transactions }))
+    if (historyLoadedRef.current) void (async () => {
+      if (historyRequest.current) await historyRequest.current
+      await ensureFullHistory(true)
+    })()
+    else if (selectedMonthKey !== workspace.loadedMonthKey) {
+      const generation = snapshotGeneration.current
+      const mutation = localMutationCount.current
+      const monthStart = `${selectedMonthKey}-01`
+      const nextMonth = new Date(`${monthStart}T12:00:00Z`)
+      nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1)
+      void loadTransactionPage(workspace.workspaceId, { startDate: monthStart, endDate: nextMonth.toISOString().slice(0, 10) })
+        .then(({ transactions }) => {
+          if (generation !== snapshotGeneration.current || mutation !== localMutationCount.current) return
+          monthCache.current.set(selectedMonthKey, transactions)
+          setData((current) => ({ ...current, transactions }))
+        })
+        .catch((cause) => setSyncError(getErrorMessage(cause, 'Could not load this month.')))
+    }
+    onRefreshApplied(workspace)
+  // A changed workspace object is the refresh event; route and callback changes are not.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace])
+
 
   useEffect(() => {
     if (requestedMonth) return
@@ -362,6 +518,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
 
   useEffect(() => {
     if (historyLoaded) return
+    const generation = snapshotGeneration.current
     const cached = monthCache.current.get(selectedMonthKey)
     if (cached) {
       setData((current) => ({ ...current, transactions: cached }))
@@ -373,7 +530,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       const nextMonth = new Date(`${monthStart}T12:00:00Z`)
       nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1)
       const { transactions: monthTransactions } = await loadTransactionPage(workspace.workspaceId, { startDate: monthStart, endDate: nextMonth.toISOString().slice(0, 10) })
-      if (cancelled || historyLoadedRef.current) return
+      if (cancelled || historyLoadedRef.current || generation !== snapshotGeneration.current) return
       monthCache.current.set(monthKey, monthTransactions)
       if (activate) setData((current) => ({ ...current, transactions: monthTransactions }))
     }
@@ -470,7 +627,10 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   async function reloadWorkspaceSnapshot() {
     await clearTransactionCache(workspace.workspaceId)
     const refreshed = await loadWorkspace(selectedMonthKey)
-    monthCache.current.set(selectedMonthKey, refreshed.data.transactions)
+    monthCache.current.clear()
+    monthCache.current.set(refreshed.loadedMonthKey, refreshed.data.transactions)
+    void writeWorkspaceCache({ version: workspaceCacheVersion, userId, workspaceId: refreshed.workspaceId,
+      parisDate: todayInParis(), revision: refreshed.snapshotRevision, workspace: refreshed })
     historyLoadedRef.current = false
     setHistoryLoaded(false)
     return refreshed
@@ -478,7 +638,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
 
   async function saveExchangeRate(rate: FxRate) {
     const saved = await saveFxRate(workspace.workspaceId, rate)
-    setData((current) => ({
+    setWrittenData((current) => ({
       ...current,
       fxRates: [...current.fxRates.filter((item) => item.id !== saved.id), saved]
         .sort((left, right) => left.date.localeCompare(right.date)),
@@ -487,19 +647,19 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
 
   async function removeExchangeRate(rateId: string) {
     await deleteFxRate(workspace.workspaceId, rateId)
-    setData((current) => ({ ...current, fxRates: current.fxRates.filter((rate) => rate.id !== rateId) }))
+    setWrittenData((current) => ({ ...current, fxRates: current.fxRates.filter((rate) => rate.id !== rateId) }))
   }
 
   async function addTimeCode(name: string, clientId: string) {
     if (!clientId) throw new Error('Choose a client for this time code.')
     const code: TimeCode = { id: uid(), name: name.normalize('NFKC').trim(), sortOrder: data.timeCodes.length, clientId }
     await createTimeCode(workspace.workspaceId, code)
-    setData((current) => ({ ...current, timeCodes: [...current.timeCodes, code] }))
+    setWrittenData((current) => ({ ...current, timeCodes: [...current.timeCodes, code] }))
   }
 
   async function changeTimeCode(code: TimeCode) {
     await updateTimeCode(workspace.workspaceId, code)
-    setData((current) => ({ ...current, timeCodes: current.timeCodes.map((item) => item.id === code.id ? code : item) }))
+    setWrittenData((current) => ({ ...current, timeCodes: current.timeCodes.map((item) => item.id === code.id ? code : item) }))
   }
 
   async function addTimesheetClient(name: string, currency: string, hourlyRateMinor: number) {
@@ -507,7 +667,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     const client: TimesheetClient = { id: uid(), name: name.normalize('NFKC').trim(), currency: currency.toUpperCase(), sortOrder: data.timesheetClients.length, active: true }
     const rate: TimesheetClientRate = { clientId: client.id, effectiveFrom: `${year}-01-01`, hourlyRateMinor }
     await createTimesheetClient(workspace.workspaceId, client, rate)
-    setData((current) => ({
+    setWrittenData((current) => ({
       ...current,
       timesheetClients: [...current.timesheetClients, client],
       timesheetClientRates: [...current.timesheetClientRates, rate],
@@ -516,12 +676,12 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
 
   async function changeTimesheetClient(client: TimesheetClient) {
     await updateTimesheetClient(workspace.workspaceId, client)
-    setData((current) => ({ ...current, timesheetClients: current.timesheetClients.map((item) => item.id === client.id ? client : item) }))
+    setWrittenData((current) => ({ ...current, timesheetClients: current.timesheetClients.map((item) => item.id === client.id ? client : item) }))
   }
 
   async function changeTimesheetClientRate(rate: TimesheetClientRate) {
     await saveTimesheetClientRate(workspace.workspaceId, rate)
-    setData((current) => ({
+    setWrittenData((current) => ({
       ...current,
       timesheetClientRates: [...current.timesheetClientRates.filter((item) => item.clientId !== rate.clientId || item.effectiveFrom !== rate.effectiveFrom), rate],
     }))
@@ -529,7 +689,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
 
   async function changeTimesheetClientForecast(forecast: TimesheetClientForecast) {
     await saveTimesheetClientForecast(workspace.workspaceId, forecast)
-    setData((current) => ({
+    setWrittenData((current) => ({
       ...current,
       timesheetClientForecasts: [...current.timesheetClientForecasts.filter((item) => item.clientId !== forecast.clientId || item.year !== forecast.year), forecast],
     }))
@@ -545,7 +705,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       ...data.timeCodes.filter((code) => !requestedIds.has(code.id)),
     ].map((code, sortOrder) => ({ ...code, sortOrder }))
     await saveTimeCodeOrder(workspace.workspaceId, reordered.map((code) => code.id))
-    setData((current) => ({ ...current, timeCodes: reordered }))
+    setWrittenData((current) => ({ ...current, timeCodes: reordered }))
   }
 
   function selectMonth(month: string) {
@@ -569,7 +729,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await createAccount(workspace.workspaceId, nextAccount, data.accounts.length, openingBalance)
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         accounts: [...current.accounts, nextAccount],
         transactions: openingBalance ? [...current.transactions, openingBalance] : current.transactions,
@@ -585,7 +745,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await updateAccountDetails(workspace.workspaceId, nextAccount)
-      setData((current) => ({ ...current, accounts: current.accounts.map((item) => item.id === nextAccount.id ? nextAccount : item) }))
+      setWrittenData((current) => ({ ...current, accounts: current.accounts.map((item) => item.id === nextAccount.id ? nextAccount : item) }))
       setAccountTarget(null)
       setModal(null)
     } catch (error) {
@@ -605,7 +765,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await saveAccountOrder(workspace.workspaceId, reordered.map((account) => account.id))
-      setData((current) => ({ ...current, accounts: reordered }))
+      setWrittenData((current) => ({ ...current, accounts: reordered }))
       return true
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Could not save the account order.')
@@ -623,7 +783,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await createCategory(workspace.workspaceId, nextCategory)
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         categories: [...current.categories, nextCategory],
       }))
@@ -639,7 +799,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await saveBudget(workspace.workspaceId, nextBudget)
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         budgets: [
           ...current.budgets.filter((budget) => budget.month !== selectedMonthKey || budget.categoryId !== categoryId),
@@ -657,7 +817,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await updateCategoryDefaultBudget(workspace.workspaceId, categoryId, amountMinor)
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         categories: current.categories.map((category) => category.id === categoryId ? { ...category, defaultBudgetMinor: amountMinor } : category),
       }))
@@ -674,7 +834,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await deleteBudget(workspace.workspaceId, existing.id)
-      setData((current) => ({ ...current, budgets: current.budgets.filter((budget) => budget.id !== existing.id) }))
+      setWrittenData((current) => ({ ...current, budgets: current.budgets.filter((budget) => budget.id !== existing.id) }))
     } catch (error) {
       const message = getErrorMessage(error, 'Could not remove the monthly budget override.')
       setSyncError(message)
@@ -694,10 +854,10 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         await saveBudget(workspace.workspaceId, budget)
         saved.push(budget)
       }
-      setData((current) => ({ ...current, budgets: [...current.budgets, ...saved] }))
+      setWrittenData((current) => ({ ...current, budgets: [...current.budgets, ...saved] }))
       setModal(null)
     } catch (error) {
-      if (saved.length) setData((current) => ({ ...current, budgets: [...current.budgets, ...saved] }))
+      if (saved.length) setWrittenData((current) => ({ ...current, budgets: [...current.budgets, ...saved] }))
       const message = getErrorMessage(error, 'Could not save the monthly plan.')
       setSyncError(message)
       throw new Error(message, { cause: error })
@@ -708,7 +868,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await updateCategoryHidden(workspace.workspaceId, categoryId, hidden)
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         categories: current.categories.map((category) => category.id === categoryId ? { ...category, hidden } : category),
       }))
@@ -721,7 +881,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await deleteUnusedCategory(workspace.workspaceId, categoryId)
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         categories: current.categories.filter((category) => category.id !== categoryId),
         budgets: current.budgets.filter((budget) => budget.categoryId !== categoryId),
@@ -750,7 +910,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         : previousCategory?.sortOrder ?? 0
       const normalizedChanges = { ...changes, name: normalizedName, sortOrder }
       await updateCategoryDetails(workspace.workspaceId, categoryId, normalizedChanges)
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         categories: current.categories.map((category) => category.id === categoryId ? { ...category, ...normalizedChanges } : category),
       }))
@@ -768,7 +928,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       setSyncError('')
       await saveCategoryOrder(workspace.workspaceId, categoryIds)
       const order = new Map(categoryIds.map((id, index) => [id, index * 10]))
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         categories: current.categories.map((category) => order.has(category.id) ? { ...category, sortOrder: order.get(category.id) } : category),
       }))
@@ -791,7 +951,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await createCategoryGroup(workspace.workspaceId, group)
-      setData((current) => ({ ...current, categoryGroups: [...current.categoryGroups, group] }))
+      setWrittenData((current) => ({ ...current, categoryGroups: [...current.categoryGroups, group] }))
       return group
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not create the category group.'))
@@ -806,7 +966,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await updateCategoryGroupName(workspace.workspaceId, categoryGroupId, normalizedName)
-      setData((current) => ({ ...current, categoryGroups: current.categoryGroups.map((group) => group.id === categoryGroupId ? { ...group, name: normalizedName } : group) }))
+      setWrittenData((current) => ({ ...current, categoryGroups: current.categoryGroups.map((group) => group.id === categoryGroupId ? { ...group, name: normalizedName } : group) }))
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not rename the category group.'))
       throw error
@@ -817,7 +977,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await saveCategoryGroupOrder(workspace.workspaceId, categoryGroupIds)
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         categoryGroups: categoryGroupIds.flatMap((id, index) => {
           const group = current.categoryGroups.find((item) => item.id === id)
@@ -835,7 +995,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await deleteCategoryGroup(workspace.workspaceId, categoryGroupId)
-      setData((current) => ({ ...current, categoryGroups: current.categoryGroups.filter((group) => group.id !== categoryGroupId) }))
+      setWrittenData((current) => ({ ...current, categoryGroups: current.categoryGroups.filter((group) => group.id !== categoryGroupId) }))
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not remove the category group.'))
       throw error
@@ -853,7 +1013,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       const nextTransaction = { ...transaction, id: uid(), payeeId: resolvedPayee?.id }
       await createTransaction(workspace.workspaceId, nextTransaction)
       void clearTransactionCache(workspace.workspaceId)
-    setData((current) => ({
+    setWrittenData((current) => ({
       ...current,
       transactions: [...current.transactions, nextTransaction],
       payees: payeeWithDefaults && !current.payees.some((payee) => payee.id === payeeWithDefaults.id) ? [...current.payees, payeeWithDefaults] : current.payees,
@@ -897,14 +1057,14 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           else if (!existingMapping) await createPayeeMapping(workspace.workspaceId, mappingSource, payee.id)
         } catch (mappingError) {
           const refreshed = await reloadWorkspaceSnapshot()
-          setData(refreshed.data)
+          setWrittenData(refreshed.data)
           setCategoryTarget(null)
           setSyncError(`Transaction updated, but its bank memo could not be saved as a mapping: ${getErrorMessage(mappingError, 'Unknown error')}`)
           return
         }
       }
       const payeeWithDefaults = createdPayee && transaction ? { ...payee, defaultCategoryId: categoryId, defaultAccountId: transaction.accountId } : rememberDefault ? { ...payee, defaultCategoryId: categoryId } : payee
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         payees: current.payees.some((item) => item.id === payee.id)
           ? current.payees.map((item) => item.id === payee.id ? payeeWithDefaults : item)
@@ -927,7 +1087,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       monthCache.current.delete(transaction.date.slice(0, 7))
       monthCache.current.delete(date.slice(0, 7))
       const refreshed = await reloadWorkspaceSnapshot()
-      setData(refreshed.data)
+      setWrittenData(refreshed.data)
       setCategoryTarget(null)
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not update the transfer.'))
@@ -943,7 +1103,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       await updateOpeningBalance(workspace.workspaceId, transactionId, date, amountMinor)
       void clearTransactionCache(workspace.workspaceId)
       const difference = amountMinor - transaction.amountMinor
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         transactions: current.transactions.map((item) => item.id === transactionId ? { ...item, date, amountMinor } : item),
         accounts: current.accounts.map((account) => account.id === transaction.accountId ? { ...account, balanceMinor: account.balanceMinor + difference } : account),
@@ -965,7 +1125,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         balanceCheckpointMinor: observedBalanceMinor, adjustmentReason: reason, posted: true, source: 'manual',
       })
       const refreshed = await reloadWorkspaceSnapshot()
-      setData(refreshed.data)
+      setWrittenData(refreshed.data)
       setModal(null)
       setAccountTarget(null)
       setCategoryTarget(null)
@@ -980,7 +1140,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       setSyncError('')
       await assignPayeeMapping(workspace.workspaceId, sourceName, payeeId)
       const refreshed = await reloadWorkspaceSnapshot()
-      setData(refreshed.data)
+      setWrittenData(refreshed.data)
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not map the transaction description.'))
       throw error
@@ -995,7 +1155,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       await updatePayeeDefaults(workspace.workspaceId, payee.id, categoryId || null, accountId || null)
       await assignPayeeMapping(workspace.workspaceId, sourceName, payee.id)
       const refreshed = await reloadWorkspaceSnapshot()
-      setData(refreshed.data)
+      setWrittenData(refreshed.data)
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not create and map the payee.'))
       throw error
@@ -1007,7 +1167,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       setSyncError('')
       const payeeWithDefaults: Payee = { id: uid(), name: payeeName.normalize('NFKC').trim(), defaultCategoryId: categoryId || undefined, defaultAccountId: accountId || undefined }
       await createPayee(workspace.workspaceId, payeeWithDefaults, data.payees.length)
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         payees: [...current.payees, payeeWithDefaults],
       }))
@@ -1022,7 +1182,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await updatePayeeDefaults(workspace.workspaceId, payeeId, categoryId || null, accountId || null)
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         payees: current.payees.map((payee) => payee.id === payeeId ? { ...payee, defaultCategoryId: categoryId || undefined, defaultAccountId: accountId || undefined } : payee),
       }))
@@ -1036,7 +1196,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await updatePayeeDefaultCategory(workspace.workspaceId, payeeId, categoryId || null)
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         payees: current.payees.map((payee) => payee.id === payeeId ? { ...payee, defaultCategoryId: categoryId || undefined } : payee),
       }))
@@ -1055,7 +1215,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await updatePayeeName(workspace.workspaceId, payeeId, normalizedName)
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         payees: current.payees.map((payee) => payee.id === payeeId ? { ...payee, name: normalizedName } : payee),
         transactions: current.transactions.map((transaction) => transaction.payeeId === payeeId ? { ...transaction, payee: normalizedName } : transaction),
@@ -1070,7 +1230,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await deleteUnusedPayee(workspace.workspaceId, payeeId)
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         payees: current.payees.filter((payee) => payee.id !== payeeId),
         unusedPayeeIds: current.unusedPayeeIds.filter((id) => id !== payeeId),
@@ -1088,7 +1248,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       setSyncError('')
       const deletedIds = await deleteAllUnusedPayees(workspace.workspaceId, data.unusedPayeeIds)
       const refreshed = await reloadWorkspaceSnapshot()
-      setData(refreshed.data)
+      setWrittenData(refreshed.data)
       return deletedIds.length
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not delete the unused payees.'))
@@ -1101,7 +1261,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       setSyncError('')
       await createPayeeMapping(workspace.workspaceId, sourceName, payeeId)
       const refreshed = await reloadWorkspaceSnapshot()
-      setData(refreshed.data)
+      setWrittenData(refreshed.data)
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not add the mapping.'))
       throw error
@@ -1112,7 +1272,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await updatePayeeMapping(workspace.workspaceId, mappingId, sourceName, payeeId, matchType)
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         payeeMappings: current.payeeMappings.map((mapping) => mapping.id === mappingId ? { ...mapping, sourceName: cleanedMappingName(sourceName, matchType), payeeId, matchType } : mapping),
       }))
@@ -1134,7 +1294,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       await createPayeeMapping(workspace.workspaceId, sourceName, payeeId)
       await rematchPendingBankImportPayees(workspace.workspaceId, accountId)
       const refreshed = await reloadWorkspaceSnapshot()
-      setData(refreshed.data)
+      setWrittenData(refreshed.data)
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not add the alternative payee name.'))
       throw error
@@ -1145,7 +1305,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
     try {
       setSyncError('')
       await deletePayeeMapping(workspace.workspaceId, mappingId)
-      setData((current) => ({ ...current, payeeMappings: current.payeeMappings.filter((mapping) => mapping.id !== mappingId) }))
+      setWrittenData((current) => ({ ...current, payeeMappings: current.payeeMappings.filter((mapping) => mapping.id !== mappingId) }))
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not remove the mapping.'))
       throw error
@@ -1153,7 +1313,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   }
 
   async function changeTaxRate(estimatedCompanyTaxRateBps: number) {
-    setData((current) => ({ ...current, settings: { ...current.settings, estimatedCompanyTaxRateBps } }))
+    setWrittenData((current) => ({ ...current, settings: { ...current.settings, estimatedCompanyTaxRateBps } }))
     try {
       setSyncError('')
       await updateTaxRate(workspace.workspaceId, estimatedCompanyTaxRateBps)
@@ -1165,14 +1325,14 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
   async function changeYearlyFinancialPlan(plan: YearlyFinancialPlan) {
     const nextPlans = [...data.yearlyFinancialPlans.filter((item) => item.year !== plan.year), plan]
     await saveYearlyFinancialPlans(workspace.workspaceId, nextPlans)
-    setData((current) => ({ ...current, yearlyFinancialPlans: nextPlans }))
+    setWrittenData((current) => ({ ...current, yearlyFinancialPlans: nextPlans }))
   }
 
   async function changeBankImportMode(accountId: string, mode: 'review' | 'automatic') {
     try {
       setSyncError('')
       await updateBankImportMode(workspace.workspaceId, accountId, mode)
-      setData((current) => ({
+      setWrittenData((current) => ({
         ...current,
         accounts: current.accounts.map((account) => account.id === accountId ? { ...account, bankImportMode: mode } : account),
       }))
@@ -1201,7 +1361,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
             await updatePayeeDefaults(workspace.workspaceId, resolvedPayeeId, categoryId, defaultAccountId)
           } catch (defaultsError) {
             const refreshed = await reloadWorkspaceSnapshot()
-            setData(refreshed.data)
+            setWrittenData(refreshed.data)
             setSyncError(`Transaction approved, but the new payee defaults could not be saved: ${getErrorMessage(defaultsError, 'Unknown error')}`)
             return
           }
@@ -1215,7 +1375,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
             if (defaultAccountId) await rematchPendingBankImportPayees(workspace.workspaceId, defaultAccountId)
           } catch (mappingError) {
             const refreshed = await reloadWorkspaceSnapshot()
-            setData(refreshed.data)
+            setWrittenData(refreshed.data)
             setSyncError(`Transaction approved, but its bank description could not be saved as a mapping: ${getErrorMessage(mappingError, 'Unknown error')}`)
             return
           }
@@ -1223,7 +1383,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       }
       else await rejectBankImportCandidate(workspace.workspaceId, candidateId)
       const refreshed = await reloadWorkspaceSnapshot()
-      setData(refreshed.data)
+      setWrittenData(refreshed.data)
     } catch (error) {
       setSyncError(getErrorMessage(error, `Could not ${decision} the bank transaction.`))
     } finally {
@@ -1237,7 +1397,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       setRematchingAccountId(accountId)
       const matched = await rematchPendingBankImportPayees(workspace.workspaceId, accountId)
       const refreshed = await reloadWorkspaceSnapshot()
-      setData(refreshed.data)
+      setWrittenData(refreshed.data)
       setSyncNotice({ accountId, message: matched ? `${matched} pending ${matched === 1 ? 'transaction now has' : 'transactions now have'} a matched payee.` : 'No additional payees matched.' })
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not recheck pending payees.'))
@@ -1255,7 +1415,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
       await approveBankImportCandidateAsTransfer(workspace.workspaceId, candidateId, counterpartyAccountId)
       void clearTransactionCache(workspace.workspaceId)
       const refreshed = await reloadWorkspaceSnapshot()
-      setData(refreshed.data)
+      setWrittenData(refreshed.data)
     } catch (error) {
       setSyncError(getErrorMessage(error, 'Could not post the bank transaction as a transfer.'))
       throw error
@@ -1279,7 +1439,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
         }),
       })
       const refreshed = await reloadWorkspaceSnapshot()
-      setData(refreshed.data)
+      setWrittenData(refreshed.data)
       const remaining = [
         result.rateLimits.transactions?.remaining === undefined ? null : `${result.rateLimits.transactions.remaining} transaction requests left`,
         result.rateLimits.balances?.remaining === undefined ? null : `${result.rateLimits.balances.remaining} balance requests left`,
@@ -1329,7 +1489,7 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
           <div className="profile">
             <div className="avatar">{userName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}</div>
             <div><strong>{userName}</strong><span>{workspace.workspaceName}</span></div>
-            <button className="profile-sign-out" aria-label="Sign out" title="Sign out" onClick={() => void neon.auth.signOut()}><LogOut size={16} /></button>
+            <button className="profile-sign-out" aria-label="Sign out" title="Sign out" onClick={onSignOut}><LogOut size={16} /></button>
           </div>
         </div>
       </aside>
@@ -1341,6 +1501,8 @@ function ExpenseApp({ workspace, userName }: { workspace: LoadedWorkspace; userN
             <div><span className="eyebrow">{selectedAccount ? 'Accounts' : selectedCategory ? 'Categories' : selectedPayee ? 'Payees' : page === 'payees' ? 'Directory' : page === 'settings' ? workspace.workspaceName : page === 'timesheet' ? 'Daily reporting' : page === 'overview' ? 'At a glance' : 'Personal budget'}</span><h1>{pageTitle}</h1></div>
           </div>
           <div className="top-actions">
+            {refreshState === 'refreshing' && <span className="workspace-refresh" role="status" aria-label="Refreshing…" title="Refreshing…"><RefreshCw size={16} className="spin-icon" /></span>}
+            {refreshState === 'failed' && <button className="workspace-refresh workspace-refresh-failed" onClick={onRetryRefresh} title="Retry refresh"><CircleAlert size={16} />Couldn't refresh</button>}
             {page !== 'payees' && page !== 'settings' && <div className="month-switcher">
               <button aria-label="Previous month" onClick={() => moveMonth(-1)}><ChevronLeft size={17} /></button>
               <MonthPicker value={selectedMonthKey} onChange={selectMonth} />

@@ -41,6 +41,11 @@ is under `db/migrations/`. Neon Auth, the Data API, and workspace-membership
 row-level security are configured, so signed-in users can only access workspaces
 to which they have explicitly been linked.
 
+The web app opens from a per-user IndexedDB workspace snapshot, then checks a
+database revision and refreshes changed data in the background. Apply migration
+`071_track_workspace_snapshot_revisions.sql` and refresh Neon's Data API schema
+cache before deploying the web client. Transaction history keeps its separate cache.
+
 The web app can run against Neon from localhost. Copy `.env.example` to
 `.env.local` and use the project's public Auth and Data API URLs. Google sign-in
 and email/password are both supported.
