@@ -15,6 +15,7 @@
     "test:auth": "node --experimental-strip-types scripts/test-auth-bootstrap.mjs",
     "test:bank-policy": "node --experimental-strip-types scripts/test-bank-import-policy.mjs",
     "test:revenue": "node --experimental-strip-types scripts/test-revenue-forecast.mjs",
+    "test:client-hours": "node --experimental-strip-types scripts/test-client-hours-report.mjs",
     "test:workspace-cache": "node --experimental-strip-types scripts/test-workspace-cache.mjs"
   },
   "dependencies": {

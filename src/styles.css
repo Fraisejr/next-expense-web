@@ -1097,6 +1097,19 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .timesheet-item-totals span, .timesheet-item-totals strong { display: block; }
 .timesheet-item-totals span { overflow: hidden; color: #c2d3cd; font-size: 8.5px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .timesheet-item-totals strong { margin-top: 6px; font-family: 'DM Mono', monospace; font-size: 16px; font-weight: 500; }
+.client-hours-report { padding: 18px 22px; }
+.client-hours-report-heading { display: flex; align-items: end; justify-content: space-between; gap: 18px; }
+.client-hours-report-heading h2 { margin-top: 4px; font-size: 19px; }
+.client-hours-report-heading p, .client-hours-report-steps, .client-hours-report-empty, .client-hours-report-status { margin-top: 7px; color: var(--muted); font-size: 10px; }
+.client-hours-report-actions { display: flex; align-items: center; gap: 9px; }
+.client-hours-report-actions label { font-size: 10px; font-weight: 700; }
+.client-hours-report-actions select { min-width: 170px; height: 36px; padding: 0 9px; color: var(--ink); background: #fff; border: 1px solid #d9dbd4; border-radius: 7px; }
+.client-hours-report-actions button { min-height: 36px; }
+.client-hours-preview { width: 100%; margin-top: 16px; border-collapse: collapse; font-size: 11px; }
+.client-hours-preview th, .client-hours-preview td { padding: 8px 10px; border: 1px solid #dce2da; text-align: left; }
+.client-hours-preview th:last-child, .client-hours-preview td:last-child { width: 100px; text-align: right; }
+.client-hours-preview thead, .client-hours-preview tfoot { background: #edf1ec; }
+.client-hours-report-status { color: #315f54; }
 .timesheet-weekly-summary { min-width: 0; display: grid; grid-template-columns: 230px minmax(0, 1fr); overflow: hidden; background: #fff; border: 1px solid #dfe3dc; border-radius: 10px; box-shadow: 0 5px 17px rgba(36, 77, 69, .06); }
 .timesheet-weekly-heading { display: flex; align-items: center; gap: 10px; padding: 16px 20px; background: #f0f3ee; }
 .timesheet-weekly-heading > svg { flex: 0 0 auto; color: #47766b; }
@@ -1305,6 +1318,8 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .net-worth-breakdown-grid { grid-template-columns: 1fr; }
   .settings-backup-grid { grid-template-columns: 1fr; }
   .timesheet-summary { grid-template-columns: 1fr; }
+  .client-hours-report-heading { align-items: stretch; flex-direction: column; }
+  .client-hours-report-actions { flex-wrap: wrap; }
   .client-revenue-inputs { grid-template-columns: 1fr 1fr; }
   .client-revenue-inputs button { width: 100%; }
   .client-add-form { grid-template-columns: 1fr 90px; }

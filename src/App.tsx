@@ -14,6 +14,7 @@ import { todayInParis } from '../shared/bank-data.ts'
 import { clearWorkspaceCache, invalidateWorkspaceCache, readWorkspaceCache, refreshWasOvertaken, shouldReloadWorkspace, workspaceCacheVersion, writeWorkspaceCache, type CachedWorkspace } from './workspace-cache'
 import { convertMinor } from './currency'
 import { calculateRevenueForecast, earnedWorkMonthRange, type RevenueForecast } from './revenue'
+import { buildClientHoursReport, canCopyClientHoursReport, copyClientHoursReport, reportHours } from './client-hours-report'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, TimeCode, TimeComment, TimeEntry, TimesheetClient, TimesheetClientForecast, TimesheetClientRate, Transaction, YearlyFinancialPlan } from './types'
 
 type Page = 'overview' | 'transactions' | 'payees' | 'reports' | 'accounts' | 'timesheet' | 'settings'
@@ -1731,6 +1732,11 @@ function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clients, ra
   const [comments, setComments] = useState<TimeComment[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [loadedMonthKey, setLoadedMonthKey] = useState('')
+  const [selectedReportClientId, setSelectedReportClientId] = useState('')
+  const [reportStatus, setReportStatus] = useState('')
+  const [copyingReport, setCopyingReport] = useState(false)
+  const [pendingSaves, setPendingSaves] = useState(0)
   const [newCodeName, setNewCodeName] = useState('')
   const [newCodeClientId, setNewCodeClientId] = useState('')
   const [addingCode, setAddingCode] = useState(false)
@@ -1740,6 +1746,8 @@ function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clients, ra
   const [draggedId, setDraggedId] = useState('')
   const [savingOrder, setSavingOrder] = useState(false)
   const saveQueue = useRef(new Map<string, Promise<void>>())
+  const reportContextRef = useRef({ workspaceId, month, selectedReportClientId, codes })
+  reportContextRef.current = { workspaceId, month, selectedReportClientId, codes }
   const tableWrapRef = useRef<HTMLDivElement>(null)
   const todayColumnRef = useRef<HTMLTableCellElement>(null)
   const monthDate = useMemo(() => fromMonthKey(month) ?? new Date(), [month])
@@ -1759,10 +1767,13 @@ function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clients, ra
     let cancelled = false
     setLoading(true)
     setError('')
+    setLoadedMonthKey('')
+    setReportStatus('')
     Promise.all([loadTimeEntries(workspaceId, month), loadTimeComments(workspaceId, month), loadRevenueRecognitionEntries(workspaceId, selectedYear)])
       .then(([loadedEntries, loadedComments, loadedYearEntries]) => {
         if (cancelled) return
         setEntries(loadedEntries)
+        setLoadedMonthKey(`${workspaceId}:${month}`)
         setComments(loadedComments)
         setYearEntries(loadedYearEntries)
       })
@@ -1788,6 +1799,9 @@ function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clients, ra
   const totalForCode = (codeId: string) => entries.filter((entry) => entry.codeId === codeId).reduce((sum, entry) => sum + entry.hours, 0)
   const totalForDate = (date: string) => entries.reduce((sum, entry) => sum + (entry.date === date ? entry.hours : 0), 0)
   const monthTotal = entries.reduce((sum, entry) => sum + entry.hours, 0)
+  const selectedReportClient = clients.find((client) => client.id === selectedReportClientId)
+  const reportReady = !loading && loadedMonthKey === `${workspaceId}:${month}` && !error && pendingSaves === 0
+  const clientHoursReport = buildClientHoursReport(month, selectedReportClientId, codes, reportReady ? entries : [])
   const weeklyTotals = useMemo(() => {
     const totals = new Map<string, { weekNumber: number; weekYear: number; startDay: number; endDay: number; hours: number }>()
     for (const day of days) {
@@ -1868,8 +1882,9 @@ function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clients, ra
 
   function changeEntry(codeId: string, date: string, rawHours: number) {
     const hours = Math.min(24, Math.max(0, Math.round(rawHours)))
-    const key = `${codeId}:${date}`
+    const key = `${workspaceId}:${codeId}:${date}`
     setError('')
+    setReportStatus('')
     setEntries((current) => hours === 0
       ? current.filter((entry) => entry.codeId !== codeId || entry.date !== date)
       : [...current.filter((entry) => entry.codeId !== codeId || entry.date !== date), { codeId, date, hours }])
@@ -1879,11 +1894,35 @@ function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clients, ra
     const previous = saveQueue.current.get(key) ?? Promise.resolve()
     const request = previous.catch(() => undefined).then(() => saveTimeEntry(workspaceId, { codeId, date, hours }))
       .catch(async (cause) => {
-        setError(getErrorMessage(cause, 'Could not save these hours.'))
-        try { setEntries(await loadTimeEntries(workspaceId, month)) } catch { /* Keep the original save error visible. */ }
+        if (reportContextRef.current.workspaceId === workspaceId && reportContextRef.current.month === month) {
+          setError(getErrorMessage(cause, 'Could not save these hours.'))
+          try {
+            const refreshed = await loadTimeEntries(workspaceId, month)
+            if (reportContextRef.current.workspaceId === workspaceId && reportContextRef.current.month === month) setEntries(refreshed)
+          } catch { /* Keep the original save error visible. */ }
+        }
       })
-      .finally(() => { if (saveQueue.current.get(key) === request) saveQueue.current.delete(key) })
+      .finally(() => { if (saveQueue.current.get(key) === request) saveQueue.current.delete(key); setPendingSaves(saveQueue.current.size) })
     saveQueue.current.set(key, request)
+    setPendingSaves(saveQueue.current.size)
+  }
+
+  async function copyReport() {
+    const preview = { workspaceId, month, clientId: selectedReportClientId }
+    const context = reportContextRef.current
+    if (!selectedReportClient || copyingReport || !canCopyClientHoursReport(preview, { workspaceId: context.workspaceId, month: context.month, clientId: context.selectedReportClientId }, reportReady, saveQueue.current.size, clientHoursReport.rows.length) || context.codes !== codes) return
+    setCopyingReport(true)
+    setReportStatus('')
+    try {
+      const format = await copyClientHoursReport(clientHoursReport)
+      if (reportContextRef.current.workspaceId === context.workspaceId && reportContextRef.current.month === context.month && reportContextRef.current.selectedReportClientId === context.selectedReportClientId) {
+        setReportStatus(format === 'rich' ? 'Table copied with HTML and tab-delimited text. Paste into Outlook and review it.' : 'Plain tab-delimited text copied. Outlook may paste it as text; you can also paste it into Excel as two columns.')
+      }
+    } catch (cause) {
+      if (reportContextRef.current.workspaceId === context.workspaceId && reportContextRef.current.month === context.month && reportContextRef.current.selectedReportClientId === context.selectedReportClientId) setReportStatus(`Could not copy the table: ${getErrorMessage(cause, 'Clipboard access failed.')} Select and copy the preview manually.`)
+    } finally {
+      setCopyingReport(false)
+    }
   }
 
   async function addCode(event: FormEvent) {
@@ -1932,6 +1971,13 @@ function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clients, ra
       <div className="timesheet-item-totals">{groupedCodes.map((group) => <div key={group.client?.id ?? 'unassigned'}><span>{group.client?.name ?? 'Unassigned'}</span><strong>{formatHours(group.codes.reduce((sum, code) => sum + totalForCode(code.id), 0))}</strong></div>)}</div>
     </section>
 
+    <section className="panel client-hours-report" aria-label="Client hours table for email">
+      <div className="client-hours-report-heading"><div><span className="eyebrow">Share monthly hours</span><h2>Client hours table</h2><p>Review {monthName.format(monthDate)} hours, then copy the table into an Outlook email.</p></div><div className="client-hours-report-actions"><label htmlFor="report-client">Client</label><select id="report-client" value={selectedReportClientId} onChange={(event) => { setSelectedReportClientId(event.target.value); setReportStatus('') }}><option value="">Select client…</option>{[...clients].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)).map((client) => <option key={client.id} value={client.id}>{client.name}{client.active ? '' : ' (inactive)'}</option>)}</select><button type="button" className="primary-button" disabled={!selectedReportClient || !reportReady || !clientHoursReport.rows.length || copyingReport} onClick={() => void copyReport()}>{copyingReport ? 'Copying…' : 'Copy table'}</button></div></div>
+      {!selectedReportClient ? <p className="client-hours-report-empty">Select one client to preview their hours.</p> : !reportReady ? <p className="client-hours-report-empty">{pendingSaves ? 'Saving hours… Copy is available once the save finishes.' : loading || loadedMonthKey !== `${workspaceId}:${month}` && !error ? 'Loading the selected month…' : 'Hours are unavailable. Resolve the timesheet error before copying.'}</p> : clientHoursReport.rows.length === 0 ? <p className="client-hours-report-empty">No hours recorded for {selectedReportClient.name} in {monthName.format(monthDate)}.</p> : <table className="client-hours-preview"><thead><tr><th>Code</th><th>Hours</th></tr></thead><tbody>{clientHoursReport.rows.map((row, index) => <tr key={index}><td>{row.code}</td><td>{reportHours(row.hours)}</td></tr>)}</tbody><tfoot><tr><th>Total</th><th>{reportHours(clientHoursReport.total)}</th></tr></tfoot></table>}
+      {reportStatus && <p className="client-hours-report-status" role="status">{reportStatus}</p>}
+      <p className="client-hours-report-steps">In Outlook: create an email, paste the table, review the recipient and hours, then send it yourself.</p>
+    </section>
+
     <section className="timesheet-weekly-summary" aria-label="Weekly hour totals">
       <div className="timesheet-weekly-heading"><CalendarDays size={17} /><div><span className="eyebrow">Weekly totals</span><small>Monday–Sunday · selected month only</small></div></div>
       <div className="timesheet-weekly-totals">{weeklyTotals.map((week) => <div key={`${week.weekYear}-${week.weekNumber}`}><span>Week {week.weekNumber}</span><small>{week.startDay === week.endDay ? week.startDay : `${week.startDay}–${week.endDay}`} {new Intl.DateTimeFormat('en', { month: 'short' }).format(monthDate)}</small><strong>{formatHours(week.hours)}</strong></div>)}</div>
@@ -1955,7 +2001,7 @@ function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clients, ra
         <table className="timesheet-table">
           <thead><tr><th className="time-code-column">Item</th>{days.map((day) => <th key={day.date} ref={day.isToday ? todayColumnRef : undefined} className={`${day.weekend ? 'weekend ' : ''}${day.isToday ? 'today' : ''}`} aria-current={day.isToday ? 'date' : undefined}><span>{day.isToday ? 'Today' : day.label}</span><b>{day.day}</b></th>)}<th className="time-total-column">Total</th></tr></thead>
           <tbody>
-            {groupedCodes.map((group) => <Fragment key={group.client?.id ?? 'unassigned'}><tr className="time-client-row"><th>{group.client?.name ?? 'No client'}</th><td colSpan={days.length + 1}>{group.client ? `${group.client.currency} billing` : 'Non-billable or not assigned'}</td></tr>{group.codes.map((code) => <tr key={code.id}><th><TimeCodeEditor code={code} month={month} onSave={updateCode} /></th>{days.map((day) => <td key={day.date} className={`${day.weekend ? 'weekend ' : ''}${day.isToday ? 'today' : ''}`}><TimeEntryCell codeName={code.name} date={day.date} value={entryMap.get(`${code.id}:${day.date}`) ?? 0} onChange={(hours) => changeEntry(code.id, day.date, hours)} /></td>)}<td className="time-row-total">{formatHours(totalForCode(code.id))}</td></tr>)}</Fragment>)}
+            {groupedCodes.map((group) => <Fragment key={group.client?.id ?? 'unassigned'}><tr className="time-client-row"><th>{group.client?.name ?? 'No client'}</th><td colSpan={days.length + 1}>{group.client ? `${group.client.currency} billing` : 'Non-billable or not assigned'}</td></tr>{group.codes.map((code) => <tr key={code.id}><th><TimeCodeEditor code={code} month={month} onSave={updateCode} /></th>{days.map((day) => <td key={day.date} className={`${day.weekend ? 'weekend ' : ''}${day.isToday ? 'today' : ''}`}><TimeEntryCell codeName={code.name} date={day.date} value={entryMap.get(`${code.id}:${day.date}`) ?? 0} disabled={copyingReport} onChange={(hours) => changeEntry(code.id, day.date, hours)} /></td>)}<td className="time-row-total">{formatHours(totalForCode(code.id))}</td></tr>)}</Fragment>)}
           </tbody>
           <tfoot><tr><th>Daily total</th>{days.map((day) => <td key={day.date} className={`${day.weekend ? 'weekend ' : ''}${day.isToday ? 'today' : ''}`}>{formatHours(totalForDate(day.date), true)}</td>)}<td>{formatHours(monthTotal)}</td></tr></tfoot>
         </table>
@@ -2102,18 +2148,19 @@ function isoWeekForDate(date: string) {
   return { weekKey: `${weekYear}-W${String(weekNumber).padStart(2, '0')}`, weekNumber, weekYear }
 }
 
-function TimeEntryCell({ codeName, date, value, onChange }: { codeName: string; date: string; value: number; onChange: (hours: number) => void }) {
+function TimeEntryCell({ codeName, date, value, disabled = false, onChange }: { codeName: string; date: string; value: number; disabled?: boolean; onChange: (hours: number) => void }) {
   const [draft, setDraft] = useState(value === 0 ? '' : String(value))
   useEffect(() => setDraft(value === 0 ? '' : String(value)), [value])
   const commit = () => {
+    if (disabled) return
     const parsed = Number(draft.replace(',', '.'))
     if (draft.trim() === '' || !Number.isFinite(parsed)) { setDraft(value === 0 ? '' : String(value)); return }
     onChange(parsed)
   }
   return <div className="time-entry-cell">
-    <button type="button" aria-label={`Subtract one hour from ${codeName} on ${date}`} disabled={value === 0} onClick={() => onChange(value - 1)}><Minus size={11} /></button>
-    <input aria-label={`${codeName} hours on ${date}`} inputMode="numeric" min="0" max="24" step="1" value={draft} placeholder="0" onChange={(event) => setDraft(event.target.value.replace(/\D/g, ''))} onBlur={commit} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }} />
-    <button type="button" aria-label={`Add one hour to ${codeName} on ${date}`} disabled={value >= 24} onClick={() => onChange(value + 1)}><Plus size={11} /></button>
+    <button type="button" aria-label={`Subtract one hour from ${codeName} on ${date}`} disabled={disabled || value === 0} onClick={() => onChange(value - 1)}><Minus size={11} /></button>
+    <input aria-label={`${codeName} hours on ${date}`} inputMode="numeric" min="0" max="24" step="1" value={draft} placeholder="0" disabled={disabled} onChange={(event) => setDraft(event.target.value.replace(/\D/g, ''))} onBlur={commit} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }} />
+    <button type="button" aria-label={`Add one hour to ${codeName} on ${date}`} disabled={disabled || value >= 24} onClick={() => onChange(value + 1)}><Plus size={11} /></button>
   </div>
 }
 
