@@ -34,3 +34,11 @@ export function getErrorMessage(error: unknown, fallback: string) {
     .filter((part): part is string => typeof part === 'string' && part.length > 0)
   return parts.length > 0 ? parts.join(' · ') : fallback
 }
+
+export function uid() {
+  return crypto.randomUUID()
+}
+
+export function toMonthKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}

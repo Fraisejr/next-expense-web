@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { ArrowDown, ArrowUp, BriefcaseBusiness, CalendarDays, Check, ChevronDown, CircleAlert, Clock3, Eye, EyeOff, GripVertical, LoaderCircle, MessageSquareText, Minus, Plus } from 'lucide-react'
 import { loadRevenueRecognitionEntries, loadTimeComments, loadTimeEntries, saveTimeComment, saveTimeEntry } from './api'
-import { formatMoney, fromMonthKey, getErrorMessage, monthName, parseMoneyToMinor } from '../../app-format'
+import { formatMoney, fromMonthKey, getErrorMessage, monthName, parseMoneyToMinor } from '../../app-utils'
 import { todayInParis } from '../../../shared/bank-data.ts'
 import { calculateRevenueForecast, type RevenueForecast } from '../../revenue'
 import { formatEarnedTimesheetPeriod } from './period'
