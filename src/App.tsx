@@ -1,8 +1,9 @@
-import type { BankSyncSummary } from '../shared/bank-types.ts'
 import { formatCompactMoney, formatMoney, formatShortDate, fromMonthKey, getErrorMessage, monthName, parseMoneyToMinor, toMonthKey, uid } from './app-utils'
 import { TimesheetPage } from './features/timesheet/TimesheetPage'
 import { SettingsPage } from './features/settings/SettingsPage'
 import { ReportsPage, type ReportView } from './features/reports/ReportsPage'
+import { createPayeeActions } from './features/payees/actions'
+import { useBankReviewActions } from './features/bank-review/use-bank-review-actions'
 import { accountBalanceSheetGroup, balanceAdjustmentReasonLabels, balanceSheetGroups, expenseReportGroups, incomeReportGroups, isExpenseReportGroup, isIncomeReportGroup, isTaxReportGroup, taxReportGroups } from './finance-groups'
 import * as timesheetApi from './features/timesheet/api'
 import { createTimesheetActions } from './features/timesheet/actions'
@@ -15,12 +16,13 @@ import {
   RefreshCw, ShieldAlert, ShoppingBag, ShoppingBasket, Sparkles, Target, Tv, UsersRound, Utensils, WalletCards, Wine, X, Zap,
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
-import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, assignPayeeMapping, cleanedMappingName, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayee, createPayeeMapping, createTransaction, deleteAllUnusedPayees, deleteBudget, deleteCategoryGroup, deleteFxRate, deletePayeeMapping, deleteUnusedCategory, deleteUnusedPayee, ensurePayees, linkBankAccount, normalizedMappingName, normalizedPayeeName, prefixMappingMatches, rejectBankImportCandidate, rematchPendingBankImportPayees, saveAccountOrder, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateBankImportCandidateDetails, updateBankImportMode, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updatePayeeName, updateTaxRate, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type LoadedWorkspace } from './database'
+import * as payeeApi from './features/payees/api'
+import { cleanedMappingName, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayeeMapping, createTransaction, deleteBudget, deleteCategoryGroup, deleteFxRate, deleteUnusedCategory, ensurePayees, linkBankAccount, normalizedMappingName, normalizedPayeeName, prefixMappingMatches, saveAccountOrder, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updateTaxRate, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type LoadedWorkspace } from './database'
 import { neon } from './neon'
 import { todayInParis } from '../shared/bank-data.ts'
 import { convertMinor } from './currency'
 import { calculateRevenueForecast } from './revenue'
-import { createBankApprovalBatch, eligibleBankApprovals, bankApprovalReview, shouldAutoLoadBankHistory, type ReadyBankApproval, type BankApprovalBatchResult } from './bank-batch-review'
+import { bankApprovalReview, shouldAutoLoadBankHistory, type ReadyBankApproval, type BankApprovalBatchResult } from './bank-batch-review'
 import { bankQueueView, type BankQueueStatus } from './bank-queue-state'
 import { useExpenseWorkspaceData } from './use-expense-workspace-data'
 import { useWorkspaceSession } from './use-workspace-session'
@@ -202,17 +204,6 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
   const [bankTarget, setBankTarget] = useState<Account | null>(null)
   const [accountTarget, setAccountTarget] = useState<Account | null>(null)
   const [categoryTarget, setCategoryTarget] = useState<Transaction | null>(null)
-  const [syncingAccountId, setSyncingAccountId] = useState('')
-  const [reviewingCandidateId, setReviewingCandidateId] = useState('')
-  const [bankBatchProgress, setBankBatchProgress] = useState<{ accountId: string; done: number; total: number } | null>(null)
-  const [bankBatchResult, setBankBatchResult] = useState<{ accountId: string; result: BankApprovalBatchResult } | null>(null)
-  const bankBatchRunningRef = useRef(false)
-  const bankBatchRef = useRef(createBankApprovalBatch(async (row: ReadyBankApproval) => {
-    await updateBankImportCandidateDetails(workspace.workspaceId, row.id, row.payeeId, row.memo, row.accountId)
-    await approveBankImportCandidate(workspace.workspaceId, row.id, row.categoryId, false)
-  }))
-  const [rematchingAccountId, setRematchingAccountId] = useState('')
-  const [syncNotice, setSyncNotice] = useState<{ accountId: string; message: string } | null>(null)
   const autoHistoryAttempt = useRef<string | null>(null)
   const autoQueueAttempt = useRef<string | null>(null)
   const accountMatch = matchPath('/accounts/:accountId', location.pathname)
@@ -238,10 +229,14 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
   const { data, setWrittenData, candidateQueueByAccount, syncError, setSyncError, historyLoaded, historyLoading, ensureFullHistory, reloadWorkspaceSnapshot, invalidateTransactionMonth, hasFullHistory } = useExpenseWorkspaceData({
     workspace, userId, selectedMonthKey, refreshStartedMutation, onLocalMutation, onRefreshApplied, onRefreshConflict,
   })
-  const latestBankData = useRef(data)
-  latestBankData.current = data
 
-
+  const { mapUnmatchedPayee, createPayeeFromUnmatched, createPayeeForReview, changePayeeDefaults, changePayeeDefaultCategoryOnly, renamePayee, removeUnusedPayee, removeAllUnusedPayees, addPayeeMapping, changePayeeMapping, promotePayeeMapping, addPayeeAlternativeForReview, removePayeeMapping } = createPayeeActions({
+    workspaceId: workspace.workspaceId, data, setWrittenData, setSyncError, reloadWorkspaceSnapshot,
+    services: { ...payeeApi, uid, getErrorMessage },
+  })
+  const { syncingAccountId, reviewingCandidateId, bankBatchProgress, bankBatchResult, rematchingAccountId, syncNotice, changeBankImportMode, decideBankImportCandidate, approveReadyBankCandidates, rematchBankImportPayees, postBankImportAsTransfer, syncBank } = useBankReviewActions({
+    workspaceId: workspace.workspaceId, data, setWrittenData, setSyncError, reloadWorkspaceSnapshot, hasFullHistory, apiJson,
+  })
   useEffect(() => {
     if (requestedMonth) return
     const params = new URLSearchParams(location.search)
@@ -803,183 +798,6 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
     }
   }
 
-  async function mapUnmatchedPayee(sourceName: string, payeeId: string) {
-    try {
-      setSyncError('')
-      await assignPayeeMapping(workspace.workspaceId, sourceName, payeeId)
-      const refreshed = await reloadWorkspaceSnapshot()
-      setWrittenData(refreshed.data)
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not map the transaction description.'))
-      throw error
-    }
-  }
-
-  async function createPayeeFromUnmatched(sourceName: string, payeeName: string, categoryId: string, accountId: string) {
-    try {
-      setSyncError('')
-      const [payee] = await ensurePayees(workspace.workspaceId, [payeeName])
-      if (!payee) throw new Error('The payee could not be created.')
-      await updatePayeeDefaults(workspace.workspaceId, payee.id, categoryId || null, accountId || null)
-      await assignPayeeMapping(workspace.workspaceId, sourceName, payee.id)
-      const refreshed = await reloadWorkspaceSnapshot()
-      setWrittenData(refreshed.data)
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not create and map the payee.'))
-      throw error
-    }
-  }
-
-  async function createPayeeForReview(payeeName: string, categoryId: string, accountId: string) {
-    try {
-      setSyncError('')
-      const payeeWithDefaults: Payee = { id: uid(), name: payeeName.normalize('NFKC').trim(), defaultCategoryId: categoryId || undefined, defaultAccountId: accountId || undefined }
-      await createPayee(workspace.workspaceId, payeeWithDefaults, data.payees.length)
-      setWrittenData((current) => ({
-        ...current,
-        payees: [...current.payees, payeeWithDefaults],
-      }))
-      return payeeWithDefaults
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not create the payee.'))
-      throw error
-    }
-  }
-
-  async function changePayeeDefaults(payeeId: string, categoryId: string, accountId: string) {
-    try {
-      setSyncError('')
-      await updatePayeeDefaults(workspace.workspaceId, payeeId, categoryId || null, accountId || null)
-      setWrittenData((current) => ({
-        ...current,
-        payees: current.payees.map((payee) => payee.id === payeeId ? { ...payee, defaultCategoryId: categoryId || undefined, defaultAccountId: accountId || undefined } : payee),
-      }))
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not update the payee defaults.'))
-      throw error
-    }
-  }
-
-  async function changePayeeDefaultCategoryOnly(payeeId: string, categoryId: string) {
-    try {
-      setSyncError('')
-      await updatePayeeDefaultCategory(workspace.workspaceId, payeeId, categoryId || null)
-      setWrittenData((current) => ({
-        ...current,
-        payees: current.payees.map((payee) => payee.id === payeeId ? { ...payee, defaultCategoryId: categoryId || undefined } : payee),
-      }))
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not update the payee default category.'))
-      throw error
-    }
-  }
-
-  async function renamePayee(payeeId: string, name: string) {
-    const normalizedName = name.normalize('NFKC').trim()
-    if (!normalizedName) throw new Error('A payee name is required.')
-    if (data.payees.some((payee) => payee.id !== payeeId && payee.name.localeCompare(normalizedName, undefined, { sensitivity: 'accent' }) === 0)) {
-      throw new Error(`A payee named “${normalizedName}” already exists.`)
-    }
-    try {
-      setSyncError('')
-      await updatePayeeName(workspace.workspaceId, payeeId, normalizedName)
-      setWrittenData((current) => ({
-        ...current,
-        payees: current.payees.map((payee) => payee.id === payeeId ? { ...payee, name: normalizedName } : payee),
-        transactions: current.transactions.map((transaction) => transaction.payeeId === payeeId ? { ...transaction, payee: normalizedName } : transaction),
-      }))
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not rename the payee.'))
-      throw error
-    }
-  }
-
-  async function removeUnusedPayee(payeeId: string) {
-    try {
-      setSyncError('')
-      await deleteUnusedPayee(workspace.workspaceId, payeeId)
-      setWrittenData((current) => ({
-        ...current,
-        payees: current.payees.filter((payee) => payee.id !== payeeId),
-        unusedPayeeIds: current.unusedPayeeIds.filter((id) => id !== payeeId),
-        payeeMappings: current.payeeMappings.filter((mapping) => mapping.payeeId !== payeeId),
-        bankImportCandidates: current.bankImportCandidates.map((candidate) => candidate.payeeId === payeeId ? { ...candidate, payeeId: undefined } : candidate),
-      }))
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not delete the payee.'))
-      throw error
-    }
-  }
-
-  async function removeAllUnusedPayees() {
-    try {
-      setSyncError('')
-      const deletedIds = await deleteAllUnusedPayees(workspace.workspaceId, data.unusedPayeeIds)
-      const refreshed = await reloadWorkspaceSnapshot()
-      setWrittenData(refreshed.data)
-      return deletedIds.length
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not delete the unused payees.'))
-      throw error
-    }
-  }
-
-  async function addPayeeMapping(payeeId: string, sourceName: string) {
-    try {
-      setSyncError('')
-      await createPayeeMapping(workspace.workspaceId, sourceName, payeeId)
-      const refreshed = await reloadWorkspaceSnapshot()
-      setWrittenData(refreshed.data)
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not add the mapping.'))
-      throw error
-    }
-  }
-
-  async function changePayeeMapping(mappingId: string, sourceName: string, payeeId: string, matchType: PayeeMapping['matchType']) {
-    try {
-      setSyncError('')
-      await updatePayeeMapping(workspace.workspaceId, mappingId, sourceName, payeeId, matchType)
-      setWrittenData((current) => ({
-        ...current,
-        payeeMappings: current.payeeMappings.map((mapping) => mapping.id === mappingId ? { ...mapping, sourceName: cleanedMappingName(sourceName, matchType), payeeId, matchType } : mapping),
-      }))
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not update the mapping.'))
-      throw error
-    }
-  }
-
-  async function promotePayeeMapping(mappingId: string) {
-    const mapping = data.payeeMappings.find((item) => item.id === mappingId)
-    if (!mapping) throw new Error('The suggested mapping no longer exists.')
-    await changePayeeMapping(mapping.id, mapping.sourceName, mapping.payeeId, 'starts_with')
-  }
-
-  async function addPayeeAlternativeForReview(sourceName: string, payeeId: string, accountId: string) {
-    try {
-      setSyncError('')
-      await createPayeeMapping(workspace.workspaceId, sourceName, payeeId)
-      await rematchPendingBankImportPayees(workspace.workspaceId, accountId)
-      const refreshed = await reloadWorkspaceSnapshot()
-      setWrittenData(refreshed.data)
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not add the alternative payee name.'))
-      throw error
-    }
-  }
-
-  async function removePayeeMapping(mappingId: string) {
-    try {
-      setSyncError('')
-      await deletePayeeMapping(workspace.workspaceId, mappingId)
-      setWrittenData((current) => ({ ...current, payeeMappings: current.payeeMappings.filter((mapping) => mapping.id !== mappingId) }))
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not remove the mapping.'))
-      throw error
-    }
-  }
-
   async function changeTaxRate(estimatedCompanyTaxRateBps: number) {
     setWrittenData((current) => ({ ...current, settings: { ...current.settings, estimatedCompanyTaxRateBps } }))
     try {
@@ -994,161 +812,6 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
     const nextPlans = [...data.yearlyFinancialPlans.filter((item) => item.year !== plan.year), plan]
     await saveYearlyFinancialPlans(workspace.workspaceId, nextPlans)
     setWrittenData((current) => ({ ...current, yearlyFinancialPlans: nextPlans }))
-  }
-
-  async function changeBankImportMode(accountId: string, mode: 'review' | 'automatic') {
-    try {
-      setSyncError('')
-      await updateBankImportMode(workspace.workspaceId, accountId, mode)
-      setWrittenData((current) => ({
-        ...current,
-        accounts: current.accounts.map((account) => account.id === accountId ? { ...account, bankImportMode: mode } : account),
-      }))
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not update the bank import mode.'))
-    }
-  }
-
-  async function decideBankImportCandidate(candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory = false, payeeId?: string | null, rememberMapping = false, bankDescription = '', createdPayee = false, defaultAccountId = '', memo = '') {
-    if (bankBatchRunningRef.current || reviewingCandidateId) return
-    try {
-      setSyncError('')
-      setReviewingCandidateId(candidateId)
-      if (decision === 'approve') {
-        if (!categoryId) throw new Error('Choose a category before approving this transaction.')
-        let resolvedPayeeId = payeeId ?? null
-        let payeeCreatedDuringApproval = false
-        if (!resolvedPayeeId) {
-          const [createdPayee] = await ensurePayees(workspace.workspaceId, [bankDescription])
-          resolvedPayeeId = createdPayee.id
-          payeeCreatedDuringApproval = true
-        }
-        await updateBankImportCandidateDetails(workspace.workspaceId, candidateId, resolvedPayeeId, memo)
-        await approveBankImportCandidate(workspace.workspaceId, candidateId, categoryId, rememberCategory)
-        if ((createdPayee || payeeCreatedDuringApproval) && defaultAccountId) {
-          try {
-            await updatePayeeDefaults(workspace.workspaceId, resolvedPayeeId, categoryId, defaultAccountId)
-          } catch (defaultsError) {
-            const refreshed = await reloadWorkspaceSnapshot()
-            setWrittenData(refreshed.data)
-            setSyncError(`Transaction approved, but the new payee defaults could not be saved: ${getErrorMessage(defaultsError, 'Unknown error')}`)
-            return
-          }
-        }
-        if (rememberMapping && resolvedPayeeId && bankDescription.trim()) {
-          try {
-            const normalizedDescription = bankDescription.normalize('NFKC').trim().toLocaleLowerCase('en')
-            const existingMapping = data.payeeMappings.find((mapping) => mapping.sourceName.normalize('NFKC').trim().toLocaleLowerCase('en') === normalizedDescription)
-            if (existingMapping && existingMapping.payeeId !== resolvedPayeeId) await updatePayeeMapping(workspace.workspaceId, existingMapping.id, bankDescription, resolvedPayeeId, existingMapping.matchType)
-            else if (!existingMapping) await createPayeeMapping(workspace.workspaceId, bankDescription, resolvedPayeeId)
-            if (defaultAccountId) await rematchPendingBankImportPayees(workspace.workspaceId, defaultAccountId)
-          } catch (mappingError) {
-            const refreshed = await reloadWorkspaceSnapshot()
-            setWrittenData(refreshed.data)
-            setSyncError(`Transaction approved, but its bank description could not be saved as a mapping: ${getErrorMessage(mappingError, 'Unknown error')}`)
-            return
-          }
-        }
-      }
-      else await rejectBankImportCandidate(workspace.workspaceId, candidateId)
-      const refreshed = await reloadWorkspaceSnapshot()
-      setWrittenData(refreshed.data)
-    } catch (error) {
-      setSyncError(getErrorMessage(error, `Could not ${decision} the bank transaction.`))
-    } finally {
-      setReviewingCandidateId('')
-    }
-  }
-
-  async function approveReadyBankCandidates(accountId: string, rows: ReadyBankApproval[]) {
-    if (bankBatchRunningRef.current || reviewingCandidateId || !rows.length || !hasFullHistory()) return
-    bankBatchRunningRef.current = true
-    try {
-      if (!window.confirm(`Approve ${rows.length} ready bank transaction${rows.length === 1 ? '' : 's'} for ${data.accounts.find((account) => account.id === accountId)?.name ?? 'this account'}?`)) return
-      setSyncError('')
-      setBankBatchResult(null)
-      setBankBatchProgress({ accountId, done: 0, total: rows.length })
-      const result = await bankBatchRef.current.run(rows, (row) => {
-        const current = latestBankData.current
-        return hasFullHistory() && eligibleBankApprovals({ accountId, candidates: current.bankImportCandidates, payees: current.payees, categories: current.categories, transactions: current.transactions, choices: { [row.id]: { payeeId: row.payeeId, categoryId: row.categoryId, memo: row.memo } } }).some((candidate) => candidate.id === row.id)
-      }, (done, total) => setBankBatchProgress({ accountId, done, total }))
-      if (result) {
-        setBankBatchResult({ accountId, result })
-        const refreshed = await reloadWorkspaceSnapshot()
-        setWrittenData(refreshed.data)
-      }
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not refresh bank transactions after batch approval.'))
-    } finally {
-      setBankBatchProgress(null)
-      bankBatchRunningRef.current = false
-    }
-  }
-
-  async function rematchBankImportPayees(accountId: string) {
-    try {
-      setSyncError('')
-      setRematchingAccountId(accountId)
-      const matched = await rematchPendingBankImportPayees(workspace.workspaceId, accountId)
-      const refreshed = await reloadWorkspaceSnapshot()
-      setWrittenData(refreshed.data)
-      setSyncNotice({ accountId, message: matched ? `${matched} pending ${matched === 1 ? 'transaction now has' : 'transactions now have'} a matched payee.` : 'No additional payees matched.' })
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not recheck pending payees.'))
-    } finally {
-      setRematchingAccountId('')
-    }
-  }
-
-  async function postBankImportAsTransfer(candidateId: string, counterpartyAccountId: string, memo: string) {
-    if (bankBatchRunningRef.current || reviewingCandidateId) return
-    try {
-      setSyncError('')
-      setReviewingCandidateId(candidateId)
-      const candidate = data.bankImportCandidates.find((item) => item.id === candidateId)
-      await updateBankImportCandidateDetails(workspace.workspaceId, candidateId, candidate?.payeeId ?? null, memo)
-      await approveBankImportCandidateAsTransfer(workspace.workspaceId, candidateId, counterpartyAccountId)
-      void clearTransactionCache(workspace.workspaceId)
-      const refreshed = await reloadWorkspaceSnapshot()
-      setWrittenData(refreshed.data)
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not post the bank transaction as a transfer.'))
-      throw error
-    } finally {
-      setReviewingCandidateId('')
-    }
-  }
-
-  async function syncBank(account: Account) {
-    if (!account.providerAccountId) return
-    setSyncError('')
-    setSyncNotice(null)
-    setSyncingAccountId(account.id)
-    try {
-      const result = await apiJson<BankSyncSummary>('/api/gocardless/sync-import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          workspaceId: workspace.workspaceId,
-          accountId: account.id,
-        }),
-      })
-      const refreshed = await reloadWorkspaceSnapshot()
-      setWrittenData(refreshed.data)
-      const remaining = [
-        result.rateLimits.transactions?.remaining === undefined ? null : `${result.rateLimits.transactions.remaining} transaction requests left`,
-        result.rateLimits.balances?.remaining === undefined ? null : `${result.rateLimits.balances.remaining} balance requests left`,
-      ].filter(Boolean).join(' · ')
-      const recentSyncs = `${result.syncRunsLast24Hours} sync${result.syncRunsLast24Hours === 1 ? '' : 's'} in the past 24 hours`
-      setSyncNotice({
-        accountId: account.id,
-        message: `${formatSyncDiagnostic(result.diagnostic)}${result.balanceUpdated ? ' · Bank balance updated' : ''} · ${remaining || recentSyncs}${result.warnings.length ? ` · ${result.warnings.join(' · ')}` : ''}`,
-      })
-    } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not sync this bank account.'))
-    } finally {
-      setSyncingAccountId('')
-    }
   }
 
   return (
@@ -2668,25 +2331,6 @@ function formatBankSyncOutcome(account: Account) {
     return `${imported} new transaction${imported === 1 ? '' : 's'} added`
   }
   return 'No new transactions'
-}
-
-function formatSyncDiagnostic(diagnostic: NonNullable<Account['lastSyncDiagnostic']>) {
-  const reported = diagnostic.bookedReturned + diagnostic.pendingReturned
-  return [
-    `Bank reported ${reported} transaction${reported === 1 ? '' : 's'}`,
-    diagnostic.bookedReturned ? `${diagnostic.bookedReturned} posted` : null,
-    diagnostic.pendingReturned ? `${diagnostic.pendingReturned} pending` : null,
-    diagnostic.staged ? `${diagnostic.staged} need review` : null,
-    diagnostic.imported ? `${diagnostic.imported} added automatically` : null,
-    diagnostic.pendingPromoted ? `${diagnostic.pendingPromoted} pending → posted` : null,
-    diagnostic.duplicates ? `${diagnostic.duplicates} already known` : null,
-    diagnostic.transfersMatched ? `${diagnostic.transfersMatched} transfer${diagnostic.transfersMatched === 1 ? '' : 's'} matched` : null,
-    diagnostic.cutoffIgnored ? `${diagnostic.cutoffIgnored} older than imported history` : null,
-    diagnostic.futureIgnored ? `${diagnostic.futureIgnored} future-dated ignored` : null,
-    diagnostic.malformedIgnored ? `${diagnostic.malformedIgnored} could not be read` : null,
-    diagnostic.transactionError ? `Transactions error: ${diagnostic.transactionError}` : null,
-    diagnostic.balanceError ? `Balance error: ${diagnostic.balanceError}` : null,
-  ].filter(Boolean).join(' · ')
 }
 
 function CategoryDetailPage({ category, spent, budget, monthlyBudgetOverride, monthKey, defaultCurrency, fxRates, transactions, allTransactions, categories, categoryGroups, accounts, historyLoaded, historyLoading, onRequestHistory, onUpdateBudget, onUpdateDefaultBudget, onRemoveBudgetOverride, onEdit, onDelete, onBack, onSelectCategory, onEditTransaction }: { category: Category; spent: number; budget: number; monthlyBudgetOverride?: number; monthKey: string; defaultCurrency: string; fxRates: FxRate[]; transactions: Transaction[]; allTransactions: Transaction[]; categories: Category[]; categoryGroups: CategoryGroup[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onUpdateBudget: (categoryId: string, amountMinor: number) => Promise<void>; onUpdateDefaultBudget: (categoryId: string, amountMinor: number) => Promise<void>; onRemoveBudgetOverride: (categoryId: string) => Promise<void>; onEdit: () => void; onDelete: (categoryId: string) => Promise<void>; onBack: () => void; onSelectCategory: (id: string) => void; onEditTransaction: (transaction: Transaction) => void }) {

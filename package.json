@@ -16,6 +16,7 @@
     "test:bank-policy": "node --experimental-strip-types scripts/test-bank-import-policy.mjs",
     "test:revenue": "node --experimental-strip-types scripts/test-revenue-forecast.mjs",
     "test:timesheet-actions": "node --experimental-transform-types --test src/features/timesheet/actions.test.ts",
+    "test:payee-actions": "node --experimental-transform-types --test src/features/payees/actions.test.ts",
     "test:client-hours": "node --experimental-strip-types scripts/test-client-hours-report.mjs",
     "test:workspace-cache": "node --experimental-strip-types scripts/test-workspace-cache.mjs",
     "test:workspace-refresh": "node --experimental-transform-types --test src/workspace-refresh-data.test.ts",
