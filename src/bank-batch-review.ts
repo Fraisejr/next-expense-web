@@ -3,6 +3,27 @@ import type { BankImportCandidate, Category, Payee, Transaction } from './types'
 export type BankApprovalChoice = { payeeId?: string; categoryId?: string; memo?: string; transfer?: boolean }
 export type ReadyBankApproval = { id: string; accountId: string; payeeId: string; categoryId: string; memo: string }
 type ReviewTransaction = Pick<Transaction, 'id' | 'accountId' | 'type' | 'currency' | 'amountMinor' | 'date'> & { toAccountId?: string; destinationAmountMinor?: number }
+type ReviewOptions = Parameters<typeof eligibleBankApprovals>[0]
+
+export function shouldAutoLoadBankHistory(bankLinked: boolean, candidateCount: number, historyLoaded: boolean, alreadyAttempted = false): boolean {
+  return bankLinked && candidateCount > 0 && !historyLoaded && !alreadyAttempted
+}
+
+export function bankApprovalReview(options: ReviewOptions & { historyLoaded: boolean }) {
+  if (!options.historyLoaded) return { readyRows: null, excluded: null }
+  const readyRows = eligibleBankApprovals(options)
+  const readyIds = new Set(readyRows.map(row => row.id))
+  const excluded = { unposted: 0, missingPayee: 0, missingCategory: 0, ambiguous: 0 }
+  for (const candidate of options.candidates) {
+    if (readyIds.has(candidate.id)) continue
+    const choice = options.choices[candidate.id]
+    if (!candidate.posted) excluded.unposted++
+    else if (!options.payees.some(payee => payee.id === (choice?.payeeId ?? candidate.payeeId))) excluded.missingPayee++
+    else if (!options.categories.some(category => category.id === (choice?.categoryId ?? candidate.categoryId) && !category.hidden)) excluded.missingCategory++
+    else excluded.ambiguous++
+  }
+  return { readyRows, excluded }
+}
 
 export function eligibleBankApprovals({ accountId, candidates, payees, categories, transactions, choices }: {
   accountId: string

@@ -15,7 +15,7 @@ import { clearWorkspaceCache, invalidateWorkspaceCache, readWorkspaceCache, refr
 import { convertMinor } from './currency'
 import { calculateRevenueForecast, earnedWorkMonthRange, type RevenueForecast } from './revenue'
 import { buildClientHoursReport, canCopyClientHoursReport, copyClientHoursReport, reportHours } from './client-hours-report'
-import { createBankApprovalBatch, eligibleBankApprovals, type ReadyBankApproval, type BankApprovalBatchResult } from './bank-batch-review'
+import { createBankApprovalBatch, eligibleBankApprovals, bankApprovalReview, shouldAutoLoadBankHistory, type ReadyBankApproval, type BankApprovalBatchResult } from './bank-batch-review'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, TimeCode, TimeComment, TimeEntry, TimesheetClient, TimesheetClientForecast, TimesheetClientRate, Transaction, YearlyFinancialPlan } from './types'
 
 type Page = 'overview' | 'transactions' | 'payees' | 'reports' | 'accounts' | 'timesheet' | 'settings'
@@ -426,6 +426,7 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
   const [historyLoading, setHistoryLoading] = useState(false)
   const historyLoadedRef = useRef(false)
   const historyRequest = useRef<Promise<void> | null>(null)
+  const autoHistoryAttempt = useRef<string | null>(null)
   const monthCache = useRef(new Map<string, Transaction[]>())
   const localMutationCount = useRef(0)
   const snapshotGeneration = useRef(0)
@@ -558,6 +559,20 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
   useEffect(() => {
     if (page === 'overview' || page === 'payees' || page === 'reports' || Boolean(payeeMatch || categoryTarget)) void ensureFullHistory()
   }, [categoryTarget, ensureFullHistory, page, payeeMatch])
+
+  useEffect(() => {
+    const accountId = accountMatch?.params.accountId
+    const account = data.accounts.find((item) => item.id === accountId)
+    const candidateCount = data.bankImportCandidates.filter((candidate) => candidate.accountId === accountId).length
+    if (!accountId) {
+      autoHistoryAttempt.current = null
+      return
+    }
+    const key = `${workspace.workspaceId}:${accountId}`
+    if (!shouldAutoLoadBankHistory(Boolean(account?.providerAccountId), candidateCount, historyLoaded, autoHistoryAttempt.current === key)) return
+    autoHistoryAttempt.current = key
+    void ensureFullHistory()
+  }, [accountMatch?.params.accountId, data.accounts, data.bankImportCandidates, ensureFullHistory, historyLoaded, workspace.workspaceId])
 
   useEffect(() => {
     if (new URLSearchParams(location.search).get('bank_link') !== 'complete') return
@@ -3914,7 +3929,14 @@ function BankImportReview({ account, accounts, transactions, candidates, categor
   const [transferCandidateId, setTransferCandidateId] = useState('')
   const [transferAccountAssignments, setTransferAccountAssignments] = useState<Record<string, string>>({})
   const batchRunning = Boolean(bankBatchProgress)
-  const readyRows = historyLoaded ? eligibleBankApprovals({ accountId: account.id, candidates, payees, categories, transactions, choices: Object.fromEntries(candidates.map((candidate) => [candidate.id, { payeeId: payeeAssignments[candidate.id], categoryId: categoryAssignments[candidate.id], memo: memoAssignments[candidate.id], transfer: transferCandidateId === candidate.id || Boolean(createdPayeeIds[candidate.id] && createdPayeeIds[candidate.id] === payeeAssignments[candidate.id]) }])) }) : []
+  const review = bankApprovalReview({ accountId: account.id, candidates, payees, categories, transactions, historyLoaded, choices: Object.fromEntries(candidates.map((candidate) => [candidate.id, { payeeId: payeeAssignments[candidate.id], categoryId: categoryAssignments[candidate.id], memo: memoAssignments[candidate.id], transfer: transferCandidateId === candidate.id || Boolean(createdPayeeIds[candidate.id] && createdPayeeIds[candidate.id] === payeeAssignments[candidate.id]) }])) })
+  const readyRows = review.readyRows ?? []
+  const excludedReasons = review.excluded ? [
+    review.excluded.unposted && `${review.excluded.unposted} unposted`,
+    review.excluded.missingPayee && `${review.excluded.missingPayee} missing payee`,
+    review.excluded.missingCategory && `${review.excluded.missingCategory} missing category`,
+    review.excluded.ambiguous && `${review.excluded.ambiguous} duplicate or transfer ambiguity`,
+  ].filter(Boolean).join(' · ') : ''
   const pendingNet = candidates.reduce((sum, candidate) => sum + (candidate.type === 'income' ? candidate.amountMinor : -candidate.amountMinor), 0)
   const availableCategories = categories.filter((category) => !category.hidden)
   return <section className="bank-import-review">
@@ -3926,8 +3948,9 @@ function BankImportReview({ account, accounts, transactions, candidates, categor
       </div>
     </div>
     {candidates.length > 0 && <div className="bank-review-queue">
-      <div className="bank-review-summary"><strong>{candidates.length} awaiting review</strong><span>Net effect if approved: {formatMoney(pendingNet, account.currency)}</span><div className="bank-review-summary-actions"><button type="button" className="primary-button" disabled={!readyRows.length || !historyLoaded || historyLoading || rematchingPayees || Boolean(reviewingCandidateId) || batchRunning} onClick={() => void onApproveReady(account.id, readyRows)}><Check size={14} />{batchRunning ? `Approving ${bankBatchProgress?.done ?? 0}/${bankBatchProgress?.total ?? 0}…` : `Approve all ready (${readyRows.length})`}</button><button type="button" className="secondary-button" disabled={rematchingPayees || Boolean(reviewingCandidateId) || batchRunning} onClick={onRematchPayees}><RefreshCw className={rematchingPayees ? 'spin-icon' : ''} size={14} />{rematchingPayees ? 'Checking…' : 'Recheck payees'}</button></div></div>
-      {!historyLoaded && <p className="bank-batch-message">{historyLoading ? 'Loading transaction history to check for duplicates and transfers…' : <>Load transaction history before approving all ready items. <button type="button" className="secondary-button" onClick={() => void onRequestHistory()}>Load history</button></>}</p>}
+      <div className="bank-review-summary"><strong>{candidates.length} awaiting review</strong><span>Net effect if approved: {formatMoney(pendingNet, account.currency)}</span><div className="bank-review-summary-actions"><button type="button" className="primary-button" disabled={!readyRows.length || !historyLoaded || historyLoading || rematchingPayees || Boolean(reviewingCandidateId) || batchRunning} onClick={() => void onApproveReady(account.id, readyRows)}><Check size={14} />{batchRunning ? `Approving ${bankBatchProgress?.done ?? 0}/${bankBatchProgress?.total ?? 0}…` : historyLoaded ? `Approve all ready (${readyRows.length})` : 'Checking ready items…'}</button><button type="button" className="secondary-button" disabled={rematchingPayees || Boolean(reviewingCandidateId) || batchRunning} onClick={onRematchPayees}><RefreshCw className={rematchingPayees ? 'spin-icon' : ''} size={14} />{rematchingPayees ? 'Checking…' : 'Recheck payees'}</button></div></div>
+      {!historyLoaded && <p className="bank-batch-message" role="status">{historyLoading ? 'Loading transaction history to check for duplicates and transfers…' : <>History check incomplete. <button type="button" className="secondary-button" onClick={() => void onRequestHistory()}>Retry history check</button></>}</p>}
+      {historyLoaded && excludedReasons && <p className="bank-batch-message">Not ready: {excludedReasons}. Choices here apply immediately; no separate save is needed.</p>}
       <fieldset className="bank-review-rows" disabled={batchRunning}>
       {candidates.map((candidate) => {
         const payeeId = payeeAssignments[candidate.id] ?? candidate.payeeId ?? ''

@@ -1,9 +1,21 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { eligibleBankApprovals, createBankApprovalBatch } from './bank-batch-review.ts'
+import { eligibleBankApprovals, createBankApprovalBatch, shouldAutoLoadBankHistory, bankApprovalReview } from './bank-batch-review.ts'
 
 const candidate = { id: 'one', accountId: 'account', date: '2026-09-24', amountMinor: 1200, currency: 'EUR', type: 'expense' as const, payee: 'Shop', payeeId: 'payee', categoryId: 'category', note: 'original', posted: true }
 const options = { accountId: 'account', candidates: [candidate], payees: [{ id: 'payee' }], categories: [{ id: 'category', hidden: false }], transactions: [], choices: {} }
+
+test('bank account with candidates checks history before showing a ready count, then uses local choices', () => {
+  const choices = { one: { payeeId: 'payee', categoryId: 'category' } }
+  const pending = { ...options, candidates: [{ ...candidate, payeeId: undefined, categoryId: undefined }], choices }
+  assert.equal(shouldAutoLoadBankHistory(true, 1, false), true)
+  assert.equal(shouldAutoLoadBankHistory(false, 1, false), false)
+  assert.equal(shouldAutoLoadBankHistory(true, 0, false), false)
+  assert.equal(shouldAutoLoadBankHistory(true, 1, true), false)
+  assert.equal(shouldAutoLoadBankHistory(true, 1, false, true), false)
+  assert.equal(bankApprovalReview({ ...pending, historyLoaded: false }).readyRows, null)
+  assert.deepEqual(bankApprovalReview({ ...pending, historyLoaded: true }).readyRows?.map(row => row.id), ['one'])
+})
 
 test('only explicitly selected, posted, unambiguous rows are eligible', () => {
   assert.deepEqual(eligibleBankApprovals(options).map(row => row.id), ['one'])
