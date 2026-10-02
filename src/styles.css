@@ -589,6 +589,11 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
 .bank-review-queue { border-top: 1px solid #dedfd8; background: var(--paper); }
 .bank-review-summary { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; background: #f0f1ec; color: var(--muted); font-size: 9px; }
 .bank-review-summary strong { color: var(--ink); font-size: 9.5px; }
+.bank-review-summary-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.bank-review-summary-actions button { white-space: nowrap; }
+.bank-review-rows { border: 0; margin: 0; padding: 0; min-width: 0; }
+.bank-batch-message { margin: 0; padding: 10px 14px; font-size: 11px; line-height: 1.5; color: var(--muted); border-bottom: 1px solid #dedfd8; }
+.bank-batch-message button { margin-left: 8px; }
 .bank-review-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(190px, 250px) minmax(170px, 220px) auto; gap: 14px; align-items: center; padding: 12px 14px; border-top: 1px solid #e8e8e2; }
 .bank-review-row:focus-within { position: relative; z-index: 11; background: var(--paper); }
 .bank-review-row:first-of-type { border-top: 0; }

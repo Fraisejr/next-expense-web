@@ -73,6 +73,7 @@ export type BankSyncDiagnostic = {
 
 export type BankImportCandidate = {
   id: string
+  transactionId?: string
   accountId: string
   date: string
   amountMinor: number

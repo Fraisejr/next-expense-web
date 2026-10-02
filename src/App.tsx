@@ -15,6 +15,7 @@ import { clearWorkspaceCache, invalidateWorkspaceCache, readWorkspaceCache, refr
 import { convertMinor } from './currency'
 import { calculateRevenueForecast, earnedWorkMonthRange, type RevenueForecast } from './revenue'
 import { buildClientHoursReport, canCopyClientHoursReport, copyClientHoursReport, reportHours } from './client-hours-report'
+import { createBankApprovalBatch, eligibleBankApprovals, type ReadyBankApproval, type BankApprovalBatchResult } from './bank-batch-review'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, TimeCode, TimeComment, TimeEntry, TimesheetClient, TimesheetClientForecast, TimesheetClientRate, Transaction, YearlyFinancialPlan } from './types'
 
 type Page = 'overview' | 'transactions' | 'payees' | 'reports' | 'accounts' | 'timesheet' | 'settings'
@@ -410,6 +411,15 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
   const [categoryTarget, setCategoryTarget] = useState<Transaction | null>(null)
   const [syncingAccountId, setSyncingAccountId] = useState('')
   const [reviewingCandidateId, setReviewingCandidateId] = useState('')
+  const [bankBatchProgress, setBankBatchProgress] = useState<{ accountId: string; done: number; total: number } | null>(null)
+  const [bankBatchResult, setBankBatchResult] = useState<{ accountId: string; result: BankApprovalBatchResult } | null>(null)
+  const bankBatchRunningRef = useRef(false)
+  const bankBatchRef = useRef(createBankApprovalBatch(async (row: ReadyBankApproval) => {
+    await updateBankImportCandidateDetails(workspace.workspaceId, row.id, row.payeeId, row.memo, row.accountId)
+    await approveBankImportCandidate(workspace.workspaceId, row.id, row.categoryId, false)
+  }))
+  const latestBankData = useRef(data)
+  latestBankData.current = data
   const [rematchingAccountId, setRematchingAccountId] = useState('')
   const [syncNotice, setSyncNotice] = useState<{ accountId: string; message: string } | null>(null)
   const [historyLoaded, setHistoryLoaded] = useState(false)
@@ -1343,6 +1353,7 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
   }
 
   async function decideBankImportCandidate(candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory = false, payeeId?: string | null, rememberMapping = false, bankDescription = '', createdPayee = false, defaultAccountId = '', memo = '') {
+    if (bankBatchRunningRef.current || reviewingCandidateId) return
     try {
       setSyncError('')
       setReviewingCandidateId(candidateId)
@@ -1392,6 +1403,31 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
     }
   }
 
+  async function approveReadyBankCandidates(accountId: string, rows: ReadyBankApproval[]) {
+    if (bankBatchRunningRef.current || reviewingCandidateId || !rows.length || !historyLoadedRef.current) return
+    bankBatchRunningRef.current = true
+    try {
+      if (!window.confirm(`Approve ${rows.length} ready bank transaction${rows.length === 1 ? '' : 's'} for ${data.accounts.find((account) => account.id === accountId)?.name ?? 'this account'}?`)) return
+      setSyncError('')
+      setBankBatchResult(null)
+      setBankBatchProgress({ accountId, done: 0, total: rows.length })
+      const result = await bankBatchRef.current.run(rows, (row) => {
+        const current = latestBankData.current
+        return historyLoadedRef.current && eligibleBankApprovals({ accountId, candidates: current.bankImportCandidates, payees: current.payees, categories: current.categories, transactions: current.transactions, choices: { [row.id]: { payeeId: row.payeeId, categoryId: row.categoryId, memo: row.memo } } }).some((candidate) => candidate.id === row.id)
+      }, (done, total) => setBankBatchProgress({ accountId, done, total }))
+      if (result) {
+        setBankBatchResult({ accountId, result })
+        const refreshed = await reloadWorkspaceSnapshot()
+        setWrittenData(refreshed.data)
+      }
+    } catch (error) {
+      setSyncError(getErrorMessage(error, 'Could not refresh bank transactions after batch approval.'))
+    } finally {
+      setBankBatchProgress(null)
+      bankBatchRunningRef.current = false
+    }
+  }
+
   async function rematchBankImportPayees(accountId: string) {
     try {
       setSyncError('')
@@ -1408,6 +1444,7 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
   }
 
   async function postBankImportAsTransfer(candidateId: string, counterpartyAccountId: string, memo: string) {
+    if (bankBatchRunningRef.current || reviewingCandidateId) return
     try {
       setSyncError('')
       setReviewingCandidateId(candidateId)
@@ -1541,7 +1578,7 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
           <TimesheetPage workspaceId={workspace.workspaceId} month={selectedMonthKey} defaultCurrency={workspace.defaultCurrency} codes={data.timeCodes} clients={data.timesheetClients} rates={data.timesheetClientRates} forecasts={data.timesheetClientForecasts} fxRates={data.fxRates} onAddCode={addTimeCode} onUpdateCode={changeTimeCode} onReorderCodes={reorderTimeCodes} onAddClient={addTimesheetClient} onUpdateClient={changeTimesheetClient} onSaveRate={changeTimesheetClientRate} onSaveForecast={changeTimesheetClientForecast} />
         )}
         {selectedAccount && (
-          <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onPostTransfer={postBankImportAsTransfer} onRematchPayees={() => rematchBankImportPayees(selectedAccount.id)} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onAddAlternativeName={(sourceName, payeeId) => addPayeeAlternativeForReview(sourceName, payeeId, selectedAccount.id)} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingAccountId === selectedAccount.id} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
+          <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onApproveReady={approveReadyBankCandidates} bankBatchProgress={bankBatchProgress} bankBatchResult={bankBatchResult} onPostTransfer={postBankImportAsTransfer} onRematchPayees={() => rematchBankImportPayees(selectedAccount.id)} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onAddAlternativeName={(sourceName, payeeId) => addPayeeAlternativeForReview(sourceName, payeeId, selectedAccount.id)} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingAccountId === selectedAccount.id} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
         )}
         {selectedCategory && (
           <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} monthlyBudgetOverride={data.budgets.find((budget) => budget.month === selectedMonthKey && budget.categoryId === selectedCategory.id)?.amountMinor} monthKey={selectedMonthKey} defaultCurrency={workspace.defaultCurrency} fxRates={data.fxRates} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTransactions={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onUpdateBudget={updateBudget} onUpdateDefaultBudget={updateDefaultBudget} onRemoveBudgetOverride={removeBudgetOverride} onEdit={() => setModal('edit-category')} onDelete={removeUnusedCategory} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
@@ -3788,7 +3825,7 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
   return <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}><div className="modal"><div className="modal-heading"><div><span className="eyebrow">Next Expense</span><h2>{title}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></div>{children}</div></div>
 }
 
-function AccountDetailPage({ account, transactions, allTransactions, candidates, categories, payees, mappings, accounts, historyLoaded, historyLoading, onRequestHistory, onBack, onSelectAccount, onEditAccount, onAdjustBalance, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, onPostTransfer, onRematchPayees, onCreatePayee, onPromoteMapping, onAddAlternativeName, onUnhideCategory, onEditTransaction, reviewingCandidateId, rematchingPayees, syncing, syncNotice }: { account: Account; transactions: Transaction[]; allTransactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onBack: () => void; onSelectAccount: (id: string) => void; onEditAccount: () => void; onAdjustBalance: () => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string, memo?: string) => void; onPostTransfer: (candidateId: string, counterpartyAccountId: string, memo: string) => Promise<void>; onRematchPayees: () => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onAddAlternativeName: (sourceName: string, payeeId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void>; onEditTransaction: (transaction: Transaction) => void; reviewingCandidateId: string; rematchingPayees: boolean; syncing: boolean; syncNotice: string }) {
+function AccountDetailPage({ account, transactions, allTransactions, candidates, categories, payees, mappings, accounts, historyLoaded, historyLoading, onRequestHistory, onBack, onSelectAccount, onEditAccount, onAdjustBalance, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, onApproveReady, bankBatchProgress, bankBatchResult, onPostTransfer, onRematchPayees, onCreatePayee, onPromoteMapping, onAddAlternativeName, onUnhideCategory, onEditTransaction, reviewingCandidateId, rematchingPayees, syncing, syncNotice }: { account: Account; transactions: Transaction[]; allTransactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onBack: () => void; onSelectAccount: (id: string) => void; onEditAccount: () => void; onAdjustBalance: () => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string, memo?: string) => void; onApproveReady: (accountId: string, rows: ReadyBankApproval[]) => Promise<void>; bankBatchProgress: { accountId: string; done: number; total: number } | null; bankBatchResult: { accountId: string; result: BankApprovalBatchResult } | null; onPostTransfer: (candidateId: string, counterpartyAccountId: string, memo: string) => Promise<void>; onRematchPayees: () => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onAddAlternativeName: (sourceName: string, payeeId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void>; onEditTransaction: (transaction: Transaction) => void; reviewingCandidateId: string; rematchingPayees: boolean; syncing: boolean; syncNotice: string }) {
   return <div className="page-content narrow-page entity-page">
     <div className="entity-page-toolbar">
       <button className="entity-back" onClick={onBack}><ChevronLeft size={16} />All accounts</button>
@@ -3804,7 +3841,7 @@ function AccountDetailPage({ account, transactions, allTransactions, candidates,
         </div>
         <span>{syncNotice || formatRateLimits(account)}</span>
       </div>}
-      {account.providerAccountId && <BankImportReview account={account} accounts={accounts} transactions={transactions} candidates={candidates} categories={categories} payees={payees} mappings={mappings} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingPayees} onModeChange={onImportModeChange} onReview={onReviewCandidate} onPostTransfer={onPostTransfer} onRematchPayees={onRematchPayees} onCreatePayee={onCreatePayee} onPromoteMapping={onPromoteMapping} onAddAlternativeName={onAddAlternativeName} onUnhideCategory={onUnhideCategory} />}
+      {account.providerAccountId && <BankImportReview key={account.id} account={account} accounts={accounts} transactions={allTransactions} candidates={candidates} categories={categories} payees={payees} mappings={mappings} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingPayees} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={onRequestHistory} onModeChange={onImportModeChange} onReview={onReviewCandidate} onApproveReady={onApproveReady} bankBatchProgress={bankBatchProgress} bankBatchResult={bankBatchResult} onPostTransfer={onPostTransfer} onRematchPayees={onRematchPayees} onCreatePayee={onCreatePayee} onPromoteMapping={onPromoteMapping} onAddAlternativeName={onAddAlternativeName} onUnhideCategory={onUnhideCategory} />}
       <AccountDetail account={account} transactions={transactions} allTransactions={allTransactions} categories={categories} accounts={accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={onRequestHistory} onEditTransaction={onEditTransaction} />
     </section>
   </div>
@@ -3863,7 +3900,7 @@ function CategorySearchPicker({ ariaLabel, value, categories, allowEmpty = false
   </div>
 }
 
-function BankImportReview({ account, accounts, transactions, candidates, categories, payees, mappings, reviewingCandidateId, rematchingPayees, onModeChange, onReview, onPostTransfer, onRematchPayees, onCreatePayee, onPromoteMapping, onAddAlternativeName, onUnhideCategory }: { account: Account; accounts: Account[]; transactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; reviewingCandidateId: string; rematchingPayees: boolean; onModeChange: (mode: 'review' | 'automatic') => void; onReview: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string, memo?: string) => void; onPostTransfer: (candidateId: string, counterpartyAccountId: string, memo: string) => Promise<void>; onRematchPayees: () => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onAddAlternativeName: (sourceName: string, payeeId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void> }) {
+function BankImportReview({ account, accounts, transactions, candidates, categories, payees, mappings, reviewingCandidateId, rematchingPayees, historyLoaded, historyLoading, onRequestHistory, onModeChange, onReview, onApproveReady, bankBatchProgress, bankBatchResult, onPostTransfer, onRematchPayees, onCreatePayee, onPromoteMapping, onAddAlternativeName, onUnhideCategory }: { account: Account; accounts: Account[]; transactions: Transaction[]; candidates: BankImportCandidate[]; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; reviewingCandidateId: string; rematchingPayees: boolean; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onModeChange: (mode: 'review' | 'automatic') => void; onReview: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string, memo?: string) => void; onApproveReady: (accountId: string, rows: ReadyBankApproval[]) => Promise<void>; bankBatchProgress: { accountId: string; done: number; total: number } | null; bankBatchResult: { accountId: string; result: BankApprovalBatchResult } | null; onPostTransfer: (candidateId: string, counterpartyAccountId: string, memo: string) => Promise<void>; onRematchPayees: () => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onAddAlternativeName: (sourceName: string, payeeId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void> }) {
   const mode = account.bankImportMode ?? 'review'
   const [categoryAssignments, setCategoryAssignments] = useState<Record<string, string>>({})
   const [payeeAssignments, setPayeeAssignments] = useState<Record<string, string>>({})
@@ -3876,6 +3913,8 @@ function BankImportReview({ account, accounts, transactions, candidates, categor
   const [unhidingCategoryId, setUnhidingCategoryId] = useState('')
   const [transferCandidateId, setTransferCandidateId] = useState('')
   const [transferAccountAssignments, setTransferAccountAssignments] = useState<Record<string, string>>({})
+  const batchRunning = Boolean(bankBatchProgress)
+  const readyRows = historyLoaded ? eligibleBankApprovals({ accountId: account.id, candidates, payees, categories, transactions, choices: Object.fromEntries(candidates.map((candidate) => [candidate.id, { payeeId: payeeAssignments[candidate.id], categoryId: categoryAssignments[candidate.id], memo: memoAssignments[candidate.id], transfer: transferCandidateId === candidate.id || Boolean(createdPayeeIds[candidate.id] && createdPayeeIds[candidate.id] === payeeAssignments[candidate.id]) }])) }) : []
   const pendingNet = candidates.reduce((sum, candidate) => sum + (candidate.type === 'income' ? candidate.amountMinor : -candidate.amountMinor), 0)
   const availableCategories = categories.filter((category) => !category.hidden)
   return <section className="bank-import-review">
@@ -3887,7 +3926,9 @@ function BankImportReview({ account, accounts, transactions, candidates, categor
       </div>
     </div>
     {candidates.length > 0 && <div className="bank-review-queue">
-      <div className="bank-review-summary"><strong>{candidates.length} awaiting review</strong><span>Net effect if approved: {formatMoney(pendingNet, account.currency)}</span><button type="button" className="secondary-button" disabled={rematchingPayees || Boolean(reviewingCandidateId)} onClick={onRematchPayees}><RefreshCw className={rematchingPayees ? 'spin-icon' : ''} size={14} />{rematchingPayees ? 'Checking…' : 'Recheck payees'}</button></div>
+      <div className="bank-review-summary"><strong>{candidates.length} awaiting review</strong><span>Net effect if approved: {formatMoney(pendingNet, account.currency)}</span><div className="bank-review-summary-actions"><button type="button" className="primary-button" disabled={!readyRows.length || !historyLoaded || historyLoading || rematchingPayees || Boolean(reviewingCandidateId) || batchRunning} onClick={() => void onApproveReady(account.id, readyRows)}><Check size={14} />{batchRunning ? `Approving ${bankBatchProgress?.done ?? 0}/${bankBatchProgress?.total ?? 0}…` : `Approve all ready (${readyRows.length})`}</button><button type="button" className="secondary-button" disabled={rematchingPayees || Boolean(reviewingCandidateId) || batchRunning} onClick={onRematchPayees}><RefreshCw className={rematchingPayees ? 'spin-icon' : ''} size={14} />{rematchingPayees ? 'Checking…' : 'Recheck payees'}</button></div></div>
+      {!historyLoaded && <p className="bank-batch-message">{historyLoading ? 'Loading transaction history to check for duplicates and transfers…' : <>Load transaction history before approving all ready items. <button type="button" className="secondary-button" onClick={() => void onRequestHistory()}>Load history</button></>}</p>}
+      <fieldset className="bank-review-rows" disabled={batchRunning}>
       {candidates.map((candidate) => {
         const payeeId = payeeAssignments[candidate.id] ?? candidate.payeeId ?? ''
         const selectedPayee = payees.find((payee) => payee.id === payeeId)
@@ -4007,7 +4048,9 @@ function BankImportReview({ account, accounts, transactions, candidates, categor
           </div>
         </div>
       })}
+      </fieldset>
     </div>}
+    {bankBatchResult?.accountId === account.id && <p className="bank-batch-message" role="status">Batch complete: {bankBatchResult.result.approved} approved, {bankBatchResult.result.failed} failed, {bankBatchResult.result.skipped} skipped.{bankBatchResult.result.errors.length > 0 && <> Check these candidates manually: {bankBatchResult.result.errors.join('; ')}</>}</p>}
   </section>
 }
 

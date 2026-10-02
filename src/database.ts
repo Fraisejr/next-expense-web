@@ -300,7 +300,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
     loadTransactionPage(workspaceId, { startDate: monthStart, endDate: monthEnd }),
     neon.rpc('workspace_account_balances', { p_workspace_id: workspaceId }),
     allRows('bank_connections', 'id,account_id,status,last_synced_at,metadata'),
-    neon.from('bank_import_candidates').select('id,account_id,transaction_date,amount_minor,currency,transaction_type,payee_name,payee_id,category_id,memo,bank_memo,posted,status').eq('workspace_id', workspaceId).eq('status', 'pending').order('transaction_date', { ascending: false }),
+    neon.from('bank_import_candidates').select('id,account_id,transaction_id,transaction_date,amount_minor,currency,transaction_type,payee_name,payee_id,category_id,memo,bank_memo,posted,status').eq('workspace_id', workspaceId).eq('status', 'pending').order('transaction_date', { ascending: false }),
     neon.rpc('list_unused_payee_ids', { p_workspace_id: workspaceId }),
   ])
   if (workspaceResult.error) throw workspaceResult.error
@@ -461,6 +461,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
     .filter((row) => row.status === 'pending')
     .map((row) => ({
       id: String(row.id),
+      transactionId: (row.transaction_id as string | null) ?? undefined,
       accountId: String(row.account_id),
       date: String(row.transaction_date),
       amountMinor: number(row.amount_minor),
@@ -826,13 +827,14 @@ export async function rejectBankImportCandidate(workspaceId: string, candidateId
   if (error) throw error
 }
 
-export async function updateBankImportCandidateDetails(workspaceId: string, candidateId: string, payeeId: string | null, memo: string) {
-  const { data, error } = await neon.from('bank_import_candidates')
+export async function updateBankImportCandidateDetails(workspaceId: string, candidateId: string, payeeId: string | null, memo: string, postedAccountId?: string) {
+  let query = neon.from('bank_import_candidates')
     .update({ payee_id: payeeId, memo: memo.normalize('NFKC').trim() || null })
     .eq('workspace_id', workspaceId)
     .eq('id', candidateId)
     .eq('status', 'pending')
-    .select('id')
+  if (postedAccountId) query = query.eq('account_id', postedAccountId).eq('posted', true)
+  const { data, error } = await query.select('id')
   if (error) throw error
   if (!data?.length) throw new Error('The bank transaction awaiting review could not be updated.')
 }
