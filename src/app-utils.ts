@@ -42,3 +42,17 @@ export function uid() {
 export function toMonthKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 }
+
+const shortDate = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short' })
+const shortDateWithYear = new Intl.DateTimeFormat('en', { day: 'numeric', month: 'short', year: 'numeric' })
+
+export function formatShortDate(value: string) {
+  const date = new Date(`${value}T12:00:00`)
+  return (date.getFullYear() === new Date().getFullYear() ? shortDate : shortDateWithYear).format(date)
+}
+
+export function formatCompactMoney(amountMinor: number, currency = 'EUR') {
+  return new Intl.NumberFormat('en-IE', {
+    style: 'currency', currency, notation: 'compact', maximumFractionDigits: 1,
+  }).format(amountMinor / 100)
+}
