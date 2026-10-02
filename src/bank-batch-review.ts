@@ -1,7 +1,7 @@
 import type { BankImportCandidate, Category, Payee, Transaction } from './types'
 
 export type BankApprovalChoice = { payeeId?: string; categoryId?: string; memo?: string; transfer?: boolean }
-export type ReadyBankApproval = { id: string; accountId: string; payeeId: string; categoryId: string; memo: string }
+export type ReadyBankApproval = { id: string; accountId: string; payeeId: string; payeeName?: string; categoryId: string; memo: string }
 type ReviewTransaction = Pick<Transaction, 'id' | 'accountId' | 'type' | 'currency' | 'amountMinor' | 'date'> & { toAccountId?: string; destinationAmountMinor?: number }
 type ReviewOptions = Parameters<typeof eligibleBankApprovals>[0]
 
@@ -17,7 +17,8 @@ export function bankApprovalReview(options: ReviewOptions & { historyLoaded: boo
   for (const candidate of options.candidates) {
     if (readyIds.has(candidate.id)) continue
     const choice = options.choices[candidate.id]
-    if (!options.payees.some(payee => payee.id === (choice?.payeeId ?? candidate.payeeId))) excluded.missingPayee++
+    const payeeId = choice?.payeeId ?? candidate.payeeId ?? ''
+    if (payeeId ? !options.payees.some(payee => payee.id === payeeId) : !candidate.payee.normalize('NFKC').trim()) excluded.missingPayee++
     else if (!options.categories.some(category => category.id === (choice?.categoryId ?? candidate.categoryId) && !category.hidden)) excluded.missingCategory++
     else excluded.ambiguous++
   }
@@ -36,7 +37,9 @@ export function eligibleBankApprovals({ accountId, candidates, payees, categorie
     const choice = choices[candidate.id]
     const payeeId = choice?.payeeId ?? candidate.payeeId ?? ''
     const categoryId = choice?.categoryId ?? candidate.categoryId ?? ''
-    if (candidate.accountId !== accountId || choice?.transfer || !payees.some(payee => payee.id === payeeId) || !categories.some(category => category.id === categoryId && !category.hidden)) return []
+    const payeeName = candidate.payee.normalize('NFKC').trim()
+    const validPayee = payeeId ? payees.some(payee => payee.id === payeeId) : Boolean(payeeName)
+    if (candidate.accountId !== accountId || choice?.transfer || !validPayee || !categories.some(category => category.id === categoryId && !category.hidden)) return []
     if (candidates.some(other => other.id !== candidate.id && other.accountId === accountId && other.date === candidate.date && other.currency === candidate.currency && other.type === candidate.type && other.amountMinor === candidate.amountMinor)) return []
     const ambiguous = transactions.some(transaction => {
       if (transaction.id === candidate.transactionId || transaction.currency !== candidate.currency) return false
@@ -47,8 +50,23 @@ export function eligibleBankApprovals({ accountId, candidates, payees, categorie
       return days === 0 && transaction.accountId === accountId && transaction.type === candidate.type && transaction.amountMinor === candidate.amountMinor
     })
     if (ambiguous) return []
-    return [{ id: candidate.id, accountId, payeeId, categoryId, memo: choice?.memo ?? candidate.note ?? '' }]
+    return [{ id: candidate.id, accountId, payeeId, ...(!payeeId ? { payeeName } : {}), categoryId, memo: choice?.memo ?? candidate.note ?? '' }]
   })
+}
+
+type BankApprovalServices = Pick<typeof import('./database'), 'ensurePayees' | 'updateBankImportCandidateDetails' | 'approveBankImportCandidate'>
+
+export async function approveReadyBankRow(workspaceId: string, row: ReadyBankApproval, services: BankApprovalServices) {
+  let payeeId = row.payeeId
+  if (!payeeId) {
+    const name = row.payeeName?.normalize('NFKC').trim()
+    if (!name) throw new Error('A bank description is required to create a payee.')
+    const [payee] = await services.ensurePayees(workspaceId, [name])
+    if (!payee?.id) throw new Error('The payee could not be created.')
+    payeeId = payee.id
+  }
+  await services.updateBankImportCandidateDetails(workspaceId, row.id, payeeId, row.memo, row.accountId)
+  await services.approveBankImportCandidate(workspaceId, row.id, row.categoryId, false)
 }
 
 export type BankApprovalBatchResult = { approved: number; failed: number; skipped: number; errors: string[] }

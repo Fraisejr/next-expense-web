@@ -1,7 +1,7 @@
 import { useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import type { BankSyncSummary } from '../../../shared/bank-types.ts'
 import { getErrorMessage } from '../../app-utils'
-import { createBankApprovalBatch, eligibleBankApprovals, type BankApprovalBatchResult, type ReadyBankApproval } from '../../bank-batch-review'
+import { approveReadyBankRow, createBankApprovalBatch, eligibleBankApprovals, type BankApprovalBatchResult, type ReadyBankApproval } from '../../bank-batch-review'
 import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, clearTransactionCache, createPayeeMapping, ensurePayees, rejectBankImportCandidate, rematchPendingBankImportPayees, updateBankImportCandidateDetails, updateBankImportMode, updatePayeeDefaults, updatePayeeMapping, type LoadedWorkspace } from '../../database'
 import type { Account, AppData } from '../../types'
 
@@ -19,10 +19,9 @@ export function useBankReviewActions({ workspaceId, data, setWrittenData, setSyn
   const [bankBatchProgress, setBankBatchProgress] = useState<{ accountId: string; done: number; total: number } | null>(null)
   const [bankBatchResult, setBankBatchResult] = useState<{ accountId: string; result: BankApprovalBatchResult } | null>(null)
   const bankBatchRunningRef = useRef(false)
-  const bankBatchRef = useRef(createBankApprovalBatch(async (row: ReadyBankApproval) => {
-    await updateBankImportCandidateDetails(workspaceId, row.id, row.payeeId, row.memo, row.accountId)
-    await approveBankImportCandidate(workspaceId, row.id, row.categoryId, false)
-  }))
+  const bankBatchRef = useRef(createBankApprovalBatch((row) => approveReadyBankRow(workspaceId, row, {
+    ensurePayees, updateBankImportCandidateDetails, approveBankImportCandidate,
+  })))
   const [rematchingAccountId, setRematchingAccountId] = useState('')
   const [syncNotice, setSyncNotice] = useState<{ accountId: string; message: string } | null>(null)
   const latestBankData = useRef(data)
@@ -96,13 +95,15 @@ export function useBankReviewActions({ workspaceId, data, setWrittenData, setSyn
     if (bankBatchRunningRef.current || reviewingCandidateId || !rows.length || !hasFullHistory()) return
     bankBatchRunningRef.current = true
     try {
-      if (!window.confirm(`Approve ${rows.length} ready bank transaction${rows.length === 1 ? '' : 's'} for ${data.accounts.find((account) => account.id === accountId)?.name ?? 'this account'}?`)) return
+      const needsPayee = rows.filter((row) => !row.payeeId).length
+      const payeeNotice = needsPayee ? `\n\n${needsPayee} transaction${needsPayee === 1 ? '' : 's'} without a selected payee will use the bank description to create or reuse a payee.` : ''
+      if (!window.confirm(`Approve ${rows.length} ready bank transaction${rows.length === 1 ? '' : 's'} for ${data.accounts.find((account) => account.id === accountId)?.name ?? 'this account'}?${payeeNotice}`)) return
       setSyncError('')
       setBankBatchResult(null)
       setBankBatchProgress({ accountId, done: 0, total: rows.length })
       const result = await bankBatchRef.current.run(rows, (row) => {
         const current = latestBankData.current
-        return hasFullHistory() && eligibleBankApprovals({ accountId, candidates: current.bankImportCandidates, payees: current.payees, categories: current.categories, transactions: current.transactions, choices: { [row.id]: { payeeId: row.payeeId, categoryId: row.categoryId, memo: row.memo } } }).some((candidate) => candidate.id === row.id)
+        return hasFullHistory() && eligibleBankApprovals({ accountId, candidates: current.bankImportCandidates, payees: current.payees, categories: current.categories, transactions: current.transactions, choices: { [row.id]: { payeeId: row.payeeId, categoryId: row.categoryId, memo: row.memo } } }).some((candidate) => candidate.id === row.id && candidate.payeeName === row.payeeName)
       }, (done, total) => setBankBatchProgress({ accountId, done, total }))
       if (result) {
         setBankBatchResult({ accountId, result })

@@ -2122,7 +2122,7 @@ function BankImportReview({ account, accounts, transactions, candidates, candida
   const review = bankApprovalReview({ accountId: account.id, candidates, payees, categories, transactions, historyLoaded, choices: Object.fromEntries(candidates.map((candidate) => [candidate.id, { payeeId: payeeAssignments[candidate.id], categoryId: categoryAssignments[candidate.id], memo: memoAssignments[candidate.id], transfer: transferCandidateId === candidate.id || Boolean(createdPayeeIds[candidate.id] && createdPayeeIds[candidate.id] === payeeAssignments[candidate.id]) }])) })
   const readyRows = review.readyRows ?? []
   const excludedReasons = review.excluded ? [
-    review.excluded.missingPayee && `${review.excluded.missingPayee} missing payee`,
+    review.excluded.missingPayee && `${review.excluded.missingPayee} invalid payee or missing bank description`,
     review.excluded.missingCategory && `${review.excluded.missingCategory} missing category`,
     review.excluded.ambiguous && `${review.excluded.ambiguous} duplicate or transfer ambiguity`,
   ].filter(Boolean).join(' · ') : ''
