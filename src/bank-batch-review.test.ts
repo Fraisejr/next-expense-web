@@ -17,11 +17,31 @@ test('bank account with candidates checks history before showing a ready count, 
   assert.deepEqual(bankApprovalReview({ ...pending, historyLoaded: true }).readyRows?.map(row => row.id), ['one'])
 })
 
-test('only explicitly selected, posted, unambiguous rows are eligible', () => {
+test('unposted pending candidate with an existing payee and category is ready after history loads', () => {
+  const pending = { ...options, candidates: [{ ...candidate, posted: false }] }
+  assert.equal(bankApprovalReview({ ...pending, historyLoaded: false }).readyRows, null)
+  assert.deepEqual(bankApprovalReview({ ...pending, historyLoaded: true }), {
+    readyRows: [{ id: 'one', accountId: 'account', payeeId: 'payee', categoryId: 'category', memo: 'original' }],
+    excluded: { missingPayee: 0, missingCategory: 0, ambiguous: 0 },
+  })
+})
+
+test('unposted pending candidate uses edited local payee, category, and memo', () => {
+  const pending = { ...options, candidates: [{ ...candidate, posted: false, payeeId: undefined, categoryId: undefined }],
+    payees: [{ id: 'payee' }, { id: 'edited' }], categories: [{ id: 'category', hidden: false }, { id: 'edited-category', hidden: false }],
+    choices: { one: { payeeId: 'edited', categoryId: 'edited-category', memo: 'edited memo' } } }
+  assert.deepEqual(bankApprovalReview({ ...pending, historyLoaded: true }).readyRows, [
+    { id: 'one', accountId: 'account', payeeId: 'edited', categoryId: 'edited-category', memo: 'edited memo' },
+  ])
+})
+
+test('only explicitly selected, unambiguous rows on this account are eligible', () => {
   assert.deepEqual(eligibleBankApprovals(options).map(row => row.id), ['one'])
-  for (const change of [{ posted: false }, { payeeId: undefined }, { categoryId: undefined }, { accountId: 'other' }]) {
+  for (const change of [{ payeeId: undefined }, { categoryId: undefined }, { accountId: 'other' }]) {
     assert.equal(eligibleBankApprovals({ ...options, candidates: [{ ...candidate, ...change }] }).length, 0)
   }
+  assert.deepEqual(bankApprovalReview({ ...options, candidates: [{ ...candidate, posted: false, payeeId: undefined }], historyLoaded: true }).excluded,
+    { missingPayee: 1, missingCategory: 0, ambiguous: 0 })
   assert.equal(eligibleBankApprovals({ ...options, categories: [{ id: 'category', hidden: true }] }).length, 0)
   assert.equal(eligibleBankApprovals({ ...options, payees: [] }).length, 0)
   assert.equal(eligibleBankApprovals({ ...options, choices: { one: { transfer: true } } }).length, 0)

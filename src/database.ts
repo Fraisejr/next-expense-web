@@ -827,13 +827,13 @@ export async function rejectBankImportCandidate(workspaceId: string, candidateId
   if (error) throw error
 }
 
-export async function updateBankImportCandidateDetails(workspaceId: string, candidateId: string, payeeId: string | null, memo: string, postedAccountId?: string) {
+export async function updateBankImportCandidateDetails(workspaceId: string, candidateId: string, payeeId: string | null, memo: string, accountId?: string) {
   let query = neon.from('bank_import_candidates')
     .update({ payee_id: payeeId, memo: memo.normalize('NFKC').trim() || null })
     .eq('workspace_id', workspaceId)
     .eq('id', candidateId)
     .eq('status', 'pending')
-  if (postedAccountId) query = query.eq('account_id', postedAccountId).eq('posted', true)
+  if (accountId) query = query.eq('account_id', accountId)
   const { data, error } = await query.select('id')
   if (error) throw error
   if (!data?.length) throw new Error('The bank transaction awaiting review could not be updated.')

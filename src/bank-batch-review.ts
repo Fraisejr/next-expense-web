@@ -13,12 +13,11 @@ export function bankApprovalReview(options: ReviewOptions & { historyLoaded: boo
   if (!options.historyLoaded) return { readyRows: null, excluded: null }
   const readyRows = eligibleBankApprovals(options)
   const readyIds = new Set(readyRows.map(row => row.id))
-  const excluded = { unposted: 0, missingPayee: 0, missingCategory: 0, ambiguous: 0 }
+  const excluded = { missingPayee: 0, missingCategory: 0, ambiguous: 0 }
   for (const candidate of options.candidates) {
     if (readyIds.has(candidate.id)) continue
     const choice = options.choices[candidate.id]
-    if (!candidate.posted) excluded.unposted++
-    else if (!options.payees.some(payee => payee.id === (choice?.payeeId ?? candidate.payeeId))) excluded.missingPayee++
+    if (!options.payees.some(payee => payee.id === (choice?.payeeId ?? candidate.payeeId))) excluded.missingPayee++
     else if (!options.categories.some(category => category.id === (choice?.categoryId ?? candidate.categoryId) && !category.hidden)) excluded.missingCategory++
     else excluded.ambiguous++
   }
@@ -37,7 +36,7 @@ export function eligibleBankApprovals({ accountId, candidates, payees, categorie
     const choice = choices[candidate.id]
     const payeeId = choice?.payeeId ?? candidate.payeeId ?? ''
     const categoryId = choice?.categoryId ?? candidate.categoryId ?? ''
-    if (candidate.accountId !== accountId || !candidate.posted || choice?.transfer || !payees.some(payee => payee.id === payeeId) || !categories.some(category => category.id === categoryId && !category.hidden)) return []
+    if (candidate.accountId !== accountId || choice?.transfer || !payees.some(payee => payee.id === payeeId) || !categories.some(category => category.id === categoryId && !category.hidden)) return []
     if (candidates.some(other => other.id !== candidate.id && other.accountId === accountId && other.date === candidate.date && other.currency === candidate.currency && other.type === candidate.type && other.amountMinor === candidate.amountMinor)) return []
     const ambiguous = transactions.some(transaction => {
       if (transaction.id === candidate.transactionId || transaction.currency !== candidate.currency) return false

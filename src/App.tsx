@@ -3932,7 +3932,6 @@ function BankImportReview({ account, accounts, transactions, candidates, categor
   const review = bankApprovalReview({ accountId: account.id, candidates, payees, categories, transactions, historyLoaded, choices: Object.fromEntries(candidates.map((candidate) => [candidate.id, { payeeId: payeeAssignments[candidate.id], categoryId: categoryAssignments[candidate.id], memo: memoAssignments[candidate.id], transfer: transferCandidateId === candidate.id || Boolean(createdPayeeIds[candidate.id] && createdPayeeIds[candidate.id] === payeeAssignments[candidate.id]) }])) })
   const readyRows = review.readyRows ?? []
   const excludedReasons = review.excluded ? [
-    review.excluded.unposted && `${review.excluded.unposted} unposted`,
     review.excluded.missingPayee && `${review.excluded.missingPayee} missing payee`,
     review.excluded.missingCategory && `${review.excluded.missingCategory} missing category`,
     review.excluded.ambiguous && `${review.excluded.ambiguous} duplicate or transfer ambiguity`,
@@ -3950,7 +3949,7 @@ function BankImportReview({ account, accounts, transactions, candidates, categor
     {candidates.length > 0 && <div className="bank-review-queue">
       <div className="bank-review-summary"><strong>{candidates.length} awaiting review</strong><span>Net effect if approved: {formatMoney(pendingNet, account.currency)}</span><div className="bank-review-summary-actions"><button type="button" className="primary-button" disabled={!readyRows.length || !historyLoaded || historyLoading || rematchingPayees || Boolean(reviewingCandidateId) || batchRunning} onClick={() => void onApproveReady(account.id, readyRows)}><Check size={14} />{batchRunning ? `Approving ${bankBatchProgress?.done ?? 0}/${bankBatchProgress?.total ?? 0}…` : historyLoaded ? `Approve all ready (${readyRows.length})` : 'Checking ready items…'}</button><button type="button" className="secondary-button" disabled={rematchingPayees || Boolean(reviewingCandidateId) || batchRunning} onClick={onRematchPayees}><RefreshCw className={rematchingPayees ? 'spin-icon' : ''} size={14} />{rematchingPayees ? 'Checking…' : 'Recheck payees'}</button></div></div>
       {!historyLoaded && <p className="bank-batch-message" role="status">{historyLoading ? 'Loading transaction history to check for duplicates and transfers…' : <>History check incomplete. <button type="button" className="secondary-button" onClick={() => void onRequestHistory()}>Retry history check</button></>}</p>}
-      {historyLoaded && excludedReasons && <p className="bank-batch-message">Not ready: {excludedReasons}. Choices here apply immediately; no separate save is needed.</p>}
+      {historyLoaded && excludedReasons && <p className="bank-batch-message">Not ready: {excludedReasons}.</p>}
       <fieldset className="bank-review-rows" disabled={batchRunning}>
       {candidates.map((candidate) => {
         const payeeId = payeeAssignments[candidate.id] ?? candidate.payeeId ?? ''
