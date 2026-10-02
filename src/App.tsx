@@ -4,7 +4,8 @@ import { TimesheetPage } from './features/timesheet/TimesheetPage'
 import { SettingsPage } from './features/settings/SettingsPage'
 import { ReportsPage, type ReportView } from './features/reports/ReportsPage'
 import { accountBalanceSheetGroup, balanceAdjustmentReasonLabels, balanceSheetGroups, expenseReportGroups, incomeReportGroups, isExpenseReportGroup, isIncomeReportGroup, isTaxReportGroup, taxReportGroups } from './finance-groups'
-import { loadRevenueRecognitionEntries, createTimeCode, updateTimeCode, createTimesheetClient, updateTimesheetClient, saveTimesheetClientRate, saveTimesheetClientForecast, saveTimeCodeOrder } from './features/timesheet/api'
+import * as timesheetApi from './features/timesheet/api'
+import { createTimesheetActions } from './features/timesheet/actions'
 import { formatEarnedTimesheetPeriod } from './features/timesheet/period'
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
@@ -23,7 +24,7 @@ import { convertMinor } from './currency'
 import { calculateRevenueForecast } from './revenue'
 import { createBankApprovalBatch, eligibleBankApprovals, bankApprovalReview, shouldAutoLoadBankHistory, type ReadyBankApproval, type BankApprovalBatchResult } from './bank-batch-review'
 import { bankQueueView, type BankQueueStatus } from './bank-queue-state'
-import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, TimeCode, TimeEntry, TimesheetClient, TimesheetClientForecast, TimesheetClientRate, Transaction, YearlyFinancialPlan } from './types'
+import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, TimeEntry, Transaction, YearlyFinancialPlan } from './types'
 
 type Page = 'overview' | 'transactions' | 'payees' | 'reports' | 'accounts' | 'timesheet' | 'settings'
 type Modal = 'transaction' | 'account' | 'edit-account' | 'balance-adjustment' | 'category' | 'edit-category' | 'category-groups' | 'monthly-plan' | 'bank' | null
@@ -614,63 +615,9 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
     setWrittenData((current) => ({ ...current, fxRates: current.fxRates.filter((rate) => rate.id !== rateId) }))
   }
 
-  async function addTimeCode(name: string, clientId: string) {
-    if (!clientId) throw new Error('Choose a client for this time code.')
-    const code: TimeCode = { id: uid(), name: name.normalize('NFKC').trim(), sortOrder: data.timeCodes.length, clientId }
-    await createTimeCode(workspace.workspaceId, code)
-    setWrittenData((current) => ({ ...current, timeCodes: [...current.timeCodes, code] }))
-  }
-
-  async function changeTimeCode(code: TimeCode) {
-    await updateTimeCode(workspace.workspaceId, code)
-    setWrittenData((current) => ({ ...current, timeCodes: current.timeCodes.map((item) => item.id === code.id ? code : item) }))
-  }
-
-  async function addTimesheetClient(name: string, currency: string, hourlyRateMinor: number) {
-    const year = Number(todayInParis().slice(0, 4))
-    const client: TimesheetClient = { id: uid(), name: name.normalize('NFKC').trim(), currency: currency.toUpperCase(), sortOrder: data.timesheetClients.length, active: true }
-    const rate: TimesheetClientRate = { clientId: client.id, effectiveFrom: `${year}-01-01`, hourlyRateMinor }
-    await createTimesheetClient(workspace.workspaceId, client, rate)
-    setWrittenData((current) => ({
-      ...current,
-      timesheetClients: [...current.timesheetClients, client],
-      timesheetClientRates: [...current.timesheetClientRates, rate],
-    }))
-  }
-
-  async function changeTimesheetClient(client: TimesheetClient) {
-    await updateTimesheetClient(workspace.workspaceId, client)
-    setWrittenData((current) => ({ ...current, timesheetClients: current.timesheetClients.map((item) => item.id === client.id ? client : item) }))
-  }
-
-  async function changeTimesheetClientRate(rate: TimesheetClientRate) {
-    await saveTimesheetClientRate(workspace.workspaceId, rate)
-    setWrittenData((current) => ({
-      ...current,
-      timesheetClientRates: [...current.timesheetClientRates.filter((item) => item.clientId !== rate.clientId || item.effectiveFrom !== rate.effectiveFrom), rate],
-    }))
-  }
-
-  async function changeTimesheetClientForecast(forecast: TimesheetClientForecast) {
-    await saveTimesheetClientForecast(workspace.workspaceId, forecast)
-    setWrittenData((current) => ({
-      ...current,
-      timesheetClientForecasts: [...current.timesheetClientForecasts.filter((item) => item.clientId !== forecast.clientId || item.year !== forecast.year), forecast],
-    }))
-  }
-
-  async function reorderTimeCodes(timeCodeIds: string[]) {
-    const requestedIds = new Set(timeCodeIds)
-    const reordered = [
-      ...timeCodeIds.flatMap((id) => {
-        const code = data.timeCodes.find((item) => item.id === id)
-        return code ? [code] : []
-      }),
-      ...data.timeCodes.filter((code) => !requestedIds.has(code.id)),
-    ].map((code, sortOrder) => ({ ...code, sortOrder }))
-    await saveTimeCodeOrder(workspace.workspaceId, reordered.map((code) => code.id))
-    setWrittenData((current) => ({ ...current, timeCodes: reordered }))
-  }
+  const { addTimeCode, changeTimeCode, addTimesheetClient, changeTimesheetClient, changeTimesheetClientRate, changeTimesheetClientForecast, reorderTimeCodes } = createTimesheetActions(
+    workspace.workspaceId, data, setWrittenData, { ...timesheetApi, uid, todayInParis },
+  )
 
   function selectMonth(month: string) {
     const selected = fromMonthKey(month)
@@ -2141,7 +2088,7 @@ function YearlySpendingPlan({ workspaceId, data, defaultCurrency, historyLoading
     let cancelled = false
     setRevenueLoading(true)
     setRevenueError('')
-    loadRevenueRecognitionEntries(workspaceId, currentYear)
+    timesheetApi.loadRevenueRecognitionEntries(workspaceId, currentYear)
       .then((entries) => { if (!cancelled) setYearTimeEntries(entries) })
       .catch((cause) => { if (!cancelled) setRevenueError(getErrorMessage(cause, 'Could not load the revenue forecast.')) })
       .finally(() => { if (!cancelled) setRevenueLoading(false) })
