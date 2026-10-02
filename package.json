@@ -16,7 +16,8 @@
     "test:bank-policy": "node --experimental-strip-types scripts/test-bank-import-policy.mjs",
     "test:revenue": "node --experimental-strip-types scripts/test-revenue-forecast.mjs",
     "test:client-hours": "node --experimental-strip-types scripts/test-client-hours-report.mjs",
-    "test:workspace-cache": "node --experimental-strip-types scripts/test-workspace-cache.mjs"
+    "test:workspace-cache": "node --experimental-strip-types scripts/test-workspace-cache.mjs",
+    "test:workspace-first-load": "node scripts/test-workspace-first-load.mjs"
   },
   "dependencies": {
     "@neondatabase/neon-js": "^0.7.0-beta",

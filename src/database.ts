@@ -2,6 +2,7 @@ import { bankData, cleanedMappingName, normalizedMappingName, normalizedPayeeNam
 export { cleanedMappingName, normalizedMappingName, normalizedPayeeName, prefixMappingMatches } from '../shared/bank-data.ts'
 import { neon } from './neon'
 import { retryAfterExpiredSession } from './auth-bootstrap'
+import { assessWorkspaceSnapshot } from './workspace-cache'
 import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankSyncDiagnostic, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, TimeCode, TimeComment, TimeEntry, TimesheetClient, TimesheetClientForecast, TimesheetClientRate, Transaction, YearlyFinancialPlan } from './types'
 
@@ -190,6 +191,9 @@ export type LoadedWorkspace = {
   defaultCurrency: string
   loadedMonthKey: string
   snapshotRevision: number | null
+  candidateQueueByAccount?: Record<string, 'pending' | 'empty' | 'unknown'>
+  snapshotCountsAuthoritative?: boolean
+  bankConnectionCount?: number
   data: AppData
 }
 
@@ -259,15 +263,15 @@ export async function restoreWorkspaceBackup(workspaceId: string, backup: Worksp
   return data as { restoredAt?: string; counts?: Record<string, number> } | null
 }
 
-export async function loadWorkspace(month?: string): Promise<LoadedWorkspace> {
+export async function loadWorkspace(month?: string, previous?: LoadedWorkspace): Promise<LoadedWorkspace> {
   const now = new Date()
   const selectedMonth = month && /^\d{4}-\d{2}$/.test(month)
     ? month
     : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-  return retryAfterExpiredSession(() => loadWorkspaceWithRetries(3, selectedMonth), neon.auth)
+  return retryAfterExpiredSession(() => loadWorkspaceWithRetries(3, selectedMonth, previous), neon.auth)
 }
 
-async function loadWorkspaceWithRetries(retriesRemaining: number, month: string): Promise<LoadedWorkspace> {
+async function loadWorkspaceWithRetries(retriesRemaining: number, month: string, previous?: LoadedWorkspace): Promise<LoadedWorkspace> {
   const { data: memberships, error: membershipError } = await neon
     .from('workspace_members')
     .select('workspace_id')
@@ -307,6 +311,46 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
   if (balanceResult.error) throw balanceResult.error
   if (candidateRows.error) throw candidateRows.error
 
+  // Recheck any connected account absent from the queue once, including when
+  // another account has pending rows. A second RLS-filtered zero is usable for
+  // display, but is not proof that the queue can be cached as authoritative.
+  let checkedCandidateRows = candidateRows
+  const connectedIds = accountRows.filter((account) => account.provider_account_id).map((account) => String(account.id))
+  if (connectedIds.some((id) => !((candidateRows.data ?? []) as Row[]).some((row) => row.account_id === id))) {
+    const recheck = await neon.from('bank_import_candidates')
+      .select('id,account_id,transaction_id,transaction_date,amount_minor,currency,transaction_type,payee_name,payee_id,category_id,memo,bank_memo,posted,status')
+      .eq('workspace_id', workspaceId).eq('status', 'pending').order('transaction_date', { ascending: false })
+    if (recheck.error) throw recheck.error
+    if ((recheck.data?.length ?? 0) > (candidateRows.data?.length ?? 0)) checkedCandidateRows = recheck
+  }
+  let pendingCandidateCount: number | null = null
+  if (!checkedCandidateRows.data?.length) {
+    const countResult = await neon.from('bank_import_candidates')
+      .select('id', { count: 'exact', head: true })
+      .eq('workspace_id', workspaceId).eq('status', 'pending')
+    if (countResult.error) throw countResult.error
+    pendingCandidateCount = countResult.count
+  }
+  let missingAuxiliaryRows = false
+  let snapshotCountsAuthoritative = true
+  for (const [table, rows] of [
+    ['accounts', accountRows],
+    ['bank_connections', connectionRows],
+    ['time_codes', timeCodeRows],
+  ] as const) {
+    const countResult = await neon.from(table).select('id', { count: 'exact', head: true }).eq('workspace_id', workspaceId)
+    if (countResult.error) throw countResult.error
+    if (countResult.count === null) snapshotCountsAuthoritative = false
+    else if (countResult.count !== rows.length) missingAuxiliaryRows = true
+    if (rows.length === 0 && (table === 'accounts' || accountRows.length > 0)) snapshotCountsAuthoritative = false
+  }
+  for (const [table, rows] of [['payees', payeeRows], ['categories', categoryRows]] as const) {
+    const countResult = await neon.from(table).select('id', { count: 'exact', head: true }).eq('workspace_id', workspaceId)
+    if (countResult.error) throw countResult.error
+    if (countResult.count === null) snapshotCountsAuthoritative = false
+    else if (countResult.count !== rows.length) missingAuxiliaryRows = true
+  }
+
   const workspace = (workspaceResult.data?.[0] as unknown as Row | undefined)
   const balanceRows = (balanceResult.data ?? []) as unknown as Row[]
   const incompleteBalanceSnapshot = balanceRows.length !== accountRows.length
@@ -317,7 +361,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
     if (retriesRemaining > 0) {
       const attempt = 4 - retriesRemaining
       await new Promise((resolve) => setTimeout(resolve, 200 * (2 ** (attempt - 1))))
-      return loadWorkspaceWithRetries(retriesRemaining - 1, month)
+      return loadWorkspaceWithRetries(retriesRemaining - 1, month, previous)
     }
     if (!workspace) throw new Error('The linked workspace could not be read.')
     throw new Error('The account balances could not be read completely.')
@@ -457,7 +501,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
     clientId: (row.client_id as string | null) ?? undefined,
     hiddenFromMonth: (row.hidden_from_month as string | null)?.slice(0, 7) || undefined,
   }))
-  const bankImportCandidates: BankImportCandidate[] = ((candidateRows.data ?? []) as unknown as Row[])
+  const bankImportCandidates: BankImportCandidate[] = ((checkedCandidateRows.data ?? []) as unknown as Row[])
     .filter((row) => row.status === 'pending')
     .map((row) => ({
       id: String(row.id),
@@ -509,12 +553,26 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
       : []
   })
 
-  return {
+  const candidateQueueByAccount: NonNullable<LoadedWorkspace['candidateQueueByAccount']> = {}
+  let missingAccountCandidates = false
+  for (const account of accounts.filter((item) => item.providerAccountId)) {
+    const visibleCount = bankImportCandidates.filter((candidate) => candidate.accountId === account.id).length
+    const countResult = await neon.from('bank_import_candidates').select('id', { count: 'exact', head: true })
+      .eq('workspace_id', workspaceId).eq('status', 'pending').eq('account_id', account.id)
+    if (countResult.error) throw countResult.error
+    candidateQueueByAccount[account.id] = visibleCount > 0 ? 'pending' : countResult.count === 0 ? 'empty' : 'unknown'
+    if (countResult.count === null) snapshotCountsAuthoritative = false
+    else if (countResult.count !== visibleCount) missingAccountCandidates = true
+  }
+  const loaded: LoadedWorkspace = {
     workspaceId,
     workspaceName: workspace.name as string,
     defaultCurrency: workspace.default_currency as string,
     loadedMonthKey: month,
     snapshotRevision: revisionResult.error || revisionResult.data === null ? null : Number(revisionResult.data),
+    candidateQueueByAccount,
+    snapshotCountsAuthoritative,
+    bankConnectionCount: connectionRows.length,
     data: {
       accounts,
       categoryGroups,
@@ -534,6 +592,18 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string)
       settings: { estimatedCompanyTaxRateBps: number(workspace.estimated_company_tax_rate_bps) },
     },
   }
+  const assessment = assessWorkspaceSnapshot(loaded, previous)
+  if (!assessment.trusted || missingAuxiliaryRows || missingAccountCandidates || (pendingCandidateCount !== null && pendingCandidateCount > bankImportCandidates.length)) {
+    if (retriesRemaining > 0) {
+      const session = await neon.auth.getSession()
+      if (session.error) throw session.error
+      if (!session.data) throw new Error('Your session could not be verified. Retry loading your workspace.')
+      await new Promise((resolve) => setTimeout(resolve, 200 * (2 ** (3 - retriesRemaining))))
+      return loadWorkspaceWithRetries(retriesRemaining - 1, month, previous)
+    }
+    throw new Error(assessment.reason ?? 'Workspace rows could not be read completely. Retry loading your workspace.')
+  }
+  return loaded
 }
 
 export async function loadTimeEntries(workspaceId: string, month: string): Promise<TimeEntry[]> {
