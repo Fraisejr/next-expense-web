@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "test:auth-bundle": "node scripts/test-neon-auth-zod-import.mjs",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "import:ios": "node scripts/import-ios.mjs",

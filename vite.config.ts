@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite'
 import { readFileSync } from 'node:fs'
 import react from '@vitejs/plugin-react'
+import { neonAuthZodImport } from './scripts/neon-auth-zod-import.mjs'
 import { goCardlessDevApi } from './server/gocardless-dev.ts'
 
 export default defineConfig(({ mode }) => {
@@ -9,7 +10,7 @@ export default defineConfig(({ mode }) => {
     // Local archive imports contain personal financial data. Only these public
     // authentication assets belong in a production bundle.
     build: { copyPublicDir: false },
-    plugins: [react(), goCardlessDevApi(env.GOCARDLESS_SECRET_ID, env.GOCARDLESS_SECRET_KEY, env.VITE_NEON_DATA_API_URL), {
+    plugins: [neonAuthZodImport(), react(), goCardlessDevApi(env.GOCARDLESS_SECRET_ID, env.GOCARDLESS_SECRET_KEY, env.VITE_NEON_DATA_API_URL), {
       name: 'public-auth-assets',
       generateBundle() {
         for (const name of ['callback.html', 'return.mjs', 'style.css']) {

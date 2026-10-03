@@ -211,6 +211,17 @@ The private validation report is written under `data/private/`, which is
 ignored by Git. Legacy split components are deliberately excluded, as are
 orphaned records that refer to entities already deleted in the iOS store.
 
+## Authentication bundle optimization
+
+The production Vite build uses `scripts/neon-auth-zod-import.mjs` to replace
+the reviewed Neon Auth 0.5.0-beta adapter's default Zod import with named
+imports. It keeps the same Zod implementation and response validation while
+allowing unused validators and translations to be removed from the bundle.
+No installed dependency files are modified. The adapter source hash is checked;
+an SDK update fails the build until this workaround is reviewed or removed.
+Run `npm run test:auth-bundle` to check the guard and validation parity.
+Remove the Vite plugin when the SDK provides equivalent named imports upstream.
+
 ## Legacy tab-separated iOS imports
 
 The importer accepts the tab-separated transaction and budget exports produced by the Next Expense iOS app:
