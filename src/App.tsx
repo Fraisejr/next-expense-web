@@ -23,7 +23,7 @@ import { neon } from './neon'
 import { todayInParis } from '../shared/bank-data.ts'
 import { convertMinor } from './currency'
 import { calculateRevenueForecast } from './revenue'
-import { bankApprovalReview, type ReadyBankApproval, type BankApprovalBatchResult } from './bank-batch-review'
+import { bankApprovalReview, bankReviewChoices, type ReadyBankApproval, type BankApprovalBatchResult } from './bank-batch-review'
 import { bankQueueView, type BankQueueStatus } from './bank-queue-state'
 import { useExpenseWorkspaceData } from './use-expense-workspace-data'
 import { useWorkspaceSession } from './use-workspace-session'
@@ -2089,7 +2089,7 @@ function BankImportReview({ historyError, account, accounts, transactions, candi
   const [transferCandidateId, setTransferCandidateId] = useState('')
   const [transferAccountAssignments, setTransferAccountAssignments] = useState<Record<string, string>>({})
   const batchRunning = Boolean(bankBatchProgress)
-  const review = bankApprovalReview({ accountId: account.id, candidates, payees, categories, transactions, historyLoaded, choices: Object.fromEntries(candidates.map((candidate) => [candidate.id, { payeeId: payeeAssignments[candidate.id], categoryId: categoryAssignments[candidate.id], memo: memoAssignments[candidate.id], transfer: transferCandidateId === candidate.id || Boolean(createdPayeeIds[candidate.id] && createdPayeeIds[candidate.id] === payeeAssignments[candidate.id]) }])) })
+  const review = bankApprovalReview({ accountId: account.id, candidates, payees, categories, transactions, historyLoaded, choices: bankReviewChoices(candidates, mappings, { payeeAssignments, categoryAssignments, memoAssignments, createdPayeeIds, rememberChoices, mappingChoices, transferCandidateId }) })
   const readyRows = review.readyRows ?? []
   const excludedReasons = review.excluded ? [
     review.excluded.missingPayee && `${review.excluded.missingPayee} invalid payee or missing bank description`,

@@ -83,7 +83,7 @@ export function useBankReviewActions({ workspaceId, data, setWrittenData, setSyn
       setBankBatchProgress({ accountId, done: 0, total: rows.length })
       const confirmed: BankApprovalResult[] = []
       const batch = createBankApprovalBatch(async (row) => {
-        confirmed.push(await approveBankReviewItem(workspaceId, row.accountId, row.id, row.categoryId, { payeeId: row.payeeId, memo: row.memo }))
+        confirmed.push(await approveBankReviewItem(workspaceId, row.accountId, row.id, row.categoryId, { payeeId: row.payeeId, memo: row.memo, rememberCategory: row.rememberCategory, rememberMapping: row.rememberMapping, setPayeeDefaults: row.setPayeeDefaults }))
       })
       const result = await batch.run(rows, (row) => {
         const current = latestBankData.current

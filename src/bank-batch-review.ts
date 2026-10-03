@@ -1,7 +1,28 @@
-import type { BankImportCandidate, Category, Payee, Transaction } from './types'
+import type { BankImportCandidate, Category, Payee, PayeeMapping, Transaction } from './types'
 
-export type BankApprovalChoice = { payeeId?: string; categoryId?: string; memo?: string; transfer?: boolean }
-export type ReadyBankApproval = { id: string; accountId: string; payeeId: string; payeeName?: string; categoryId: string; memo: string }
+type BankApprovalPreferences = { rememberCategory?: boolean; rememberMapping?: boolean; setPayeeDefaults?: boolean }
+export type BankApprovalChoice = BankApprovalPreferences & { payeeId?: string; categoryId?: string; memo?: string; transfer?: boolean }
+export type ReadyBankApproval = BankApprovalPreferences & { id: string; accountId: string; payeeId: string; payeeName?: string; categoryId: string; memo: string }
+
+export function bankReviewChoices(candidates: BankImportCandidate[], mappings: PayeeMapping[], selections: {
+  payeeAssignments: Record<string, string>; categoryAssignments: Record<string, string>; memoAssignments: Record<string, string>
+  createdPayeeIds: Record<string, string>; rememberChoices: Record<string, boolean>; mappingChoices: Record<string, boolean>; transferCandidateId: string
+}): Record<string, BankApprovalChoice> {
+  return Object.fromEntries(candidates.map((candidate) => {
+    const payeeId = selections.payeeAssignments[candidate.id] ?? candidate.payeeId ?? ''
+    const changed = Object.prototype.hasOwnProperty.call(selections.payeeAssignments, candidate.id) && payeeId !== (candidate.payeeId ?? '')
+    const name = candidate.payee.normalize('NFKC').trim().toLocaleLowerCase('en')
+    const mapped = mappings.some((mapping) => mapping.payeeId === payeeId && mapping.sourceName.normalize('NFKC').trim().toLocaleLowerCase('en') === name)
+    return [candidate.id, {
+      payeeId, categoryId: selections.categoryAssignments[candidate.id] ?? candidate.categoryId ?? '',
+      memo: selections.memoAssignments[candidate.id] ?? candidate.note ?? '',
+      transfer: selections.transferCandidateId === candidate.id,
+      rememberCategory: selections.rememberChoices[candidate.id] ?? Boolean(payeeId),
+      rememberMapping: Boolean(payeeId && changed && !mapped && (selections.mappingChoices[candidate.id] ?? true)),
+      setPayeeDefaults: !payeeId || selections.createdPayeeIds[candidate.id] === payeeId,
+    }]
+  }))
+}
 type ReviewTransaction = Pick<Transaction, 'id' | 'accountId' | 'type' | 'currency' | 'amountMinor' | 'date'> & { toAccountId?: string; destinationAmountMinor?: number }
 type ReviewOptions = Parameters<typeof eligibleBankApprovals>[0]
 
@@ -50,7 +71,11 @@ export function eligibleBankApprovals({ accountId, candidates, payees, categorie
       return days === 0 && transaction.accountId === accountId && transaction.type === candidate.type && transaction.amountMinor === candidate.amountMinor
     })
     if (ambiguous) return []
-    return [{ id: candidate.id, accountId, payeeId, ...(!payeeId ? { payeeName } : {}), categoryId, memo: choice?.memo ?? candidate.note ?? '' }]
+    return [{ id: candidate.id, accountId, payeeId, ...(!payeeId ? { payeeName } : {}), categoryId, memo: choice?.memo ?? candidate.note ?? '',
+      ...(choice?.rememberCategory !== undefined ? { rememberCategory: choice.rememberCategory } : {}),
+      ...(choice?.rememberMapping !== undefined ? { rememberMapping: choice.rememberMapping } : {}),
+      ...(choice?.setPayeeDefaults !== undefined ? { setPayeeDefaults: choice.setPayeeDefaults } : {}),
+    }]
   })
 }
 

@@ -1,9 +1,26 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { eligibleBankApprovals, createBankApprovalBatch, shouldAutoLoadBankHistory, bankApprovalReview, approveReadyBankRow } from './bank-batch-review.ts'
+import { eligibleBankApprovals, createBankApprovalBatch, shouldAutoLoadBankHistory, bankApprovalReview, approveReadyBankRow, bankReviewChoices } from './bank-batch-review.ts'
 
 const candidate = { id: 'one', accountId: 'account', date: '2026-09-24', amountMinor: 1200, currency: 'EUR', type: 'expense' as const, payee: 'Shop', payeeId: 'payee', categoryId: 'category', note: 'original', posted: true }
 const options = { accountId: 'account', candidates: [candidate], payees: [{ id: 'payee' }], categories: [{ id: 'category', hidden: false }], transactions: [], choices: {} }
+
+test('payees created in the review picker remain eligible and carry checked defaults/mapping choices', () => {
+  const candidates = [{ ...candidate, payeeId: undefined, categoryId: undefined }, { ...candidate, id: 'two', amountMinor: 500, payeeId: undefined, categoryId: undefined }]
+  const selections = { payeeAssignments: { one: 'new-one', two: 'new-two' }, categoryAssignments: { one: 'category', two: 'category' },
+    memoAssignments: {}, createdPayeeIds: { one: 'new-one', two: 'new-two' }, rememberChoices: {}, mappingChoices: {}, transferCandidateId: '' }
+  const choices = bankReviewChoices(candidates, [], selections)
+  assert.equal(choices.one.transfer, false)
+  const review = bankApprovalReview({ ...options, candidates, choices, payees: [{ id: 'new-one' }, { id: 'new-two' }], historyLoaded: true })
+  assert.equal(review.readyRows?.length, 2)
+  assert.deepEqual(review.excluded, { missingPayee: 0, missingCategory: 0, ambiguous: 0 })
+  for (const row of review.readyRows!) assert.deepEqual([row.rememberCategory, row.rememberMapping, row.setPayeeDefaults], [true, true, true])
+  const unchecked = bankReviewChoices(candidates, [], { ...selections, rememberChoices: { one: false }, mappingChoices: { one: false }, transferCandidateId: 'two' })
+  assert.equal(unchecked.one.rememberCategory, false)
+  assert.equal(unchecked.one.rememberMapping, false)
+  assert.equal(unchecked.two.transfer, true)
+  assert.equal(eligibleBankApprovals({ ...options, candidates, choices: unchecked, payees: [{ id: 'new-one' }, { id: 'new-two' }] }).length, 1)
+})
 
 test('bank account with candidates checks history before showing a ready count, then uses local choices', () => {
   const choices = { one: { payeeId: 'payee', categoryId: 'category' } }
