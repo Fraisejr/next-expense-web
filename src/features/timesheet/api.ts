@@ -1,55 +1,58 @@
 import { neon } from '../../neon'
+import { isExpiredJwtError } from '../../auth-bootstrap'
 import type { TimeCode, TimeComment, TimeEntry, TimesheetClient, TimesheetClientForecast, TimesheetClientRate } from '../../types'
 
 type Row = Record<string, unknown>
 const number = (value: unknown) => Number(value ?? 0)
 
-export async function loadTimeEntries(workspaceId: string, month: string): Promise<TimeEntry[]> {
-  const startDate = `${month}-01`
-  const nextMonth = new Date(`${startDate}T12:00:00Z`)
+// Verify membership in the same request that reads the hours and comments.
+// Missing user context must never look like an empty timesheet.
+async function readTimesheet(workspaceId: string, startDate: string, endDate: string, commentMonth: string | null = null) {
+  for (let attempt = 0; ; attempt++) {
+    const { data, error } = await neon.rpc('read_timesheet', {
+      p_workspace_id: workspaceId,
+      p_start_date: startDate,
+      p_end_date: endDate,
+      p_comment_month: commentMonth,
+    }).abortSignal(AbortSignal.timeout(30_000))
+    if (error) {
+      const authFailure = error.code === '42501' && error.message.includes('access to this workspace')
+        || isExpiredJwtError(error)
+      if (!authFailure || attempt >= 2) throw error
+      const refreshed = await neon.auth.getSession()
+      if (refreshed.error) throw refreshed.error
+      if (!refreshed.data) throw new Error('Your session could not be verified. Retry loading your timesheet.')
+      await new Promise(resolve => setTimeout(resolve, 150 * (attempt + 1)))
+      continue
+    }
+    const result = data as unknown as { workspaceId?: string; entries?: Row[]; comments?: Row[] } | null
+    if (result?.workspaceId !== workspaceId || !Array.isArray(result.entries) || !Array.isArray(result.comments)) {
+      throw new Error('The timesheet response could not be verified. Retry loading your timesheet.')
+    }
+    return {
+      entries: result.entries.map(row => ({ codeId: String(row.time_code_id), date: String(row.work_date), hours: number(row.hours) })),
+      comments: result.comments.map(row => ({ codeId: String(row.time_code_id), month: String(row.month_start).slice(0, 7), comment: String(row.comment) })),
+    }
+  }
+}
+
+export async function loadTimesheetMonth(workspaceId: string, month: string): Promise<{ entries: TimeEntry[]; comments: TimeComment[] }> {
+  const startDate = month + '-01'
+  const nextMonth = new Date(startDate + 'T12:00:00Z')
   nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1)
-  const { data, error } = await neon.from('time_entries')
-    .select('time_code_id,work_date,hours')
-    .eq('workspace_id', workspaceId)
-    .gte('work_date', startDate)
-    .lt('work_date', nextMonth.toISOString().slice(0, 10))
-    .order('work_date', { ascending: true })
-  if (error) throw error
-  return ((data ?? []) as unknown as Row[]).map((row) => ({
-    codeId: String(row.time_code_id),
-    date: String(row.work_date),
-    hours: number(row.hours),
-  }))
+  return readTimesheet(workspaceId, startDate, nextMonth.toISOString().slice(0, 10), startDate)
+}
+
+export async function loadTimeEntries(workspaceId: string, month: string): Promise<TimeEntry[]> {
+  return (await loadTimesheetMonth(workspaceId, month)).entries
 }
 
 export async function loadRevenueRecognitionEntries(workspaceId: string, year: number): Promise<TimeEntry[]> {
-  const startDate = `${year - 1}-12-01`
-  const endDate = `${year}-12-01`
-  const { data, error } = await neon.from('time_entries')
-    .select('time_code_id,work_date,hours')
-    .eq('workspace_id', workspaceId)
-    .gte('work_date', startDate)
-    .lt('work_date', endDate)
-    .order('work_date', { ascending: true })
-  if (error) throw error
-  return ((data ?? []) as unknown as Row[]).map((row) => ({
-    codeId: String(row.time_code_id),
-    date: String(row.work_date),
-    hours: number(row.hours),
-  }))
+  return (await readTimesheet(workspaceId, (year - 1) + '-12-01', year + '-12-01')).entries
 }
 
 export async function loadTimeComments(workspaceId: string, month: string): Promise<TimeComment[]> {
-  const { data, error } = await neon.from('time_code_month_comments')
-    .select('time_code_id,month_start,comment')
-    .eq('workspace_id', workspaceId)
-    .eq('month_start', `${month}-01`)
-  if (error) throw error
-  return ((data ?? []) as unknown as Row[]).map((row) => ({
-    codeId: String(row.time_code_id),
-    month: String(row.month_start).slice(0, 7),
-    comment: String(row.comment),
-  }))
+  return (await loadTimesheetMonth(workspaceId, month)).comments
 }
 
 export async function createTimeCode(workspaceId: string, code: TimeCode) {

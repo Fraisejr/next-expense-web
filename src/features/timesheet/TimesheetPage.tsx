@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { ArrowDown, ArrowUp, BriefcaseBusiness, CalendarDays, Check, ChevronDown, CircleAlert, Clock3, Eye, EyeOff, GripVertical, LoaderCircle, MessageSquareText, Minus, Plus } from 'lucide-react'
-import { loadRevenueRecognitionEntries, loadTimeComments, loadTimeEntries, saveTimeComment, saveTimeEntry } from './api'
+import { loadRevenueRecognitionEntries, loadTimesheetMonth, loadTimeEntries, saveTimeComment, saveTimeEntry } from './api'
 import { formatMoney, fromMonthKey, getErrorMessage, monthName, parseMoneyToMinor } from '../../app-utils'
 import { todayInParis } from '../../../shared/bank-data.ts'
 import { calculateRevenueForecast, type RevenueForecast } from '../../revenue'
@@ -35,6 +35,7 @@ export function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clie
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [loadedMonthKey, setLoadedMonthKey] = useState('')
+  const [monthAttempt, setMonthAttempt] = useState(0)
   const [selectedReportClientId, setSelectedReportClientId] = useState('')
   const [reportStatus, setReportStatus] = useState('')
   const [copyingReport, setCopyingReport] = useState(false)
@@ -72,8 +73,8 @@ export function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clie
     setError('')
     setLoadedMonthKey('')
     setReportStatus('')
-    Promise.all([loadTimeEntries(workspaceId, month), loadTimeComments(workspaceId, month)])
-      .then(([loadedEntries, loadedComments]) => {
+    loadTimesheetMonth(workspaceId, month)
+      .then(({ entries: loadedEntries, comments: loadedComments }) => {
         if (cancelled) return
         setEntries(loadedEntries)
         setLoadedMonthKey(`${workspaceId}:${month}`)
@@ -82,7 +83,7 @@ export function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clie
       .catch((cause) => { if (!cancelled) setError(getErrorMessage(cause, 'Could not load this timesheet.')) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [month, workspaceId])
+  }, [month, workspaceId, monthAttempt])
 
   useEffect(() => {
     let cancelled = false
@@ -117,7 +118,8 @@ export function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clie
   const totalForDate = (date: string) => entries.reduce((sum, entry) => sum + (entry.date === date ? entry.hours : 0), 0)
   const monthTotal = entries.reduce((sum, entry) => sum + entry.hours, 0)
   const selectedReportClient = clients.find((client) => client.id === selectedReportClientId)
-  const reportReady = !loading && loadedMonthKey === `${workspaceId}:${month}` && !error && pendingSaves === 0
+  const monthReady = !loading && loadedMonthKey === `${workspaceId}:${month}`
+  const reportReady = monthReady && !error && pendingSaves === 0
   const clientHoursReport = buildClientHoursReport(month, selectedReportClientId, codes, reportReady ? entries : [])
   const weeklyTotals = useMemo(() => {
     const totals = new Map<string, { weekNumber: number; weekYear: number; startDay: number; endDay: number; hours: number }>()
@@ -296,8 +298,8 @@ export function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clie
     {loadedYearKey === `${workspaceId}:${selectedYear}` ? <ClientRevenuePanel year={selectedYear} defaultCurrency={defaultCurrency} clients={clients} rates={rates} forecasts={forecasts} revenue={revenueForecast} onAddClient={onAddClient} onUpdateClient={onUpdateClient} onSaveRate={onSaveRate} onSaveForecast={onSaveForecast} /> : <section className="panel" role="status">{yearError ? <>{yearError} <button type="button" className="secondary-button" onClick={() => setYearAttempt((value) => value + 1)}>Retry yearly hours</button></> : 'Loading yearly hours…'}</section>}
 
     <section className="timesheet-summary">
-      <div><span className="eyebrow">Month total</span><strong>{formatHours(monthTotal)}</strong><small>across {visibleCodes.length} visible {visibleCodes.length === 1 ? 'item' : 'items'}</small></div>
-      <div className="timesheet-item-totals">{groupedCodes.map((group) => <div key={group.client?.id ?? 'unassigned'}><span>{group.client?.name ?? 'Unassigned'}</span><strong>{formatHours(group.codes.reduce((sum, code) => sum + totalForCode(code.id), 0))}</strong></div>)}</div>
+      <div><span className="eyebrow">Month total</span><strong>{monthReady ? formatHours(monthTotal) : loading ? 'Loading…' : 'Unavailable'}</strong><small>across {visibleCodes.length} visible {visibleCodes.length === 1 ? 'item' : 'items'}</small></div>
+      <div className="timesheet-item-totals">{monthReady && groupedCodes.map((group) => <div key={group.client?.id ?? 'unassigned'}><span>{group.client?.name ?? 'Unassigned'}</span><strong>{formatHours(group.codes.reduce((sum, code) => sum + totalForCode(code.id), 0))}</strong></div>)}</div>
     </section>
 
     <section className="panel client-hours-report" aria-label="Client hours table for email">
@@ -309,7 +311,7 @@ export function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clie
 
     <section className="timesheet-weekly-summary" aria-label="Weekly hour totals">
       <div className="timesheet-weekly-heading"><CalendarDays size={17} /><div><span className="eyebrow">Weekly totals</span><small>Monday–Sunday · selected month only</small></div></div>
-      <div className="timesheet-weekly-totals">{weeklyTotals.map((week) => <div key={`${week.weekYear}-${week.weekNumber}`}><span>Week {week.weekNumber}</span><small>{week.startDay === week.endDay ? week.startDay : `${week.startDay}–${week.endDay}`} {new Intl.DateTimeFormat('en', { month: 'short' }).format(monthDate)}</small><strong>{formatHours(week.hours)}</strong></div>)}</div>
+      <div className="timesheet-weekly-totals">{monthReady && weeklyTotals.map((week) => <div key={`${week.weekYear}-${week.weekNumber}`}><span>Week {week.weekNumber}</span><small>{week.startDay === week.endDay ? week.startDay : `${week.startDay}–${week.endDay}`} {new Intl.DateTimeFormat('en', { month: 'short' }).format(monthDate)}</small><strong>{formatHours(week.hours)}</strong></div>)}</div>
     </section>
 
     <section className="panel timesheet-panel">
@@ -326,7 +328,7 @@ export function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clie
         <div className="time-code-reorder-list">{displayedCodes.map((code, index) => <div key={code.id} className={draggedId === code.id ? 'dragging' : ''} draggable onDragStart={() => setDraggedId(code.id)} onDragEnd={() => setDraggedId('')} onDragOver={(event) => event.preventDefault()} onDrop={() => dropCode(code.id)}><GripVertical size={17} aria-hidden="true" /><strong>{code.name}</strong><button type="button" className="icon-button" disabled={index === 0 || savingOrder} onClick={() => moveCode(code.id, -1)} aria-label={`Move ${code.name} earlier`}><ArrowUp size={14} /></button><button type="button" className="icon-button" disabled={index === displayedCodes.length - 1 || savingOrder} onClick={() => moveCode(code.id, 1)} aria-label={`Move ${code.name} later`}><ArrowDown size={14} /></button></div>)}</div>
       </div>}
 
-      {loading ? <div className="timesheet-loading"><LoaderCircle size={18} />Loading hours…</div> : visibleCodes.length === 0 ? <div className="timesheet-empty"><Clock3 size={25} /><strong>No visible time codes</strong><span>Add your first code above to start reporting hours.</span></div> : <div className="timesheet-table-wrap" ref={tableWrapRef}>
+      {loading ? <div className="timesheet-loading"><LoaderCircle size={18} />Loading hours…</div> : !monthReady ? <div className="timesheet-empty" role="alert"><CircleAlert size={25} /><strong>Hours unavailable</strong><span>{error || 'The selected month could not be loaded.'}</span><button type="button" className="secondary-button" onClick={() => setMonthAttempt(value => value + 1)}>Retry loading hours</button></div> : visibleCodes.length === 0 ? <div className="timesheet-empty"><Clock3 size={25} /><strong>No visible time codes</strong><span>Add your first code above to start reporting hours.</span></div> : <div className="timesheet-table-wrap" ref={tableWrapRef}>
         <table className="timesheet-table">
           <thead><tr><th className="time-code-column">Item</th>{days.map((day) => <th key={day.date} ref={day.isToday ? todayColumnRef : undefined} className={`${day.weekend ? 'weekend ' : ''}${day.isToday ? 'today' : ''}`} aria-current={day.isToday ? 'date' : undefined}><span>{day.isToday ? 'Today' : day.label}</span><b>{day.day}</b></th>)}<th className="time-total-column">Total</th></tr></thead>
           <tbody>
@@ -336,13 +338,13 @@ export function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clie
         </table>
       </div>}
 
-      {!loading && displayedCodes.length > 0 && <section className="time-comments">
+      {monthReady && displayedCodes.length > 0 && <section className="time-comments">
         <div className="time-comments-heading"><MessageSquareText size={18} /><div><span className="eyebrow">Monthly comments</span><h3>What did you work on?</h3><p>These notes belong only to this item in {monthName.format(monthDate)}.</p></div></div>
         <div className="time-comment-list">{displayedCodes.map((code) => <TimeCommentField key={code.id} code={code} value={commentMap.get(code.id) ?? ''} onSave={(comment) => changeComment(code.id, comment)} />)}</div>
       </section>}
 
       {hiddenCodes.length > 0 && <div className="hidden-time-codes"><button type="button" onClick={() => setShowHidden((current) => !current)}><EyeOff size={15} />{hiddenCodes.length} hidden {hiddenCodes.length === 1 ? 'code' : 'codes'}<ChevronDown className={showHidden ? 'expanded' : ''} size={15} /></button>{showHidden && <div>{hiddenCodes.map((code) => <TimeCodeEditor key={code.id} code={code} month={month} hidden onSave={updateCode} />)}</div>}</div>}
-      {error && <p className="timesheet-error" role="alert">{error}</p>}
+      {error && monthReady && <p className="timesheet-error" role="alert">{error}</p>}
     </section>
   </div>
 }

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test:auth-bundle": "node scripts/test-neon-auth-zod-import.mjs",
+    "test:timesheet-load": "node scripts/test-timesheet-load.mjs",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "import:ios": "node scripts/import-ios.mjs",

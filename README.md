@@ -211,6 +211,16 @@ The private validation report is written under `data/private/`, which is
 ignored by Git. Legacy split components are deliberately excluded, as are
 orphaned records that refer to entities already deleted in the iOS store.
 
+## Reliable timesheet loading
+
+Timesheet reads require `073_verified_timesheet_reads.sql`. The guarded
+`read_timesheet` RPC verifies workspace membership before returning monthly
+hours and comments together (or the yearly revenue range). Session errors are
+retried twice; failed reads cannot display editable zeros. The page offers
+**Retry loading hours** without reloading the app. Run `npm run test:timesheet-load`
+for client recovery tests. `node --env-file=.env.local scripts/test-timesheet-read-db.mjs`
+checks the SQL with isolated fixtures and rolls back all changes.
+
 ## Authentication bundle optimization
 
 The production Vite build uses `scripts/neon-auth-zod-import.mjs` to replace
