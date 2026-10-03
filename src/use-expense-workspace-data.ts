@@ -6,6 +6,7 @@ import type { AppData, Transaction } from './types'
 import { refreshWasOvertaken, workspaceCacheVersion, writeWorkspaceCache } from './workspace-cache'
 import { dataFromWorkspaceRefresh } from './workspace-refresh-data'
 import { loadCurrentTransactionHistory } from './transaction-history-request'
+import { applyBankApproval, type BankApprovalResult } from './features/bank-review/approval-result'
 
 export function useExpenseWorkspaceData({ workspace, userId, selectedMonthKey, refreshStartedMutation, onLocalMutation, onRefreshApplied, onRefreshConflict }: {
   workspace: LoadedWorkspace
@@ -23,18 +24,19 @@ export function useExpenseWorkspaceData({ workspace, userId, selectedMonthKey, r
   const [historyLoading, setHistoryLoading] = useState(false)
   const historyLoadedRef = useRef(false)
   const historyRequest = useRef<Promise<void> | null>(null)
-  const monthCache = useRef(new Map<string, Transaction[]>())
+  const monthCache = useRef(new Map<string, Transaction[]>([[workspace.loadedMonthKey, workspace.data.transactions]]))
+  const [monthAttempt, setMonthAttempt] = useState(0)
   const localMutationCount = useRef(0)
   const snapshotGeneration = useRef(0)
   const appliedWorkspace = useRef(workspace)
+  const activeMonth = useRef(selectedMonthKey)
+  activeMonth.current = selectedMonthKey
   const setWrittenData: typeof setData = (value) => {
     localMutationCount.current++
     snapshotGeneration.current++
     onLocalMutation()
     setData(value)
   }
-
-  if (!monthCache.current.size) monthCache.current.set(workspace.loadedMonthKey, workspace.data.transactions)
 
   const ensureFullHistory = useCallback(async (revalidate = false) => {
     if (historyLoadedRef.current && !revalidate) return
@@ -118,7 +120,7 @@ export function useExpenseWorkspaceData({ workspace, userId, selectedMonthKey, r
       void fetchMonth(adjacent.toISOString().slice(0, 7), false).catch(() => undefined)
     }
     return () => { cancelled = true }
-  }, [historyLoaded, selectedMonthKey, workspace.workspaceId])
+  }, [historyLoaded, selectedMonthKey, workspace.workspaceId, monthAttempt])
 
   async function reloadWorkspaceSnapshot() {
     const refreshed = await loadWorkspace(selectedMonthKey, { ...workspace, data })
@@ -133,8 +135,22 @@ export function useExpenseWorkspaceData({ workspace, userId, selectedMonthKey, r
   }
 
   function invalidateTransactionMonth(date: string) { monthCache.current.delete(date.slice(0, 7)) }
+  function applyConfirmedBankApprovals(results: BankApprovalResult[]) {
+    for (const result of results) invalidateTransactionMonth(result.transaction.date)
+    for (const [month, transactions] of monthCache.current) {
+      if (results.some((result) => transactions.some((transaction) => transaction.id === result.transaction.id))) monthCache.current.delete(month)
+    }
+    setCandidateQueueByAccount((current) => {
+      const next = { ...current }
+      for (const result of results) next[result.accountId] = result.pendingCount ? 'pending' : 'empty'
+      return next
+    })
+    setWrittenData((current) => results.reduce((next, result) => applyBankApproval(next, result, activeMonth.current, historyLoadedRef.current), current))
+    // A month request overtaken by this write needs another chance after navigation.
+    if (activeMonth.current !== selectedMonthKey) setMonthAttempt((value) => value + 1)
+  }
   function hasFullHistory() { return historyLoadedRef.current }
 
   return { data, setWrittenData, candidateQueueByAccount, syncError, setSyncError, historyLoaded, historyLoading,
-    ensureFullHistory, reloadWorkspaceSnapshot, invalidateTransactionMonth, hasFullHistory, historyGeneration: snapshotGeneration.current }
+    ensureFullHistory, reloadWorkspaceSnapshot, invalidateTransactionMonth, applyConfirmedBankApprovals, hasFullHistory, historyGeneration: snapshotGeneration.current }
 }

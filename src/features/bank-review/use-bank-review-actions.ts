@@ -1,17 +1,19 @@
+import type { BankApprovalResult } from './approval-result'
 import { useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import type { BankSyncSummary } from '../../../shared/bank-types.ts'
 import { getErrorMessage } from '../../app-utils'
-import { approveReadyBankRow, createBankApprovalBatch, eligibleBankApprovals, type BankApprovalBatchResult, type ReadyBankApproval } from '../../bank-batch-review'
-import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, clearTransactionCache, createPayeeMapping, ensurePayees, rejectBankImportCandidate, rematchPendingBankImportPayees, updateBankImportCandidateDetails, updateBankImportMode, updatePayeeDefaults, updatePayeeMapping, type LoadedWorkspace } from '../../database'
+import { createBankApprovalBatch, eligibleBankApprovals, type BankApprovalBatchResult, type ReadyBankApproval } from '../../bank-batch-review'
+import { approveBankReviewItem, approveBankImportCandidateAsTransfer, clearTransactionCache, rejectBankImportCandidate, rematchPendingBankImportPayees, updateBankImportCandidateDetails, updateBankImportMode, type LoadedWorkspace } from '../../database'
 import type { Account, AppData } from '../../types'
 import type { useBankReviewHistory } from './use-bank-review-history'
 
-export function useBankReviewActions({ workspaceId, data, setWrittenData, setSyncError, reloadWorkspaceSnapshot, reviewHistory, apiJson }: {
+export function useBankReviewActions({ workspaceId, data, setWrittenData, setSyncError, reloadWorkspaceSnapshot, applyConfirmedBankApprovals, reviewHistory, apiJson }: {
   workspaceId: string
   data: AppData
   setWrittenData: Dispatch<SetStateAction<AppData>>
   setSyncError: Dispatch<SetStateAction<string>>
   reloadWorkspaceSnapshot: () => Promise<LoadedWorkspace>
+  applyConfirmedBankApprovals: (results: BankApprovalResult[]) => void
   reviewHistory: ReturnType<typeof useBankReviewHistory>
   apiJson: <T>(url: string, init?: RequestInit) => Promise<T>
 }) {
@@ -20,9 +22,7 @@ export function useBankReviewActions({ workspaceId, data, setWrittenData, setSyn
   const [bankBatchProgress, setBankBatchProgress] = useState<{ accountId: string; done: number; total: number } | null>(null)
   const [bankBatchResult, setBankBatchResult] = useState<{ accountId: string; result: BankApprovalBatchResult } | null>(null)
   const bankBatchRunningRef = useRef(false)
-  const bankBatchRef = useRef(createBankApprovalBatch((row) => approveReadyBankRow(workspaceId, row, {
-    ensurePayees, updateBankImportCandidateDetails, approveBankImportCandidate,
-  })))
+  const singleReviewRunningRef = useRef(false)
   const [rematchingAccountId, setRematchingAccountId] = useState('')
   const [syncNotice, setSyncNotice] = useState<{ accountId: string; message: string } | null>(null)
   const latestBankData = useRef(data)
@@ -41,46 +41,24 @@ export function useBankReviewActions({ workspaceId, data, setWrittenData, setSyn
     }
   }
 
-  async function decideBankImportCandidate(candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory = false, payeeId?: string | null, rememberMapping = false, bankDescription = '', createdPayee = false, defaultAccountId = '', memo = '') {
-    if (bankBatchRunningRef.current || reviewingCandidateId) return
+  async function decideBankImportCandidate(candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory = false, payeeId?: string | null, rememberMapping = false, _bankDescription = '', createdPayee = false, defaultAccountId = '', memo = '') {
+    // The database uses the stored bank description, rather than trusting a client copy.
+    void _bankDescription
+    if (bankBatchRunningRef.current || singleReviewRunningRef.current) return
+    singleReviewRunningRef.current = true
     try {
       setSyncError('')
       setReviewingCandidateId(candidateId)
       if (decision === 'approve') {
         if (!categoryId) throw new Error('Choose a category before approving this transaction.')
-        let resolvedPayeeId = payeeId ?? null
-        let payeeCreatedDuringApproval = false
-        if (!resolvedPayeeId) {
-          const [createdPayee] = await ensurePayees(workspaceId, [bankDescription])
-          resolvedPayeeId = createdPayee.id
-          payeeCreatedDuringApproval = true
-        }
-        await updateBankImportCandidateDetails(workspaceId, candidateId, resolvedPayeeId, memo)
-        await approveBankImportCandidate(workspaceId, candidateId, categoryId, rememberCategory)
-        if ((createdPayee || payeeCreatedDuringApproval) && defaultAccountId) {
-          try {
-            await updatePayeeDefaults(workspaceId, resolvedPayeeId, categoryId, defaultAccountId)
-          } catch (defaultsError) {
-            const refreshed = await reloadWorkspaceSnapshot()
-            setWrittenData(refreshed.data)
-            setSyncError(`Transaction approved, but the new payee defaults could not be saved: ${getErrorMessage(defaultsError, 'Unknown error')}`)
-            return
-          }
-        }
-        if (rememberMapping && resolvedPayeeId && bankDescription.trim()) {
-          try {
-            const normalizedDescription = bankDescription.normalize('NFKC').trim().toLocaleLowerCase('en')
-            const existingMapping = data.payeeMappings.find((mapping) => mapping.sourceName.normalize('NFKC').trim().toLocaleLowerCase('en') === normalizedDescription)
-            if (existingMapping && existingMapping.payeeId !== resolvedPayeeId) await updatePayeeMapping(workspaceId, existingMapping.id, bankDescription, resolvedPayeeId, existingMapping.matchType)
-            else if (!existingMapping) await createPayeeMapping(workspaceId, bankDescription, resolvedPayeeId)
-            if (defaultAccountId) await rematchPendingBankImportPayees(workspaceId, defaultAccountId)
-          } catch (mappingError) {
-            const refreshed = await reloadWorkspaceSnapshot()
-            setWrittenData(refreshed.data)
-            setSyncError(`Transaction approved, but its bank description could not be saved as a mapping: ${getErrorMessage(mappingError, 'Unknown error')}`)
-            return
-          }
-        }
+        const candidate = latestBankData.current.bankImportCandidates.find((item) => item.id === candidateId)
+        if (!candidate) throw new Error('This bank transaction is no longer awaiting review.')
+        const result = await approveBankReviewItem(workspaceId, candidate.accountId, candidateId, categoryId, {
+          payeeId, memo, rememberCategory, rememberMapping,
+          setPayeeDefaults: Boolean((createdPayee || !payeeId) && defaultAccountId),
+        })
+        applyConfirmedBankApprovals([result])
+        return
       }
       else await rejectBankImportCandidate(workspaceId, candidateId)
       const refreshed = await reloadWorkspaceSnapshot()
@@ -88,12 +66,13 @@ export function useBankReviewActions({ workspaceId, data, setWrittenData, setSyn
     } catch (error) {
       setSyncError(getErrorMessage(error, `Could not ${decision} the bank transaction.`))
     } finally {
+      singleReviewRunningRef.current = false
       setReviewingCandidateId('')
     }
   }
 
   async function approveReadyBankCandidates(accountId: string, rows: ReadyBankApproval[]) {
-    if (bankBatchRunningRef.current || reviewingCandidateId || !rows.length || !reviewHistory.hasHistory()) return
+    if (bankBatchRunningRef.current || singleReviewRunningRef.current || !rows.length || !reviewHistory.hasHistory()) return
     bankBatchRunningRef.current = true
     try {
       const needsPayee = rows.filter((row) => !row.payeeId).length
@@ -102,17 +81,20 @@ export function useBankReviewActions({ workspaceId, data, setWrittenData, setSyn
       setSyncError('')
       setBankBatchResult(null)
       setBankBatchProgress({ accountId, done: 0, total: rows.length })
-      const result = await bankBatchRef.current.run(rows, (row) => {
+      const confirmed: BankApprovalResult[] = []
+      const batch = createBankApprovalBatch(async (row) => {
+        confirmed.push(await approveBankReviewItem(workspaceId, row.accountId, row.id, row.categoryId, { payeeId: row.payeeId, memo: row.memo }))
+      })
+      const result = await batch.run(rows, (row) => {
         const current = latestBankData.current
         return reviewHistory.hasHistory() && eligibleBankApprovals({ accountId, candidates: current.bankImportCandidates, payees: current.payees, categories: current.categories, transactions: reviewHistory.transactions, choices: { [row.id]: { payeeId: row.payeeId, categoryId: row.categoryId, memo: row.memo } } }).some((candidate) => candidate.id === row.id && candidate.payeeName === row.payeeName)
       }, (done, total) => setBankBatchProgress({ accountId, done, total }))
       if (result) {
         setBankBatchResult({ accountId, result })
-        const refreshed = await reloadWorkspaceSnapshot()
-        setWrittenData(refreshed.data)
+        if (confirmed.length) applyConfirmedBankApprovals(confirmed)
       }
     } catch (error) {
-      setSyncError(getErrorMessage(error, 'Could not refresh bank transactions after batch approval.'))
+      setSyncError(getErrorMessage(error, 'Could not approve bank transactions.'))
     } finally {
       setBankBatchProgress(null)
       bankBatchRunningRef.current = false
@@ -135,7 +117,8 @@ export function useBankReviewActions({ workspaceId, data, setWrittenData, setSyn
   }
 
   async function postBankImportAsTransfer(candidateId: string, counterpartyAccountId: string, memo: string) {
-    if (bankBatchRunningRef.current || reviewingCandidateId) return
+    if (bankBatchRunningRef.current || singleReviewRunningRef.current) return
+    singleReviewRunningRef.current = true
     try {
       setSyncError('')
       setReviewingCandidateId(candidateId)
@@ -149,6 +132,7 @@ export function useBankReviewActions({ workspaceId, data, setWrittenData, setSyn
       setSyncError(getErrorMessage(error, 'Could not post the bank transaction as a transfer.'))
       throw error
     } finally {
+      singleReviewRunningRef.current = false
       setReviewingCandidateId('')
     }
   }

@@ -22,7 +22,8 @@
     "test:workspace-refresh": "node --experimental-transform-types --test src/workspace-refresh-data.test.ts",
     "test:transaction-history": "node --experimental-transform-types --test src/transaction-history-request.test.ts",
     "test:workspace-first-load": "node scripts/test-workspace-first-load.mjs",
-    "test:history-cache": "node --experimental-transform-types --test src/revision-cache.test.ts src/indexed-cache.test.ts src/annual-spending.test.ts src/features/bank-review/history-range.test.ts src/features/timesheet/year-cache.test.ts && node scripts/test-history-range.mjs"
+    "test:history-cache": "node --experimental-transform-types --test src/revision-cache.test.ts src/indexed-cache.test.ts src/annual-spending.test.ts src/features/bank-review/history-range.test.ts src/features/timesheet/year-cache.test.ts && node scripts/test-history-range.mjs",
+    "test:bank-approval": "node --experimental-transform-types --test src/features/bank-review/approval-result.test.ts src/bank-batch-review.test.ts && node scripts/test-bank-approval-client.mjs"
   },
   "dependencies": {
     "@neondatabase/neon-js": "^0.7.0-beta",

@@ -6,6 +6,7 @@ import { retryAfterExpiredSession } from './auth-bootstrap'
 import { assessWorkspaceSnapshot } from './workspace-cache'
 import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
 import { loadRevisionCached } from './revision-cache'
+import type { BankApprovalResult } from './features/bank-review/approval-result'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankSyncDiagnostic, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, TimeCode, TimesheetClient, TimesheetClientForecast, TimesheetClientRate, Transaction, YearlyFinancialPlan } from './types'
 
 const { ensurePeriod, resolvePayees } = bankData(neon)
@@ -667,6 +668,27 @@ export async function approveBankImportCandidate(workspaceId: string, candidateI
   })
   if (error) throw error
   return String(data)
+}
+
+export async function approveBankReviewItem(workspaceId: string, accountId: string, candidateId: string, categoryId: string, options: {
+  payeeId?: string | null; memo?: string; rememberCategory?: boolean; setPayeeDefaults?: boolean; rememberMapping?: boolean
+}): Promise<BankApprovalResult> {
+  const { data, error } = await neon.rpc('approve_bank_review_item', {
+    p_workspace_id: workspaceId, p_account_id: accountId, p_candidate_id: candidateId, p_category_id: categoryId,
+    p_payee_id: options.payeeId || null, p_memo: options.memo ?? '', p_remember_category: options.rememberCategory ?? false,
+    p_set_payee_defaults: options.setPayeeDefaults ?? false, p_remember_mapping: options.rememberMapping ?? false,
+  })
+  if (error) throw error
+  const result = data as unknown as { candidateId: string; accountId: string; transaction: Row; payee: Row; mapping: Row | null; rematched: Row[]; balanceMinor: number; pendingCount: number }
+  if (result?.candidateId !== candidateId || result.accountId !== accountId || !result.transaction?.id || !result.payee?.id || result.balanceMinor == null || !Number.isSafeInteger(Number(result.balanceMinor)) || result.pendingCount == null || !Number.isSafeInteger(Number(result.pendingCount)) || Number(result.pendingCount) < 0 || !Array.isArray(result.rematched)) {
+    throw new Error('The approval response could not be verified. Retry safely to check the saved transaction.')
+  }
+  return {
+    candidateId, accountId, transaction: mapTransactionRows([result.transaction])[0], balanceMinor: Number(result.balanceMinor), pendingCount: Number(result.pendingCount),
+    payee: { id: String(result.payee.id), name: String(result.payee.name), defaultCategoryId: result.payee.default_category_id ? String(result.payee.default_category_id) : undefined, defaultAccountId: result.payee.default_account_id ? String(result.payee.default_account_id) : undefined },
+    mapping: result.mapping ? { id: String(result.mapping.id), sourceName: String(result.mapping.source_name), payeeId: String(result.mapping.payee_id), matchType: result.mapping.match_type as PayeeMapping['matchType'] } : null,
+    rematched: result.rematched.map((candidate) => ({ id: String(candidate.id), payeeId: String(candidate.payee_id), categoryId: candidate.category_id ? String(candidate.category_id) : undefined })),
+  }
 }
 
 export async function approveBankImportCandidateAsTransfer(workspaceId: string, candidateId: string, counterpartyAccountId: string) {

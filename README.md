@@ -57,6 +57,19 @@ cache before deploying the web client. Transaction history keeps its separate ca
 
 Run `npm run test:history-cache` for date-range, cache revision, yearly-total, storage-failure, and Timesheet cache checks.
 
+Bank approval uses `approve_bank_review_item` from migration
+`072_atomic_bank_review_approval.sql`. One atomic request saves the payee/memo,
+approves the transaction, applies requested payee defaults and mapping/rematches,
+and returns confirmed data for the screen. Single approvals and bulk approvals
+update the local ledger and balance without a full workspace reload. Candidate
+locking and idempotent retries protect against posting the same item twice.
+Existing iOS/older-client approval functions remain supported.
+
+Run `npm run test:bank-approval` for client approval checks. The database test
+`node --env-file=.env.local scripts/test-atomic-bank-approval.mjs` requires an
+owner `DATABASE_URL`, tests under the authenticated role, and rolls back all
+fixtures. Apply the migration before deploying this web client.
+
 The web app can run against Neon from localhost. Copy `.env.example` to
 `.env.local` and use the project's public Auth and Data API URLs. Google sign-in
 and email/password are both supported.

@@ -227,7 +227,7 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
   const selectedMonthKey = toMonthKey(viewedMonth)
   const reportView: ReportView = location.pathname === '/reports/net-worth' ? 'net-worth' : 'profit-loss'
 
-  const { data, setWrittenData, candidateQueueByAccount, syncError, setSyncError, historyLoaded, historyLoading, ensureFullHistory, reloadWorkspaceSnapshot, invalidateTransactionMonth, historyGeneration } = useExpenseWorkspaceData({
+  const { data, setWrittenData, candidateQueueByAccount, syncError, setSyncError, historyLoaded, historyLoading, ensureFullHistory, reloadWorkspaceSnapshot, invalidateTransactionMonth, applyConfirmedBankApprovals, historyGeneration } = useExpenseWorkspaceData({
     workspace, userId, selectedMonthKey, refreshStartedMutation, onLocalMutation, onRefreshApplied, onRefreshConflict,
   })
 
@@ -238,7 +238,7 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
     services: { ...payeeApi, uid, getErrorMessage },
   })
   const { syncingAccountId, reviewingCandidateId, bankBatchProgress, bankBatchResult, rematchingAccountId, syncNotice, changeBankImportMode, decideBankImportCandidate, approveReadyBankCandidates, rematchBankImportPayees, postBankImportAsTransfer, syncBank } = useBankReviewActions({
-    workspaceId: workspace.workspaceId, data, setWrittenData, setSyncError, reloadWorkspaceSnapshot, reviewHistory: bankHistory, apiJson,
+    workspaceId: workspace.workspaceId, data, setWrittenData, setSyncError, reloadWorkspaceSnapshot, applyConfirmedBankApprovals, reviewHistory: bankHistory, apiJson,
   })
   useEffect(() => {
     if (requestedMonth) return
