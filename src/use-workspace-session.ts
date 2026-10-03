@@ -1,3 +1,4 @@
+import { clearAnnualSummary } from './annual-summary-cache'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { todayInParis } from '../shared/bank-data.ts'
 import { getErrorMessage } from './app-utils'
@@ -66,7 +67,7 @@ export function useWorkspaceSession(userId: string) {
         if (!mounted.current || run !== refreshRun.current) return
         if (hasNoSession) {
           try {
-            await Promise.all([clearWorkspaceCache(userId), clearTransactionCache(cached.workspaceId)])
+            await Promise.all([clearWorkspaceCache(userId), clearAnnualSummary(userId), clearTransactionCache(cached.workspaceId)])
             await neon.auth.signOut()
             return
           } catch {
@@ -127,7 +128,7 @@ export function useWorkspaceSession(userId: string) {
   const signOut = useCallback(async (workspaceId: string) => {
     mounted.current = false
     refreshRun.current++
-    await Promise.all([clearWorkspaceCache(userId), clearTransactionCache(workspaceId)])
+    await Promise.all([clearWorkspaceCache(userId), clearAnnualSummary(userId), clearTransactionCache(workspaceId)])
     await neon.auth.signOut()
   }, [userId])
 

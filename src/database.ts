@@ -1,9 +1,11 @@
+import { accessIndexedCache } from './indexed-cache'
 import { bankData, cleanedMappingName, normalizedMappingName, normalizedPayeeName, recentSyncRuns, rematchPendingBankImportPayees as rematchPendingPayees } from '../shared/bank-data.ts'
 export { cleanedMappingName, normalizedMappingName, normalizedPayeeName, prefixMappingMatches } from '../shared/bank-data.ts'
 import { neon } from './neon'
 import { retryAfterExpiredSession } from './auth-bootstrap'
 import { assessWorkspaceSnapshot } from './workspace-cache'
 import { normalizeCategoryColor, normalizeCategoryIcon } from './categoryVisuals'
+import { loadRevisionCached } from './revision-cache'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BankSyncDiagnostic, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, TimeCode, TimesheetClient, TimesheetClientForecast, TimesheetClientRate, Transaction, YearlyFinancialPlan } from './types'
 
 const { ensurePeriod, resolvePayees } = bankData(neon)
@@ -98,91 +100,59 @@ export async function loadTransactionPage(workspaceId: string, query: Transactio
 }
 
 export async function loadAllTransactions(workspaceId: string, retriesRemaining = 1): Promise<Transaction[]> {
-  const firstPage = await loadTransactionPage(workspaceId, { limit: 1000 })
+  return loadTransactionRange(workspaceId, {}, retriesRemaining)
+}
+
+export async function loadTransactionRange(workspaceId: string, query: TransactionQuery, retriesRemaining = 1): Promise<Transaction[]> {
+  const firstPage = await loadTransactionPage(workspaceId, { ...query, limit: 1000, offset: 0 })
   if (firstPage.transactions.length >= firstPage.total) return firstPage.transactions
   const remainingOffsets = Array.from({ length: Math.ceil(firstPage.total / 1000) - 1 }, (_, index) => (index + 1) * 1000)
-  const remainingPages = await Promise.all(remainingOffsets.map((offset) => loadTransactionPage(workspaceId, { limit: 1000, offset })))
+  const remainingPages = await Promise.all(remainingOffsets.map((offset) => loadTransactionPage(workspaceId, { ...query, limit: 1000, offset })))
   const transactions = [firstPage, ...remainingPages].flatMap((page) => page.transactions)
   const uniqueTransactions = [...new Map(transactions.map((transaction) => [transaction.id, transaction])).values()]
   if (uniqueTransactions.length === firstPage.total) return uniqueTransactions
-  if (retriesRemaining > 0) return loadAllTransactions(workspaceId, retriesRemaining - 1)
+  if (retriesRemaining > 0) return loadTransactionRange(workspaceId, query, retriesRemaining - 1)
   throw new Error(`Transaction history was incomplete: received ${uniqueTransactions.length} of ${firstPage.total} transactions.`)
 }
 
 const transactionCacheDatabase = 'next-expense-cache'
 const transactionCacheStore = 'transaction-history'
-const transactionCacheMaxAgeMs = 60 * 60 * 1000
-// Version 4 adds the preserved bank memo to cached transaction rows.
-const transactionCacheVersion = 4
-
-function openTransactionCache(): Promise<IDBDatabase | null> {
-  if (typeof indexedDB === 'undefined') return Promise.resolve(null)
-  return new Promise((resolve) => {
-    const request = indexedDB.open(transactionCacheDatabase, 1)
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(transactionCacheStore)) request.result.createObjectStore(transactionCacheStore)
-    }
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => resolve(null)
-  })
-}
+// Version 5 only stores history fetched across a stable transaction revision.
+const transactionCacheVersion = 5
 
 type CachedTransactionHistory = { version: number; savedAt: number; revision: number; transactionCount: number; transactions: Transaction[] }
 
 async function readTransactionCache(workspaceId: string): Promise<CachedTransactionHistory | null> {
-  const database = await openTransactionCache()
-  if (!database) return null
-  return new Promise((resolve) => {
-    const request = database.transaction(transactionCacheStore, 'readonly').objectStore(transactionCacheStore).get(workspaceId)
-    request.onsuccess = () => {
-      const cached = request.result as Partial<CachedTransactionHistory> | undefined
-      resolve(cached?.version === transactionCacheVersion && cached.savedAt && typeof cached.revision === 'number' && cached.transactionCount === cached.transactions?.length && Date.now() - cached.savedAt < transactionCacheMaxAgeMs && Array.isArray(cached.transactions)
-        ? cached as CachedTransactionHistory
-        : null)
-      database.close()
-    }
-    request.onerror = () => { resolve(null); database.close() }
-  })
+  const cached = await accessIndexedCache<unknown>(transactionCacheDatabase, transactionCacheStore, 'readonly', (store) => store.get(workspaceId)) as Partial<CachedTransactionHistory> | null
+  return cached?.version === transactionCacheVersion && cached.savedAt && Number.isSafeInteger(cached.revision) && cached.transactionCount === cached.transactions?.length && Array.isArray(cached.transactions)
+    ? cached as CachedTransactionHistory : null
 }
 
 async function writeTransactionCache(workspaceId: string, revision: number, transactions: Transaction[]) {
-  const database = await openTransactionCache()
-  if (!database) return
-  await new Promise<void>((resolve) => {
-    const request = database.transaction(transactionCacheStore, 'readwrite').objectStore(transactionCacheStore).put({ version: transactionCacheVersion, savedAt: Date.now(), revision, transactionCount: transactions.length, transactions }, workspaceId)
-    request.onsuccess = () => resolve()
-    request.onerror = () => resolve()
-  })
-  database.close()
+  await accessIndexedCache(transactionCacheDatabase, transactionCacheStore, 'readwrite', (store) => store.put({ version: transactionCacheVersion, savedAt: Date.now(), revision, transactionCount: transactions.length, transactions }, workspaceId))
 }
 
-export async function loadCachedAllTransactions(workspaceId: string, currentTransactions: Transaction[] = [], revalidate = false) {
-  const [cached, revisionResult] = await Promise.all([
-    readTransactionCache(workspaceId),
-    neon.rpc('workspace_transaction_revision', { p_workspace_id: workspaceId }),
-  ])
-  if (revisionResult.error) throw revisionResult.error
-  const revision = number(revisionResult.data)
-  if (!revalidate && cached?.revision === revision) {
-    const currentMonths = new Set(currentTransactions.map((transaction) => transaction.date.slice(0, 7)))
-    return [...cached.transactions.filter((transaction) => !currentMonths.has(transaction.date.slice(0, 7))), ...currentTransactions]
-  }
-  const transactions = await loadAllTransactions(workspaceId)
-  const refreshedRevision = await neon.rpc('workspace_transaction_revision', { p_workspace_id: workspaceId })
-  if (refreshedRevision.error) throw refreshedRevision.error
-  void writeTransactionCache(workspaceId, number(refreshedRevision.data), transactions)
-  return transactions
+export async function transactionHistoryRevision(workspaceId: string) {
+  const result = await neon.rpc('workspace_transaction_revision', { p_workspace_id: workspaceId })
+  if (result.error) throw result.error
+  if (result.data === null || result.data === undefined || !Number.isSafeInteger(Number(result.data))) throw new Error('Could not verify transaction history. Please retry.')
+  return Number(result.data)
+}
+
+export async function loadCachedAllTransactions(workspaceId: string) {
+  return loadRevisionCached({
+    revision: () => transactionHistoryRevision(workspaceId),
+    read: async () => {
+      const cached = await readTransactionCache(workspaceId)
+      return cached ? { revision: cached.revision, value: cached.transactions } : null
+    },
+    load: () => loadAllTransactions(workspaceId),
+    write: async (cached) => { void writeTransactionCache(workspaceId, cached.revision, cached.value) },
+  })
 }
 
 export async function clearTransactionCache(workspaceId: string) {
-  const database = await openTransactionCache()
-  if (!database) return
-  await new Promise<void>((resolve) => {
-    const request = database.transaction(transactionCacheStore, 'readwrite').objectStore(transactionCacheStore).delete(workspaceId)
-    request.onsuccess = () => resolve()
-    request.onerror = () => resolve()
-  })
-  database.close()
+  await accessIndexedCache(transactionCacheDatabase, transactionCacheStore, 'readwrite', (store) => store.delete(workspaceId))
 }
 
 export type LoadedWorkspace = {

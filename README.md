@@ -46,6 +46,17 @@ database revision and refreshes changed data in the background. Apply migration
 `071_track_workspace_snapshot_revisions.sql` and refresh Neon's Data API schema
 cache before deploying the web client. Transaction history keeps its separate cache.
 
+### History loading and caches
+
+- Startup loads the selected month and prefetches adjacent months.
+- Bank review queries only the viewed account, including incoming transfers, between the oldest and newest review dates plus three days on either side. It does not load the entire ledger.
+- Full history is loaded for reports, payee history, transaction editing, planning suggestions, or an explicit All dates request. Its IndexedDB cache is reused while the database transaction revision is unchanged, without an hourly expiry. Downloads are checked against the revision again before caching.
+- Overview stores compact yearly spending, income, and tax totals separately. Cached totals appear immediately while the revision is checked. Currency, category grouping, exchange rates, and the Paris date also invalidate the summary. A missing or stale summary is rebuilt from validated full history; that history is downloaded only if its cache is missing or stale. Unavailable totals are not displayed as confirmed zero.
+- Timesheet keeps yearly revenue hours in memory while the page is mounted, reuses them across month changes, and updates them after successful saves. Leaving and reopening the page fetches fresh yearly hours. Monthly hours load independently of the yearly revenue query.
+- Browser storage is optional and bounded; failed history or summary requests show an error and retry action.
+
+Run `npm run test:history-cache` for date-range, cache revision, yearly-total, storage-failure, and Timesheet cache checks.
+
 The web app can run against Neon from localhost. Copy `.env.example` to
 `.env.local` and use the project's public Auth and Data API URLs. Google sign-in
 and email/password are both supported.

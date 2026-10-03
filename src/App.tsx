@@ -4,7 +4,8 @@ import { SettingsPage } from './features/settings/SettingsPage'
 import { ReportsPage, type ReportView } from './features/reports/ReportsPage'
 import { createPayeeActions } from './features/payees/actions'
 import { useBankReviewActions } from './features/bank-review/use-bank-review-actions'
-import { accountBalanceSheetGroup, balanceAdjustmentReasonLabels, balanceSheetGroups, expenseReportGroups, incomeReportGroups, isExpenseReportGroup, isIncomeReportGroup, isTaxReportGroup, taxReportGroups } from './finance-groups'
+import { useBankReviewHistory } from './features/bank-review/use-bank-review-history'
+import { accountBalanceSheetGroup, balanceAdjustmentReasonLabels, balanceSheetGroups, expenseReportGroups, incomeReportGroups, isExpenseReportGroup, isIncomeReportGroup, taxReportGroups } from './finance-groups'
 import * as timesheetApi from './features/timesheet/api'
 import { createTimesheetActions } from './features/timesheet/actions'
 import { formatEarnedTimesheetPeriod } from './features/timesheet/period'
@@ -22,10 +23,11 @@ import { neon } from './neon'
 import { todayInParis } from '../shared/bank-data.ts'
 import { convertMinor } from './currency'
 import { calculateRevenueForecast } from './revenue'
-import { bankApprovalReview, shouldAutoLoadBankHistory, type ReadyBankApproval, type BankApprovalBatchResult } from './bank-batch-review'
+import { bankApprovalReview, type ReadyBankApproval, type BankApprovalBatchResult } from './bank-batch-review'
 import { bankQueueView, type BankQueueStatus } from './bank-queue-state'
 import { useExpenseWorkspaceData } from './use-expense-workspace-data'
 import { useWorkspaceSession } from './use-workspace-session'
+import { useAnnualSpendingSummary } from './use-annual-spending-summary'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, TimeEntry, Transaction, YearlyFinancialPlan } from './types'
 
 type Page = 'overview' | 'transactions' | 'payees' | 'reports' | 'accounts' | 'timesheet' | 'settings'
@@ -204,7 +206,6 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
   const [bankTarget, setBankTarget] = useState<Account | null>(null)
   const [accountTarget, setAccountTarget] = useState<Account | null>(null)
   const [categoryTarget, setCategoryTarget] = useState<Transaction | null>(null)
-  const autoHistoryAttempt = useRef<string | null>(null)
   const autoQueueAttempt = useRef<string | null>(null)
   const accountMatch = matchPath('/accounts/:accountId', location.pathname)
   const categoryMatch = matchPath('/categories/:categoryId', location.pathname)
@@ -226,16 +227,18 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
   const selectedMonthKey = toMonthKey(viewedMonth)
   const reportView: ReportView = location.pathname === '/reports/net-worth' ? 'net-worth' : 'profit-loss'
 
-  const { data, setWrittenData, candidateQueueByAccount, syncError, setSyncError, historyLoaded, historyLoading, ensureFullHistory, reloadWorkspaceSnapshot, invalidateTransactionMonth, hasFullHistory } = useExpenseWorkspaceData({
+  const { data, setWrittenData, candidateQueueByAccount, syncError, setSyncError, historyLoaded, historyLoading, ensureFullHistory, reloadWorkspaceSnapshot, invalidateTransactionMonth, historyGeneration } = useExpenseWorkspaceData({
     workspace, userId, selectedMonthKey, refreshStartedMutation, onLocalMutation, onRefreshApplied, onRefreshConflict,
   })
+
+  const bankHistory = useBankReviewHistory(workspace.workspaceId, accountMatch?.params.accountId, data.bankImportCandidates, historyGeneration)
 
   const { mapUnmatchedPayee, createPayeeFromUnmatched, createPayeeForReview, changePayeeDefaults, changePayeeDefaultCategoryOnly, renamePayee, removeUnusedPayee, removeAllUnusedPayees, addPayeeMapping, changePayeeMapping, promotePayeeMapping, addPayeeAlternativeForReview, removePayeeMapping } = createPayeeActions({
     workspaceId: workspace.workspaceId, data, setWrittenData, setSyncError, reloadWorkspaceSnapshot,
     services: { ...payeeApi, uid, getErrorMessage },
   })
   const { syncingAccountId, reviewingCandidateId, bankBatchProgress, bankBatchResult, rematchingAccountId, syncNotice, changeBankImportMode, decideBankImportCandidate, approveReadyBankCandidates, rematchBankImportPayees, postBankImportAsTransfer, syncBank } = useBankReviewActions({
-    workspaceId: workspace.workspaceId, data, setWrittenData, setSyncError, reloadWorkspaceSnapshot, hasFullHistory, apiJson,
+    workspaceId: workspace.workspaceId, data, setWrittenData, setSyncError, reloadWorkspaceSnapshot, reviewHistory: bankHistory, apiJson,
   })
   useEffect(() => {
     if (requestedMonth) return
@@ -249,26 +252,8 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
   }, [location.pathname])
 
   useEffect(() => {
-    if (page === 'overview' || page === 'payees' || page === 'reports' || Boolean(payeeMatch || categoryTarget)) void ensureFullHistory()
+    if (page === 'payees' || page === 'reports' || Boolean(payeeMatch || categoryTarget)) void ensureFullHistory()
   }, [categoryTarget, ensureFullHistory, page, payeeMatch])
-
-  useEffect(() => {
-    const accountId = accountMatch?.params.accountId
-    const account = data.accounts.find((item) => item.id === accountId)
-    const candidateCount = data.bankImportCandidates.filter((candidate) => candidate.accountId === accountId).length
-    if (!accountId) {
-      autoHistoryAttempt.current = null
-      return
-    }
-    const key = `${workspace.workspaceId}:${accountId}`
-    if (historyLoaded) {
-      autoHistoryAttempt.current = null
-      return
-    }
-    if (!shouldAutoLoadBankHistory(Boolean(account?.providerAccountId), candidateCount, historyLoaded, autoHistoryAttempt.current === key)) return
-    autoHistoryAttempt.current = key
-    void ensureFullHistory()
-  }, [accountMatch?.params.accountId, data.accounts, data.bankImportCandidates, ensureFullHistory, historyLoaded, workspace.workspaceId])
 
   useEffect(() => {
     const accountId = accountMatch?.params.accountId
@@ -884,7 +869,7 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
         )}
         {page === 'overview' && !selectedCategory && (
           <div className="page-content narrow-page overview-page">
-            <YearlySpendingPlan workspaceId={workspace.workspaceId} data={data} defaultCurrency={workspace.defaultCurrency} historyLoading={historyLoading} onSavePlan={changeYearlyFinancialPlan} />
+            <YearlySpendingPlan userId={userId} dataGeneration={historyGeneration} workspaceId={workspace.workspaceId} data={data} defaultCurrency={workspace.defaultCurrency} onSavePlan={changeYearlyFinancialPlan} />
             <OverviewPage accounts={activeAccounts} defaultCurrency={workspace.defaultCurrency} totalBalance={totalBalance} convertBalance={convertCurrentBalance} personal={{ income: personalIncome, expenses: personalExpenses, tax: personalTaxesPaid, net: personalIncome - personalExpenses - personalTaxesPaid }} company={{ income: companyRevenue, expenses: companyExpenses, tax: companyTaxesPaid + estimatedCompanyTax, net: companyRevenue - companyExpenses - companyTaxesPaid - estimatedCompanyTax }} month={viewedMonth} onOpenNetWorth={() => goTo('/reports/net-worth')} onOpenProfitAndLoss={() => goTo('/reports')} />
             <BudgetsPage categories={data.categories} categoryGroups={data.categoryGroups} defaultCurrency={workspace.defaultCurrency} categorySpending={categorySpending} budgetForCategory={budgetForCategory} showHiddenActivityAlert={selectedMonthKey === toMonthKey(new Date())} onPlanMonth={() => { setModal('monthly-plan'); void ensureFullHistory() }} onAdd={() => setModal('category')} onManageGroups={() => setModal('category-groups')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onUnhideCategory={(id) => setCategoryHidden(id, false)} />
           </div>
@@ -902,7 +887,7 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
           <TimesheetPage workspaceId={workspace.workspaceId} month={selectedMonthKey} defaultCurrency={workspace.defaultCurrency} codes={data.timeCodes} clients={data.timesheetClients} rates={data.timesheetClientRates} forecasts={data.timesheetClientForecasts} fxRates={data.fxRates} onAddCode={addTimeCode} onUpdateCode={changeTimeCode} onReorderCodes={reorderTimeCodes} onAddClient={addTimesheetClient} onUpdateClient={changeTimesheetClient} onSaveRate={changeTimesheetClientRate} onSaveForecast={changeTimesheetClientForecast} />
         )}
         {selectedAccount && (
-          <AccountDetailPage account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} candidateQueueStatus={candidateQueueByAccount[selectedAccount.id]} checkingCandidates={refreshState === 'refreshing'} refreshFailed={refreshState === 'failed'} onRetryCandidates={onRetryRefresh} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onApproveReady={approveReadyBankCandidates} bankBatchProgress={bankBatchProgress} bankBatchResult={bankBatchResult} onPostTransfer={postBankImportAsTransfer} onRematchPayees={() => rematchBankImportPayees(selectedAccount.id)} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onAddAlternativeName={(sourceName, payeeId) => addPayeeAlternativeForReview(sourceName, payeeId, selectedAccount.id)} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingAccountId === selectedAccount.id} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
+          <AccountDetailPage reviewHistory={bankHistory} account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} candidateQueueStatus={candidateQueueByAccount[selectedAccount.id]} checkingCandidates={refreshState === 'refreshing'} refreshFailed={refreshState === 'failed'} onRetryCandidates={onRetryRefresh} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onApproveReady={approveReadyBankCandidates} bankBatchProgress={bankBatchProgress} bankBatchResult={bankBatchResult} onPostTransfer={postBankImportAsTransfer} onRematchPayees={() => rematchBankImportPayees(selectedAccount.id)} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onAddAlternativeName={(sourceName, payeeId) => addPayeeAlternativeForReview(sourceName, payeeId, selectedAccount.id)} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingAccountId === selectedAccount.id} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
         )}
         {selectedCategory && (
           <CategoryDetailPage category={selectedCategory} spent={categorySpending(selectedCategory.id)} budget={budgetForCategory(selectedCategory.id)} monthlyBudgetOverride={data.budgets.find((budget) => budget.month === selectedMonthKey && budget.categoryId === selectedCategory.id)?.amountMinor} monthKey={selectedMonthKey} defaultCurrency={workspace.defaultCurrency} fxRates={data.fxRates} transactions={transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} allTransactions={data.transactions.filter((transaction) => transaction.categoryId === selectedCategory.id)} categories={data.categories} categoryGroups={data.categoryGroups} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onUpdateBudget={updateBudget} onUpdateDefaultBudget={updateDefaultBudget} onRemoveBudgetOverride={removeBudgetOverride} onEdit={() => setModal('edit-category')} onDelete={removeUnusedCategory} onBack={() => goTo('/')} onSelectCategory={(id) => goTo(`/categories/${id}`)} onEditTransaction={setCategoryTarget} />
@@ -1463,29 +1448,7 @@ function overviewBalanceGroup(account: Account): OverviewBalanceGroup {
 
 type OverviewPnl = { income: number; expenses: number; tax: number; net: number }
 
-type AnnualSpendingMetric = { year: number; income: number; expenses: number; taxes: number }
-
-function annualSpendingMetrics(data: AppData, scope: SpendingGoalScope, defaultCurrency: string, throughDate: string) {
-  const categories = new Map(data.categories.map((category) => [category.id, category]))
-  const metrics = new Map<number, AnnualSpendingMetric>()
-  for (const transaction of data.transactions) {
-    if (transaction.date > throughDate || (transaction.type !== 'income' && transaction.type !== 'expense')) continue
-    const group = categories.get(transaction.categoryId ?? '')?.reportGroup
-    const categoryScope: AccountScope | null = group?.startsWith('personal_') ? 'Personal' : group?.startsWith('company_') ? 'Company' : null
-    if (!group || !categoryScope || (scope !== 'Combined' && scope !== categoryScope)) continue
-    const year = Number(transaction.date.slice(0, 4))
-    const metric = metrics.get(year) ?? { year, income: 0, expenses: 0, taxes: 0 }
-    const amount = convertMinor(transaction.amountMinor, transaction.currency, defaultCurrency, transaction.date, data.fxRates) ?? 0
-    const direction = transaction.type === 'income' ? 1 : -1
-    if (isIncomeReportGroup(group)) metric.income += direction * amount
-    if (isExpenseReportGroup(group)) metric.expenses += -direction * amount
-    if (isTaxReportGroup(group)) metric.taxes += -direction * amount
-    metrics.set(year, metric)
-  }
-  return [...metrics.values()].sort((left, right) => left.year - right.year)
-}
-
-function YearlySpendingPlan({ workspaceId, data, defaultCurrency, historyLoading, onSavePlan }: { workspaceId: string; data: AppData; defaultCurrency: string; historyLoading: boolean; onSavePlan: (plan: YearlyFinancialPlan) => Promise<void> }) {
+function YearlySpendingPlan({ userId, dataGeneration, workspaceId, data, defaultCurrency, onSavePlan }: { userId: string; dataGeneration: number; workspaceId: string; data: AppData; defaultCurrency: string; onSavePlan: (plan: YearlyFinancialPlan) => Promise<void> }) {
   const [scope, setScope] = useState<SpendingGoalScope>('Combined')
   const [projectedCompanyIncomeInput, setProjectedCompanyIncomeInput] = useState('')
   const [monthlySalaryInput, setMonthlySalaryInput] = useState('')
@@ -1529,9 +1492,10 @@ function YearlySpendingPlan({ workspaceId, data, defaultCurrency, historyLoading
     today,
     year: currentYear,
   }), [currentYear, data.fxRates, data.timeCodes, data.timesheetClientForecasts, data.timesheetClientRates, data.timesheetClients, defaultCurrency, today, yearTimeEntries])
-  const metrics = annualSpendingMetrics(data, scope, defaultCurrency, today)
+  const summary = useAnnualSpendingSummary(userId, workspaceId, data, defaultCurrency, today, dataGeneration)
+  const metrics = summary.value?.[scope] ?? []
   const current = metrics.find((metric) => metric.year === currentYear) ?? { year: currentYear, income: 0, expenses: 0, taxes: 0 }
-  const postedTaxes = annualSpendingMetrics(data, 'Combined', defaultCurrency, today).find((metric) => metric.year === currentYear)?.taxes ?? 0
+  const postedTaxes = (summary.value?.Combined ?? []).find((metric) => metric.year === currentYear)?.taxes ?? 0
   const previous = metrics.filter((metric) => metric.year < currentYear && (metric.income !== 0 || metric.expenses !== 0 || metric.taxes !== 0)).slice(-3)
   const comparison = [...previous, current]
   const plan = data.yearlyFinancialPlans.find((item) => item.year === currentYear)
@@ -1638,17 +1602,19 @@ function YearlySpendingPlan({ workspaceId, data, defaultCurrency, historyLoading
       <div><span className="eyebrow">Yearly spending · {currentYear}</span><h2>Expenses so far this year</h2><p>Your spending ceiling is projected company income minus estimated total taxes and your savings goal.</p></div>
       <div className="segmented three-way yearly-scope" aria-label="Spending scope">{(['Personal', 'Company', 'Combined'] as SpendingGoalScope[]).map((item) => <button type="button" key={item} className={scope === item ? 'active transfer' : ''} aria-pressed={scope === item} onClick={() => setScope(item)}>{item}</button>)}</div>
     </div>
-    {historyLoading && <div className="yearly-history-loading"><LoaderCircle size={14} />Loading complete history for an accurate year-to-date comparison…</div>}
+    {summary.loading && <div className="yearly-history-loading"><LoaderCircle size={14} />Updating yearly totals…</div>}
+    {summary.error && <p className="yearly-plan-error" role="alert">{summary.error} <button type="button" className="secondary-button" onClick={summary.retry}>Retry yearly totals</button></p>}
     <div className="yearly-revenue-outlook"><div><span>Earned revenue YTD</span><strong>{revenueLoading ? '…' : formatMoney(revenueForecast.actualRevenueMinor, defaultCurrency)}</strong><small>{earnedPeriod}</small></div><div><span>Remaining forecast</span><strong>{revenueLoading ? '…' : formatMoney(revenueForecast.remainingRevenueMinor, defaultCurrency)}</strong></div><div><span>Full-year forecast</span><strong>{revenueLoading ? '…' : formatMoney(revenueForecast.fullYearRevenueMinor, defaultCurrency)}</strong></div><div><span>Plan variance</span><strong className={plan && revenueForecast.fullYearRevenueMinor < plan.projectedCompanyIncomeMinor ? 'negative' : ''}>{plan && !revenueLoading && !revenueForecast.missingFx && !revenueForecast.missingRate ? formatMoney(revenueForecast.fullYearRevenueMinor - plan.projectedCompanyIncomeMinor, defaultCurrency) : '—'}</strong></div></div>
     {revenueError && <p className="yearly-plan-error" role="alert">{revenueError}</p>}
     {!revenueLoading && !revenueError && (revenueForecast.missingFx || revenueForecast.missingRate) && <p className="yearly-revenue-warning"><CircleAlert size={14} />The revenue outlook is incomplete. Add missing client rates or exchange rates from the Timesheet and Settings pages.</p>}
     <div className="yearly-spending-summary">
-      <div className="yearly-spent-value"><span>Spent year to date</span><strong>{formatMoney(current.expenses, defaultCurrency)}</strong><small>{goalAmount > 0 ? `${Math.round(progress)}% of ${formatMoney(goalAmount, defaultCurrency)} goal` : 'Set up this year’s financial plan'}</small><small className="taxes-excluded">{formatMoney(totalProjectedTaxes, defaultCurrency)} projected taxes · {formatMoney(current.taxes, defaultCurrency)} posted</small></div>
-      <div className="yearly-progress">
+      <div className="yearly-spent-value"><span>Spent year to date</span><strong>{summary.value ? formatMoney(current.expenses, defaultCurrency) : '…'}</strong><small>{goalAmount > 0 ? (summary.value ? `${Math.round(progress)}% of ${formatMoney(goalAmount, defaultCurrency)} goal` : 'Checking spending progress…') : 'Set up this year’s financial plan'}</small><small className="taxes-excluded">{formatMoney(totalProjectedTaxes, defaultCurrency)} projected taxes · {summary.value ? formatMoney(current.taxes, defaultCurrency) : '…'} posted</small></div>
+      {summary.value ? <div className="yearly-progress">
         <div className="yearly-progress-track" role="img" aria-label={goalAmount > 0 ? `${Math.round(progress)}% of the goal spent; on-plan spending is ${Math.round(paceProgress)}% by today` : 'Set up the yearly financial plan to see spending pace'}><span className={progress > 100 ? 'over' : ''} style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} />{goalAmount > 0 && <i className="yearly-pace-marker" style={{ left: `${Math.min(100, paceProgress)}%` }} />}</div>
         {goalAmount > 0 && <div className="yearly-progress-legend"><span><i />Spent {Math.round(progress)}%</span><span><i />On-plan today {Math.round(paceProgress)}%</span></div>}
         <div className="yearly-remaining"><span>{progress > 100 ? 'Over spending goal' : 'Remaining this year'}</span><strong className={progress > 100 ? 'negative' : ''}>{goalAmount > 0 ? formatMoney(progress > 100 ? current.expenses - goalAmount : goalAmount - current.expenses, defaultCurrency) : '—'}</strong>{goalAmount > 0 && <small className={paceDifference > 0 ? 'over-pace' : 'under-pace'}>{paceDifference === 0 ? 'On year-to-date target' : `${formatMoney(Math.abs(paceDifference), defaultCurrency)} ${paceDifference > 0 ? 'above' : 'below'} year-to-date target`}</small>}</div>
       </div>
+      : <div className="yearly-progress" role="status">Yearly spending totals are unavailable until the check finishes.</div>}
       <div className="yearly-goal-display">
         <span>{goalLabel}<em>{goalContext}</em></span>
         <div className="yearly-goal-primary"><strong>{goalAmount > 0 ? formatMoney(goalAmount, defaultCurrency) : 'Not set'}</strong><button type="button" className="icon-button yearly-goal-edit" aria-label="Edit yearly financial plan" title="Edit plan" onClick={() => setEditingPlan(true)}><Pencil size={13} /></button></div>
@@ -1677,7 +1643,7 @@ function YearlySpendingPlan({ workspaceId, data, defaultCurrency, historyLoading
         <div><span>Estimated net corporate income</span><strong>{formatMoney(draftTaxableCorporateIncome, defaultCurrency)}</strong><small>Company income − company expenses − annual salary, salary tax, and social security</small></div>
         <div><span>Corporate tax</span><strong>{formatMoney(draftCorporateTax, defaultCurrency)}</strong><small>{corporateTaxRateInput || '0'}% of estimated net income</small></div>
         <div><span>Dividend tax</span><strong>{formatMoney(draftDividendTax, defaultCurrency)}</strong><small>{dividendTaxRateInput || '0'}% of the estimated dividend</small></div>
-        <div className="total"><span>Estimated total taxes</span><strong>{formatMoney(draftTotalTaxes, defaultCurrency)}</strong><small>Includes annual salary tax and social security; {formatMoney(postedTaxes, defaultCurrency)} already posted is not deducted again.</small></div>
+        <div className="total"><span>Estimated total taxes</span><strong>{formatMoney(draftTotalTaxes, defaultCurrency)}</strong><small>Includes annual salary tax and social security; {summary.value ? formatMoney(postedTaxes, defaultCurrency) : '…'} already posted is not deducted again.</small></div>
       </div>
       <div className="yearly-plan-equation"><span>Projected company income</span><b>−</b><span>Estimated total taxes</span><b>−</b><span>Savings goal</span><b>=</b><strong>{formatWholeMoney(draftSpendingGoal, defaultCurrency)} calculated spending limit</strong></div>
       <label className="yearly-plan-comment-input"><span>Comment <em>Optional · 280 characters</em></span><textarea rows={3} maxLength={280} value={planComment} onChange={(event) => setPlanComment(event.target.value)} placeholder="Add a short note about this year’s plan" /></label>
@@ -1686,7 +1652,7 @@ function YearlySpendingPlan({ workspaceId, data, defaultCurrency, historyLoading
       <div className="yearly-plan-actions"><button type="button" className="secondary-button" disabled={saving} onClick={() => { resetPlanInputs(); setEditingPlan(false) }}>Cancel</button><button type="button" className="primary-button" disabled={saving} onClick={() => void savePlan()}>{saving ? 'Saving…' : 'Save financial plan'}</button></div>
     </div>}
     <button type="button" className="yearly-comparison-toggle" aria-expanded={comparisonOpen} aria-controls="yearly-comparison-content" onClick={() => setComparisonOpen((open) => !open)}><div><span className="eyebrow">Planning context</span><h3>Income and expenses by year</h3><p>Compare this year’s recorded income, spending, taxes, and net income with recent full years.</p></div><ChevronDown className={comparisonOpen ? 'expanded' : ''} size={18} /></button>
-    {comparisonOpen && <div id="yearly-comparison-content">
+    {comparisonOpen && summary.value && <div id="yearly-comparison-content">
       <div className="yearly-comparison">{comparison.map((metric) => {
         const netIncome = metric.income - metric.expenses - metric.taxes
         return <div className="yearly-comparison-row" key={metric.year}>
@@ -2034,7 +2000,7 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
   return <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}><div className="modal"><div className="modal-heading"><div><span className="eyebrow">Next Expense</span><h2>{title}</h2></div><button className="icon-button" onClick={onClose}><X size={20} /></button></div>{children}</div></div>
 }
 
-function AccountDetailPage({ account, transactions, allTransactions, candidates, candidateQueueStatus, checkingCandidates, refreshFailed, onRetryCandidates, categories, payees, mappings, accounts, historyLoaded, historyLoading, onRequestHistory, onBack, onSelectAccount, onEditAccount, onAdjustBalance, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, onApproveReady, bankBatchProgress, bankBatchResult, onPostTransfer, onRematchPayees, onCreatePayee, onPromoteMapping, onAddAlternativeName, onUnhideCategory, onEditTransaction, reviewingCandidateId, rematchingPayees, syncing, syncNotice }: { account: Account; transactions: Transaction[]; allTransactions: Transaction[]; candidates: BankImportCandidate[]; candidateQueueStatus: BankQueueStatus | undefined; checkingCandidates: boolean; refreshFailed: boolean; onRetryCandidates: () => void; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onBack: () => void; onSelectAccount: (id: string) => void; onEditAccount: () => void; onAdjustBalance: () => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string, memo?: string) => void; onApproveReady: (accountId: string, rows: ReadyBankApproval[]) => Promise<void>; bankBatchProgress: { accountId: string; done: number; total: number } | null; bankBatchResult: { accountId: string; result: BankApprovalBatchResult } | null; onPostTransfer: (candidateId: string, counterpartyAccountId: string, memo: string) => Promise<void>; onRematchPayees: () => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onAddAlternativeName: (sourceName: string, payeeId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void>; onEditTransaction: (transaction: Transaction) => void; reviewingCandidateId: string; rematchingPayees: boolean; syncing: boolean; syncNotice: string }) {
+function AccountDetailPage({ reviewHistory, account, transactions, allTransactions, candidates, candidateQueueStatus, checkingCandidates, refreshFailed, onRetryCandidates, categories, payees, mappings, accounts, historyLoaded, historyLoading, onRequestHistory, onBack, onSelectAccount, onEditAccount, onAdjustBalance, onLinkBank, onSyncBank, onImportModeChange, onReviewCandidate, onApproveReady, bankBatchProgress, bankBatchResult, onPostTransfer, onRematchPayees, onCreatePayee, onPromoteMapping, onAddAlternativeName, onUnhideCategory, onEditTransaction, reviewingCandidateId, rematchingPayees, syncing, syncNotice }: { reviewHistory: ReturnType<typeof useBankReviewHistory>; account: Account; transactions: Transaction[]; allTransactions: Transaction[]; candidates: BankImportCandidate[]; candidateQueueStatus: BankQueueStatus | undefined; checkingCandidates: boolean; refreshFailed: boolean; onRetryCandidates: () => void; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; accounts: Account[]; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onBack: () => void; onSelectAccount: (id: string) => void; onEditAccount: () => void; onAdjustBalance: () => void; onLinkBank: () => void; onSyncBank: () => void; onImportModeChange: (mode: 'review' | 'automatic') => void; onReviewCandidate: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string, memo?: string) => void; onApproveReady: (accountId: string, rows: ReadyBankApproval[]) => Promise<void>; bankBatchProgress: { accountId: string; done: number; total: number } | null; bankBatchResult: { accountId: string; result: BankApprovalBatchResult } | null; onPostTransfer: (candidateId: string, counterpartyAccountId: string, memo: string) => Promise<void>; onRematchPayees: () => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onAddAlternativeName: (sourceName: string, payeeId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void>; onEditTransaction: (transaction: Transaction) => void; reviewingCandidateId: string; rematchingPayees: boolean; syncing: boolean; syncNotice: string }) {
   return <div className="page-content narrow-page entity-page">
     <div className="entity-page-toolbar">
       <button className="entity-back" onClick={onBack}><ChevronLeft size={16} />All accounts</button>
@@ -2050,7 +2016,7 @@ function AccountDetailPage({ account, transactions, allTransactions, candidates,
         </div>
         <span>{syncNotice || formatRateLimits(account)}</span>
       </div>}
-      {account.providerAccountId && <BankImportReview key={account.id} account={account} accounts={accounts} transactions={allTransactions} candidates={candidates} candidateQueueStatus={candidateQueueStatus} checkingCandidates={checkingCandidates} refreshFailed={refreshFailed} onRetryCandidates={onRetryCandidates} categories={categories} payees={payees} mappings={mappings} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingPayees} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={onRequestHistory} onModeChange={onImportModeChange} onReview={onReviewCandidate} onApproveReady={onApproveReady} bankBatchProgress={bankBatchProgress} bankBatchResult={bankBatchResult} onPostTransfer={onPostTransfer} onRematchPayees={onRematchPayees} onCreatePayee={onCreatePayee} onPromoteMapping={onPromoteMapping} onAddAlternativeName={onAddAlternativeName} onUnhideCategory={onUnhideCategory} />}
+      {account.providerAccountId && <BankImportReview key={account.id} account={account} accounts={accounts} transactions={reviewHistory.transactions} candidates={candidates} candidateQueueStatus={candidateQueueStatus} checkingCandidates={checkingCandidates} refreshFailed={refreshFailed} onRetryCandidates={onRetryCandidates} categories={categories} payees={payees} mappings={mappings} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingPayees} historyLoaded={reviewHistory.loaded} historyLoading={reviewHistory.loading} onRequestHistory={reviewHistory.retry} historyError={reviewHistory.error} onModeChange={onImportModeChange} onReview={onReviewCandidate} onApproveReady={onApproveReady} bankBatchProgress={bankBatchProgress} bankBatchResult={bankBatchResult} onPostTransfer={onPostTransfer} onRematchPayees={onRematchPayees} onCreatePayee={onCreatePayee} onPromoteMapping={onPromoteMapping} onAddAlternativeName={onAddAlternativeName} onUnhideCategory={onUnhideCategory} />}
       <AccountDetail account={account} transactions={transactions} allTransactions={allTransactions} categories={categories} accounts={accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={onRequestHistory} onEditTransaction={onEditTransaction} />
     </section>
   </div>
@@ -2109,7 +2075,7 @@ function CategorySearchPicker({ ariaLabel, value, categories, allowEmpty = false
   </div>
 }
 
-function BankImportReview({ account, accounts, transactions, candidates, candidateQueueStatus, checkingCandidates, refreshFailed, onRetryCandidates, categories, payees, mappings, reviewingCandidateId, rematchingPayees, historyLoaded, historyLoading, onRequestHistory, onModeChange, onReview, onApproveReady, bankBatchProgress, bankBatchResult, onPostTransfer, onRematchPayees, onCreatePayee, onPromoteMapping, onAddAlternativeName, onUnhideCategory }: { account: Account; accounts: Account[]; transactions: Transaction[]; candidates: BankImportCandidate[]; candidateQueueStatus: BankQueueStatus | undefined; checkingCandidates: boolean; refreshFailed: boolean; onRetryCandidates: () => void; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; reviewingCandidateId: string; rematchingPayees: boolean; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onModeChange: (mode: 'review' | 'automatic') => void; onReview: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string, memo?: string) => void; onApproveReady: (accountId: string, rows: ReadyBankApproval[]) => Promise<void>; bankBatchProgress: { accountId: string; done: number; total: number } | null; bankBatchResult: { accountId: string; result: BankApprovalBatchResult } | null; onPostTransfer: (candidateId: string, counterpartyAccountId: string, memo: string) => Promise<void>; onRematchPayees: () => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onAddAlternativeName: (sourceName: string, payeeId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void> }) {
+function BankImportReview({ historyError, account, accounts, transactions, candidates, candidateQueueStatus, checkingCandidates, refreshFailed, onRetryCandidates, categories, payees, mappings, reviewingCandidateId, rematchingPayees, historyLoaded, historyLoading, onRequestHistory, onModeChange, onReview, onApproveReady, bankBatchProgress, bankBatchResult, onPostTransfer, onRematchPayees, onCreatePayee, onPromoteMapping, onAddAlternativeName, onUnhideCategory }: { historyError: string; account: Account; accounts: Account[]; transactions: Transaction[]; candidates: BankImportCandidate[]; candidateQueueStatus: BankQueueStatus | undefined; checkingCandidates: boolean; refreshFailed: boolean; onRetryCandidates: () => void; categories: Category[]; payees: Payee[]; mappings: PayeeMapping[]; reviewingCandidateId: string; rematchingPayees: boolean; historyLoaded: boolean; historyLoading: boolean; onRequestHistory: () => Promise<void>; onModeChange: (mode: 'review' | 'automatic') => void; onReview: (candidateId: string, decision: 'approve' | 'reject', categoryId?: string, rememberCategory?: boolean, payeeId?: string | null, rememberMapping?: boolean, bankDescription?: string, createdPayee?: boolean, defaultAccountId?: string, memo?: string) => void; onApproveReady: (accountId: string, rows: ReadyBankApproval[]) => Promise<void>; bankBatchProgress: { accountId: string; done: number; total: number } | null; bankBatchResult: { accountId: string; result: BankApprovalBatchResult } | null; onPostTransfer: (candidateId: string, counterpartyAccountId: string, memo: string) => Promise<void>; onRematchPayees: () => void; onCreatePayee: (name: string, categoryId: string, accountId: string) => Promise<Payee>; onPromoteMapping: (mappingId: string) => Promise<void>; onAddAlternativeName: (sourceName: string, payeeId: string) => Promise<void>; onUnhideCategory: (categoryId: string) => Promise<void> }) {
   const mode = account.bankImportMode ?? 'review'
   const [categoryAssignments, setCategoryAssignments] = useState<Record<string, string>>({})
   const [payeeAssignments, setPayeeAssignments] = useState<Record<string, string>>({})
@@ -2151,7 +2117,7 @@ function BankImportReview({ account, accounts, transactions, candidates, candida
     </p>}
     {candidates.length > 0 && <div className="bank-review-queue">
       <div className="bank-review-summary"><strong>{candidates.length} awaiting review</strong><span>Net effect if approved: {formatMoney(pendingNet, account.currency)}</span><div className="bank-review-summary-actions"><button type="button" className="primary-button" disabled={!readyRows.length || !historyLoaded || historyLoading || rematchingPayees || Boolean(reviewingCandidateId) || batchRunning} onClick={() => void onApproveReady(account.id, readyRows)}><Check size={14} />{batchRunning ? `Approving ${bankBatchProgress?.done ?? 0}/${bankBatchProgress?.total ?? 0}…` : historyLoaded ? `Approve all ready (${readyRows.length})` : historyLoading ? 'Checking ready items…' : 'History check incomplete'}</button><button type="button" className="secondary-button" disabled={rematchingPayees || Boolean(reviewingCandidateId) || batchRunning} onClick={onRematchPayees}><RefreshCw className={rematchingPayees ? 'spin-icon' : ''} size={14} />{rematchingPayees ? 'Checking…' : 'Recheck payees'}</button></div></div>
-      {!historyLoaded && <p className="bank-batch-message" role="status">{historyLoading ? 'Loading transaction history to check for duplicates and transfers…' : <>History check incomplete. <button type="button" className="secondary-button" onClick={() => void onRequestHistory()}>Retry history check</button></>}</p>}
+      {!historyLoaded && <p className="bank-batch-message" role="status">{historyLoading ? 'Checking recent transactions for duplicates and transfers…' : <>{historyError || 'History check incomplete.'} <button type="button" className="secondary-button" onClick={() => void onRequestHistory()}>Retry history check</button></>}</p>}
       {historyLoaded && excludedReasons && <p className="bank-batch-message">Not ready: {excludedReasons}.</p>}
       <fieldset className="bank-review-rows" disabled={batchRunning}>
       {candidates.map((candidate) => {

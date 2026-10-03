@@ -4,14 +4,15 @@ import { getErrorMessage } from '../../app-utils'
 import { approveReadyBankRow, createBankApprovalBatch, eligibleBankApprovals, type BankApprovalBatchResult, type ReadyBankApproval } from '../../bank-batch-review'
 import { approveBankImportCandidate, approveBankImportCandidateAsTransfer, clearTransactionCache, createPayeeMapping, ensurePayees, rejectBankImportCandidate, rematchPendingBankImportPayees, updateBankImportCandidateDetails, updateBankImportMode, updatePayeeDefaults, updatePayeeMapping, type LoadedWorkspace } from '../../database'
 import type { Account, AppData } from '../../types'
+import type { useBankReviewHistory } from './use-bank-review-history'
 
-export function useBankReviewActions({ workspaceId, data, setWrittenData, setSyncError, reloadWorkspaceSnapshot, hasFullHistory, apiJson }: {
+export function useBankReviewActions({ workspaceId, data, setWrittenData, setSyncError, reloadWorkspaceSnapshot, reviewHistory, apiJson }: {
   workspaceId: string
   data: AppData
   setWrittenData: Dispatch<SetStateAction<AppData>>
   setSyncError: Dispatch<SetStateAction<string>>
   reloadWorkspaceSnapshot: () => Promise<LoadedWorkspace>
-  hasFullHistory: () => boolean
+  reviewHistory: ReturnType<typeof useBankReviewHistory>
   apiJson: <T>(url: string, init?: RequestInit) => Promise<T>
 }) {
   const [syncingAccountId, setSyncingAccountId] = useState('')
@@ -92,7 +93,7 @@ export function useBankReviewActions({ workspaceId, data, setWrittenData, setSyn
   }
 
   async function approveReadyBankCandidates(accountId: string, rows: ReadyBankApproval[]) {
-    if (bankBatchRunningRef.current || reviewingCandidateId || !rows.length || !hasFullHistory()) return
+    if (bankBatchRunningRef.current || reviewingCandidateId || !rows.length || !reviewHistory.hasHistory()) return
     bankBatchRunningRef.current = true
     try {
       const needsPayee = rows.filter((row) => !row.payeeId).length
@@ -103,7 +104,7 @@ export function useBankReviewActions({ workspaceId, data, setWrittenData, setSyn
       setBankBatchProgress({ accountId, done: 0, total: rows.length })
       const result = await bankBatchRef.current.run(rows, (row) => {
         const current = latestBankData.current
-        return hasFullHistory() && eligibleBankApprovals({ accountId, candidates: current.bankImportCandidates, payees: current.payees, categories: current.categories, transactions: current.transactions, choices: { [row.id]: { payeeId: row.payeeId, categoryId: row.categoryId, memo: row.memo } } }).some((candidate) => candidate.id === row.id && candidate.payeeName === row.payeeName)
+        return reviewHistory.hasHistory() && eligibleBankApprovals({ accountId, candidates: current.bankImportCandidates, payees: current.payees, categories: current.categories, transactions: reviewHistory.transactions, choices: { [row.id]: { payeeId: row.payeeId, categoryId: row.categoryId, memo: row.memo } } }).some((candidate) => candidate.id === row.id && candidate.payeeName === row.payeeName)
       }, (done, total) => setBankBatchProgress({ accountId, done, total }))
       if (result) {
         setBankBatchResult({ accountId, result })

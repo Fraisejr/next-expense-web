@@ -5,6 +5,7 @@ import { formatMoney, fromMonthKey, getErrorMessage, monthName, parseMoneyToMino
 import { todayInParis } from '../../../shared/bank-data.ts'
 import { calculateRevenueForecast, type RevenueForecast } from '../../revenue'
 import { formatEarnedTimesheetPeriod } from './period'
+import { createTimesheetYearCache, replaceYearEntry, revenueYearForDate } from './year-cache'
 import { buildClientHoursReport, canCopyClientHoursReport, copyClientHoursReport, reportHours } from '../../client-hours-report'
 import type { FxRate, TimeCode, TimeComment, TimeEntry, TimesheetClient, TimesheetClientForecast, TimesheetClientRate } from '../../types'
 export function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clients, rates, forecasts, fxRates, onAddCode, onUpdateCode, onReorderCodes, onAddClient, onUpdateClient, onSaveRate, onSaveForecast }: {
@@ -26,6 +27,10 @@ export function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clie
 }) {
   const [entries, setEntries] = useState<TimeEntry[]>([])
   const [yearEntries, setYearEntries] = useState<TimeEntry[]>([])
+  const yearCache = useRef(createTimesheetYearCache(loadRevenueRecognitionEntries))
+  const [loadedYearKey, setLoadedYearKey] = useState('')
+  const [yearError, setYearError] = useState('')
+  const [yearAttempt, setYearAttempt] = useState(0)
   const [comments, setComments] = useState<TimeComment[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -43,6 +48,7 @@ export function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clie
   const [draggedId, setDraggedId] = useState('')
   const [savingOrder, setSavingOrder] = useState(false)
   const saveQueue = useRef(new Map<string, Promise<void>>())
+  const pendingYearEntries = useRef(new Map<string, { workspaceId: string; entry: TimeEntry }>())
   const reportContextRef = useRef({ workspaceId, month, selectedReportClientId, codes })
   reportContextRef.current = { workspaceId, month, selectedReportClientId, codes }
   const tableWrapRef = useRef<HTMLDivElement>(null)
@@ -66,18 +72,32 @@ export function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clie
     setError('')
     setLoadedMonthKey('')
     setReportStatus('')
-    Promise.all([loadTimeEntries(workspaceId, month), loadTimeComments(workspaceId, month), loadRevenueRecognitionEntries(workspaceId, selectedYear)])
-      .then(([loadedEntries, loadedComments, loadedYearEntries]) => {
+    Promise.all([loadTimeEntries(workspaceId, month), loadTimeComments(workspaceId, month)])
+      .then(([loadedEntries, loadedComments]) => {
         if (cancelled) return
         setEntries(loadedEntries)
         setLoadedMonthKey(`${workspaceId}:${month}`)
         setComments(loadedComments)
-        setYearEntries(loadedYearEntries)
       })
       .catch((cause) => { if (!cancelled) setError(getErrorMessage(cause, 'Could not load this timesheet.')) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [month, selectedYear, workspaceId])
+  }, [month, workspaceId])
+
+  useEffect(() => {
+    let cancelled = false
+    setLoadedYearKey('')
+    setYearError('')
+    void yearCache.current.load(workspaceId, selectedYear)
+      .then((entries) => {
+        for (const pending of pendingYearEntries.current.values()) {
+          if (pending.workspaceId === workspaceId && revenueYearForDate(pending.entry.date) === selectedYear) entries = replaceYearEntry(entries, pending.entry)
+        }
+        if (!cancelled) { setYearEntries(entries); setLoadedYearKey(`${workspaceId}:${selectedYear}`) }
+      })
+      .catch((cause) => { if (!cancelled) setYearError(getErrorMessage(cause, 'Could not load yearly hours.')) })
+    return () => { cancelled = true }
+  }, [workspaceId, selectedYear, yearAttempt])
 
   const entryMap = useMemo(() => new Map(entries.map((entry) => [`${entry.codeId}:${entry.date}`, entry.hours])), [entries])
   const commentMap = useMemo(() => new Map(comments.map((comment) => [comment.codeId, comment.comment])), [comments])
@@ -180,17 +200,25 @@ export function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clie
   function changeEntry(codeId: string, date: string, rawHours: number) {
     const hours = Math.min(24, Math.max(0, Math.round(rawHours)))
     const key = `${workspaceId}:${codeId}:${date}`
+    const entry = { codeId, date, hours }
+    pendingYearEntries.current.set(key, { workspaceId, entry })
     setError('')
     setReportStatus('')
     setEntries((current) => hours === 0
       ? current.filter((entry) => entry.codeId !== codeId || entry.date !== date)
       : [...current.filter((entry) => entry.codeId !== codeId || entry.date !== date), { codeId, date, hours }])
-    setYearEntries((current) => hours === 0
+    if (revenueYearForDate(date) === selectedYear) setYearEntries((current) => hours === 0
       ? current.filter((entry) => entry.codeId !== codeId || entry.date !== date)
       : [...current.filter((entry) => entry.codeId !== codeId || entry.date !== date), { codeId, date, hours }])
     const previous = saveQueue.current.get(key) ?? Promise.resolve()
-    const request = previous.catch(() => undefined).then(() => saveTimeEntry(workspaceId, { codeId, date, hours }))
+    const request = previous.catch(() => undefined).then(async () => {
+      await saveTimeEntry(workspaceId, entry)
+      yearCache.current.saved(workspaceId, entry)
+    })
       .catch(async (cause) => {
+        if (pendingYearEntries.current.get(key)?.entry === entry) pendingYearEntries.current.delete(key)
+        yearCache.current.invalidate(workspaceId, revenueYearForDate(date))
+        setYearAttempt((value) => value + 1)
         if (reportContextRef.current.workspaceId === workspaceId && reportContextRef.current.month === month) {
           setError(getErrorMessage(cause, 'Could not save these hours.'))
           try {
@@ -199,7 +227,11 @@ export function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clie
           } catch { /* Keep the original save error visible. */ }
         }
       })
-      .finally(() => { if (saveQueue.current.get(key) === request) saveQueue.current.delete(key); setPendingSaves(saveQueue.current.size) })
+      .finally(() => {
+        if (pendingYearEntries.current.get(key)?.entry === entry) pendingYearEntries.current.delete(key)
+        if (saveQueue.current.get(key) === request) saveQueue.current.delete(key)
+        setPendingSaves(saveQueue.current.size)
+      })
     saveQueue.current.set(key, request)
     setPendingSaves(saveQueue.current.size)
   }
@@ -261,7 +293,7 @@ export function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clie
   }
 
   return <div className="page-content timesheet-page">
-    <ClientRevenuePanel year={selectedYear} defaultCurrency={defaultCurrency} clients={clients} rates={rates} forecasts={forecasts} revenue={revenueForecast} onAddClient={onAddClient} onUpdateClient={onUpdateClient} onSaveRate={onSaveRate} onSaveForecast={onSaveForecast} />
+    {loadedYearKey === `${workspaceId}:${selectedYear}` ? <ClientRevenuePanel year={selectedYear} defaultCurrency={defaultCurrency} clients={clients} rates={rates} forecasts={forecasts} revenue={revenueForecast} onAddClient={onAddClient} onUpdateClient={onUpdateClient} onSaveRate={onSaveRate} onSaveForecast={onSaveForecast} /> : <section className="panel" role="status">{yearError ? <>{yearError} <button type="button" className="secondary-button" onClick={() => setYearAttempt((value) => value + 1)}>Retry yearly hours</button></> : 'Loading yearly hours…'}</section>}
 
     <section className="timesheet-summary">
       <div><span className="eyebrow">Month total</span><strong>{formatHours(monthTotal)}</strong><small>across {visibleCodes.length} visible {visibleCodes.length === 1 ? 'item' : 'items'}</small></div>

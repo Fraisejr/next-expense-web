@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { todayInParis } from '../shared/bank-data.ts'
 import { getErrorMessage } from './app-utils'
-import { clearTransactionCache, loadCachedAllTransactions, loadTransactionPage, loadWorkspace, type LoadedWorkspace } from './database'
+import { loadCachedAllTransactions, loadTransactionPage, loadWorkspace, type LoadedWorkspace } from './database'
 import type { AppData, Transaction } from './types'
 import { refreshWasOvertaken, workspaceCacheVersion, writeWorkspaceCache } from './workspace-cache'
 import { dataFromWorkspaceRefresh } from './workspace-refresh-data'
@@ -27,8 +27,6 @@ export function useExpenseWorkspaceData({ workspace, userId, selectedMonthKey, r
   const localMutationCount = useRef(0)
   const snapshotGeneration = useRef(0)
   const appliedWorkspace = useRef(workspace)
-  const latestTransactions = useRef(data.transactions)
-  latestTransactions.current = data.transactions
   const setWrittenData: typeof setData = (value) => {
     localMutationCount.current++
     snapshotGeneration.current++
@@ -43,7 +41,7 @@ export function useExpenseWorkspaceData({ workspace, userId, selectedMonthKey, r
     if (historyRequest.current) return historyRequest.current
     setHistoryLoading(true)
     const request = loadCurrentTransactionHistory({
-      load: (retry) => loadCachedAllTransactions(workspace.workspaceId, latestTransactions.current, revalidate || retry),
+      load: () => loadCachedAllTransactions(workspace.workspaceId),
       generation: () => snapshotGeneration.current,
       apply: (allTransactions) => {
         historyLoadedRef.current = true
@@ -123,7 +121,6 @@ export function useExpenseWorkspaceData({ workspace, userId, selectedMonthKey, r
   }, [historyLoaded, selectedMonthKey, workspace.workspaceId])
 
   async function reloadWorkspaceSnapshot() {
-    await clearTransactionCache(workspace.workspaceId)
     const refreshed = await loadWorkspace(selectedMonthKey, { ...workspace, data })
     setCandidateQueueByAccount(refreshed.candidateQueueByAccount ?? {})
     monthCache.current.clear()
@@ -139,5 +136,5 @@ export function useExpenseWorkspaceData({ workspace, userId, selectedMonthKey, r
   function hasFullHistory() { return historyLoadedRef.current }
 
   return { data, setWrittenData, candidateQueueByAccount, syncError, setSyncError, historyLoaded, historyLoading,
-    ensureFullHistory, reloadWorkspaceSnapshot, invalidateTransactionMonth, hasFullHistory }
+    ensureFullHistory, reloadWorkspaceSnapshot, invalidateTransactionMonth, hasFullHistory, historyGeneration: snapshotGeneration.current }
 }
