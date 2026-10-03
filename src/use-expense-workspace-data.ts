@@ -5,6 +5,7 @@ import { clearTransactionCache, loadCachedAllTransactions, loadTransactionPage, 
 import type { AppData, Transaction } from './types'
 import { refreshWasOvertaken, workspaceCacheVersion, writeWorkspaceCache } from './workspace-cache'
 import { dataFromWorkspaceRefresh } from './workspace-refresh-data'
+import { loadCurrentTransactionHistory } from './transaction-history-request'
 
 export function useExpenseWorkspaceData({ workspace, userId, selectedMonthKey, refreshStartedMutation, onLocalMutation, onRefreshApplied, onRefreshConflict }: {
   workspace: LoadedWorkspace
@@ -26,6 +27,8 @@ export function useExpenseWorkspaceData({ workspace, userId, selectedMonthKey, r
   const localMutationCount = useRef(0)
   const snapshotGeneration = useRef(0)
   const appliedWorkspace = useRef(workspace)
+  const latestTransactions = useRef(data.transactions)
+  latestTransactions.current = data.transactions
   const setWrittenData: typeof setData = (value) => {
     localMutationCount.current++
     snapshotGeneration.current++
@@ -39,19 +42,20 @@ export function useExpenseWorkspaceData({ workspace, userId, selectedMonthKey, r
     if (historyLoadedRef.current && !revalidate) return
     if (historyRequest.current) return historyRequest.current
     setHistoryLoading(true)
-    const generation = snapshotGeneration.current
-    const request = loadCachedAllTransactions(workspace.workspaceId, data.transactions, revalidate)
-      .then((allTransactions) => {
-        if (generation !== snapshotGeneration.current) return
+    const request = loadCurrentTransactionHistory({
+      load: (retry) => loadCachedAllTransactions(workspace.workspaceId, latestTransactions.current, revalidate || retry),
+      generation: () => snapshotGeneration.current,
+      apply: (allTransactions) => {
         historyLoadedRef.current = true
         setData((current) => ({ ...current, transactions: allTransactions }))
         setHistoryLoaded(true)
-      })
+      },
+    })
       .catch((cause) => setSyncError(getErrorMessage(cause, 'Could not load transaction history.')))
       .finally(() => { setHistoryLoading(false); historyRequest.current = null })
     historyRequest.current = request
     return request
-  }, [data.transactions, workspace.workspaceId])
+  }, [workspace.workspaceId])
 
   useEffect(() => {
     if (appliedWorkspace.current === workspace) return

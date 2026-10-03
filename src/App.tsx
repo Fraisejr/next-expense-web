@@ -261,6 +261,10 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
       return
     }
     const key = `${workspace.workspaceId}:${accountId}`
+    if (historyLoaded) {
+      autoHistoryAttempt.current = null
+      return
+    }
     if (!shouldAutoLoadBankHistory(Boolean(account?.providerAccountId), candidateCount, historyLoaded, autoHistoryAttempt.current === key)) return
     autoHistoryAttempt.current = key
     void ensureFullHistory()
@@ -2146,7 +2150,7 @@ function BankImportReview({ account, accounts, transactions, candidates, candida
       {!checkingCandidates && <button type="button" className="secondary-button" onClick={onRetryCandidates}>Check for new transactions</button>}
     </p>}
     {candidates.length > 0 && <div className="bank-review-queue">
-      <div className="bank-review-summary"><strong>{candidates.length} awaiting review</strong><span>Net effect if approved: {formatMoney(pendingNet, account.currency)}</span><div className="bank-review-summary-actions"><button type="button" className="primary-button" disabled={!readyRows.length || !historyLoaded || historyLoading || rematchingPayees || Boolean(reviewingCandidateId) || batchRunning} onClick={() => void onApproveReady(account.id, readyRows)}><Check size={14} />{batchRunning ? `Approving ${bankBatchProgress?.done ?? 0}/${bankBatchProgress?.total ?? 0}…` : historyLoaded ? `Approve all ready (${readyRows.length})` : 'Checking ready items…'}</button><button type="button" className="secondary-button" disabled={rematchingPayees || Boolean(reviewingCandidateId) || batchRunning} onClick={onRematchPayees}><RefreshCw className={rematchingPayees ? 'spin-icon' : ''} size={14} />{rematchingPayees ? 'Checking…' : 'Recheck payees'}</button></div></div>
+      <div className="bank-review-summary"><strong>{candidates.length} awaiting review</strong><span>Net effect if approved: {formatMoney(pendingNet, account.currency)}</span><div className="bank-review-summary-actions"><button type="button" className="primary-button" disabled={!readyRows.length || !historyLoaded || historyLoading || rematchingPayees || Boolean(reviewingCandidateId) || batchRunning} onClick={() => void onApproveReady(account.id, readyRows)}><Check size={14} />{batchRunning ? `Approving ${bankBatchProgress?.done ?? 0}/${bankBatchProgress?.total ?? 0}…` : historyLoaded ? `Approve all ready (${readyRows.length})` : historyLoading ? 'Checking ready items…' : 'History check incomplete'}</button><button type="button" className="secondary-button" disabled={rematchingPayees || Boolean(reviewingCandidateId) || batchRunning} onClick={onRematchPayees}><RefreshCw className={rematchingPayees ? 'spin-icon' : ''} size={14} />{rematchingPayees ? 'Checking…' : 'Recheck payees'}</button></div></div>
       {!historyLoaded && <p className="bank-batch-message" role="status">{historyLoading ? 'Loading transaction history to check for duplicates and transfers…' : <>History check incomplete. <button type="button" className="secondary-button" onClick={() => void onRequestHistory()}>Retry history check</button></>}</p>}
       {historyLoaded && excludedReasons && <p className="bank-batch-message">Not ready: {excludedReasons}.</p>}
       <fieldset className="bank-review-rows" disabled={batchRunning}>

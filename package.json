@@ -20,6 +20,7 @@
     "test:client-hours": "node --experimental-strip-types scripts/test-client-hours-report.mjs",
     "test:workspace-cache": "node --experimental-strip-types scripts/test-workspace-cache.mjs",
     "test:workspace-refresh": "node --experimental-transform-types --test src/workspace-refresh-data.test.ts",
+    "test:transaction-history": "node --experimental-transform-types --test src/transaction-history-request.test.ts",
     "test:workspace-first-load": "node scripts/test-workspace-first-load.mjs"
   },
   "dependencies": {
