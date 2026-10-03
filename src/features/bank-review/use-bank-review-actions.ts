@@ -75,9 +75,6 @@ export function useBankReviewActions({ workspaceId, data, setWrittenData, setSyn
     if (bankBatchRunningRef.current || singleReviewRunningRef.current || !rows.length || !reviewHistory.hasHistory()) return
     bankBatchRunningRef.current = true
     try {
-      const needsPayee = rows.filter((row) => !row.payeeId).length
-      const payeeNotice = needsPayee ? `\n\n${needsPayee} transaction${needsPayee === 1 ? '' : 's'} without a selected payee will use the bank description to create or reuse a payee.` : ''
-      if (!window.confirm(`Approve ${rows.length} ready bank transaction${rows.length === 1 ? '' : 's'} for ${data.accounts.find((account) => account.id === accountId)?.name ?? 'this account'}?${payeeNotice}`)) return
       setSyncError('')
       setBankBatchResult(null)
       setBankBatchProgress({ accountId, done: 0, total: rows.length })
