@@ -1,7 +1,6 @@
 import { formatCompactMoney, formatMoney, formatShortDate, fromMonthKey, getErrorMessage, monthName, parseMoneyToMinor, toMonthKey, uid } from './app-utils'
-import { TimesheetPage } from './features/timesheet/TimesheetPage'
-import { SettingsPage } from './features/settings/SettingsPage'
-import { ReportsPage, type ReportView } from './features/reports/ReportsPage'
+import type { ReportView } from './features/reports/ReportsPage'
+import { PageLoader } from './features/PageLoader'
 import { createPayeeActions } from './features/payees/actions'
 import { useBankReviewActions } from './features/bank-review/use-bank-review-actions'
 import { useBankReviewHistory } from './features/bank-review/use-bank-review-history'
@@ -9,7 +8,7 @@ import { accountBalanceSheetGroup, balanceAdjustmentReasonLabels, balanceSheetGr
 import * as timesheetApi from './features/timesheet/api'
 import { createTimesheetActions } from './features/timesheet/actions'
 import { formatEarnedTimesheetPeriod } from './features/timesheet/period'
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { lazy, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
   ArrowLeftRight, ArrowRight, Banknote, BriefcaseBusiness,
   BarChart3, BriefcaseMedical, CalendarDays, CarFront, ChevronDown, ChevronLeft, ChevronRight, CircleHelp,
@@ -29,6 +28,10 @@ import { useExpenseWorkspaceData } from './use-expense-workspace-data'
 import { useWorkspaceSession } from './use-workspace-session'
 import { useAnnualSpendingSummary } from './use-annual-spending-summary'
 import type { Account, AccountScope, AppData, BalanceAdjustmentReason, BalanceSheetGroup, BankImportCandidate, Budget, Category, CategoryGroup, FxRate, Payee, PayeeMapping, ReportGroup, SpendingGoalScope, TimeEntry, Transaction, YearlyFinancialPlan } from './types'
+
+const ReportsPage = lazy(() => import('./features/reports/ReportsPage').then((module) => ({ default: module.ReportsPage })))
+const SettingsPage = lazy(() => import('./features/settings/SettingsPage').then((module) => ({ default: module.SettingsPage })))
+const TimesheetPage = lazy(() => import('./features/timesheet/TimesheetPage').then((module) => ({ default: module.TimesheetPage })))
 
 type Page = 'overview' | 'transactions' | 'payees' | 'reports' | 'accounts' | 'timesheet' | 'settings'
 type Modal = 'transaction' | 'account' | 'edit-account' | 'balance-adjustment' | 'category' | 'edit-category' | 'category-groups' | 'monthly-plan' | 'bank' | null
@@ -875,16 +878,16 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
           </div>
         )}
         {page === 'reports' && (
-          <ReportsPage data={data} viewedMonth={viewedMonth} defaultCurrency={workspace.defaultCurrency} view={reportView} historyLoading={historyLoading} onChangeView={(nextView) => goTo(nextView === 'net-worth' ? '/reports/net-worth' : '/reports')} onUpdateTaxRate={changeTaxRate} onEditTransaction={setCategoryTarget} />
+          <PageLoader name="Reports"><ReportsPage data={data} viewedMonth={viewedMonth} defaultCurrency={workspace.defaultCurrency} view={reportView} historyLoading={historyLoading} onChangeView={(nextView) => goTo(nextView === 'net-worth' ? '/reports/net-worth' : '/reports')} onUpdateTaxRate={changeTaxRate} onEditTransaction={setCategoryTarget} /></PageLoader>
         )}
         {page === 'accounts' && !selectedAccount && (
           <AccountsPage accounts={activeAccounts} pendingImportCounts={pendingImportCounts} totalBalance={totalBalance} defaultCurrency={workspace.defaultCurrency} convertBalance={convertCurrentBalance} onAdd={() => setModal('account')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onReorder={reorderAccounts} />
         )}
         {page === 'settings' && (
-          <SettingsPage workspaceId={workspace.workspaceId} workspaceName={workspace.workspaceName} defaultCurrency={workspace.defaultCurrency} accounts={data.accounts} fxRates={data.fxRates} onSaveFxRate={saveExchangeRate} onDeleteFxRate={removeExchangeRate} />
+          <PageLoader name="Settings"><SettingsPage workspaceId={workspace.workspaceId} workspaceName={workspace.workspaceName} defaultCurrency={workspace.defaultCurrency} accounts={data.accounts} fxRates={data.fxRates} onSaveFxRate={saveExchangeRate} onDeleteFxRate={removeExchangeRate} /></PageLoader>
         )}
         {page === 'timesheet' && (
-          <TimesheetPage workspaceId={workspace.workspaceId} month={selectedMonthKey} defaultCurrency={workspace.defaultCurrency} codes={data.timeCodes} clients={data.timesheetClients} rates={data.timesheetClientRates} forecasts={data.timesheetClientForecasts} fxRates={data.fxRates} onAddCode={addTimeCode} onUpdateCode={changeTimeCode} onReorderCodes={reorderTimeCodes} onAddClient={addTimesheetClient} onUpdateClient={changeTimesheetClient} onSaveRate={changeTimesheetClientRate} onSaveForecast={changeTimesheetClientForecast} />
+          <PageLoader name="Timesheet"><TimesheetPage workspaceId={workspace.workspaceId} month={selectedMonthKey} defaultCurrency={workspace.defaultCurrency} codes={data.timeCodes} clients={data.timesheetClients} rates={data.timesheetClientRates} forecasts={data.timesheetClientForecasts} fxRates={data.fxRates} onAddCode={addTimeCode} onUpdateCode={changeTimeCode} onReorderCodes={reorderTimeCodes} onAddClient={addTimesheetClient} onUpdateClient={changeTimesheetClient} onSaveRate={changeTimesheetClientRate} onSaveForecast={changeTimesheetClientForecast} /></PageLoader>
         )}
         {selectedAccount && (
           <AccountDetailPage reviewHistory={bankHistory} account={selectedAccount} transactions={transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} allTransactions={data.transactions.filter((transaction) => transaction.accountId === selectedAccount.id || transaction.toAccountId === selectedAccount.id)} candidates={data.bankImportCandidates.filter((candidate) => candidate.accountId === selectedAccount.id)} candidateQueueStatus={candidateQueueByAccount[selectedAccount.id]} checkingCandidates={refreshState === 'refreshing'} refreshFailed={refreshState === 'failed'} onRetryCandidates={onRetryRefresh} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} historyLoaded={historyLoaded} historyLoading={historyLoading} onRequestHistory={() => ensureFullHistory(true)} onBack={() => goTo('/accounts')} onSelectAccount={(id) => goTo(`/accounts/${id}`)} onEditAccount={() => { setAccountTarget(selectedAccount); setModal('edit-account') }} onAdjustBalance={() => { setAccountTarget(selectedAccount); setModal('balance-adjustment') }} onLinkBank={() => { setBankTarget(selectedAccount); setModal('bank') }} onSyncBank={() => syncBank(selectedAccount)} onImportModeChange={(mode) => changeBankImportMode(selectedAccount.id, mode)} onReviewCandidate={decideBankImportCandidate} onApproveReady={approveReadyBankCandidates} bankBatchProgress={bankBatchProgress} bankBatchResult={bankBatchResult} onPostTransfer={postBankImportAsTransfer} onRematchPayees={() => rematchBankImportPayees(selectedAccount.id)} onCreatePayee={createPayeeForReview} onPromoteMapping={promotePayeeMapping} onAddAlternativeName={(sourceName, payeeId) => addPayeeAlternativeForReview(sourceName, payeeId, selectedAccount.id)} onUnhideCategory={(categoryId) => setCategoryHidden(categoryId, false)} onEditTransaction={setCategoryTarget} reviewingCandidateId={reviewingCandidateId} rematchingPayees={rematchingAccountId === selectedAccount.id} syncing={syncingAccountId === selectedAccount.id} syncNotice={syncNotice?.accountId === selectedAccount.id ? syncNotice.message : ''} />
