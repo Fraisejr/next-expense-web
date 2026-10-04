@@ -220,6 +220,8 @@ retried twice; failed reads cannot display editable zeros. The page offers
 **Retry loading hours** without reloading the app. Run `npm run test:timesheet-load`
 for client recovery tests. `node --env-file=.env.local scripts/test-timesheet-read-db.mjs`
 checks the SQL with isolated fixtures and rolls back all changes.
+Read-only RPC calls use GET with explicit date arguments and retry a missing
+function cache error twice. Bookmarks with a previous month remain supported.
 
 ## Authentication bundle optimization
 

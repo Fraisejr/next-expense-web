@@ -13,11 +13,21 @@ async function readTimesheet(workspaceId: string, startDate: string, endDate: st
       p_workspace_id: workspaceId,
       p_start_date: startDate,
       p_end_date: endDate,
-      p_comment_month: commentMonth,
-    }).abortSignal(AbortSignal.timeout(30_000))
+      // GET encodes arguments in the URL. Omit null so Postgres uses the
+      // function's default, rather than parsing the literal string "null".
+      ...(commentMonth ? { p_comment_month: commentMonth } : {}),
+    }, { get: true }).abortSignal(AbortSignal.timeout(30_000))
     if (error) {
       const authFailure = error.code === '42501' && error.message.includes('access to this workspace')
         || isExpiredJwtError(error)
+      // An API instance may still have an old function cache during startup
+      // or migration rollout. This read is safe to replay, with a strict limit.
+      const missingReadFunction = error.code === 'PGRST202' && error.message.includes('read_timesheet')
+      if (missingReadFunction) {
+        if (attempt >= 2) throw new Error('The timesheet service is temporarily unavailable. Please retry loading hours.', { cause: error })
+        await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)))
+        continue
+      }
       if (!authFailure || attempt >= 2) throw error
       const refreshed = await neon.auth.getSession()
       if (refreshed.error) throw refreshed.error
