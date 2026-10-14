@@ -1,5 +1,5 @@
 -- Run only on a disposable database containing schema migrations 001-020,
--- 068 and 074. Rolls back all fixtures. Never run on the finance database.
+-- 068, 074 and 075. Rolls back all fixtures. Never run on the finance database.
 begin;
 insert into public.workspaces(id,name) values('10000000-0000-4000-8000-000000000001','MCP fixture'),('10000000-0000-4000-8000-000000000002','Other workspace');
 insert into public.workspace_members(workspace_id,user_id,role) values('10000000-0000-4000-8000-000000000001','mcp-test-user','owner');
@@ -14,6 +14,10 @@ declare
   args jsonb := '{"transaction_id":"50000000-0000-4000-8000-000000000001","account_id":"20000000-0000-4000-8000-000000000001","category_id":"30000000-0000-4000-8000-000000000001","payee_id":"40000000-0000-4000-8000-000000000001","date":"2020-01-02","amount_minor":1234,"currency":"EUR","type":"expense","memo":"Coffee"}';
   result jsonb;
 begin
+  result:=expense_mcp.execute_tool('test-access','get_workspace','{}');
+  if result->>'name'!='MCP fixture' then raise exception 'Workspace read failed'; end if;
+  result:=expense_mcp.execute_tool('test-access','list_categories','{}');
+  if jsonb_array_length(result)!=1 or result->0->>'category_type'!='Expense' then raise exception 'Category read failed'; end if;
   result:=expense_mcp.execute_tool('test-access','list_accounts','{}');
   if jsonb_array_length(result)!=1 or result->0->>'name'!='Main' then raise exception 'Workspace isolation failed'; end if;
   perform expense_mcp.execute_tool('test-access','create_transaction',args);

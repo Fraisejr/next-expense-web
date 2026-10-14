@@ -29,11 +29,13 @@ creation, and balance adjustments remain in the web/iOS app.
 
 ## Production setup
 
-1. Apply migration `db/migrations/074_expense_mcp.sql` using the local owner
+1. Apply migrations `db/migrations/074_expense_mcp.sql` and
+   `db/migrations/075_fix_mcp_category_read.sql` using the local owner
    connection, after the existing migrations:
 
    ```sh
    node --env-file=.env.migration scripts/apply-migration.mjs db/migrations/074_expense_mcp.sql
+   node --env-file=.env.migration scripts/apply-migration.mjs db/migrations/075_fix_mcp_category_read.sql
    node --env-file=.env.migration scripts/provision-mcp.mjs
    ```
 
@@ -113,7 +115,7 @@ npm run lint
 The PostgreSQL tests use a disposable local database only. To reproduce:
 initialize local PostgreSQL, create `authenticated` and an `auth.user_id()` stub,
 apply schema migrations through 020, add the `transactions.bank_memo` column from
-068, and apply 074. Historical data-repair migrations expect production fixtures
+068, and apply 074 and 075. Historical data-repair migrations expect production fixtures
 and must not be run against an empty database. Run `scripts/test-mcp-database.sql`
 with `psql -v ON_ERROR_STOP=1`; it rolls back its fixtures. For the OAuth integration
 test, seed a separate disposable database with the fixture statements before
