@@ -1,4 +1,5 @@
 import { McpConsent } from './McpConsent'
+import { removeTransaction } from './transaction-deletion'
 import { formatCompactMoney, formatMoney, formatShortDate, fromMonthKey, getErrorMessage, monthName, parseMoneyToMinor, toMonthKey, uid } from './app-utils'
 import type { ReportView } from './features/reports/ReportsPage'
 import { PageLoader } from './features/PageLoader'
@@ -18,7 +19,7 @@ import {
 } from 'lucide-react'
 import { matchPath, useLocation, useNavigate } from 'react-router-dom'
 import * as payeeApi from './features/payees/api'
-import { cleanedMappingName, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayeeMapping, createTransaction, deleteBudget, deleteCategoryGroup, deleteFxRate, deleteUnusedCategory, ensurePayees, linkBankAccount, normalizedMappingName, normalizedPayeeName, prefixMappingMatches, saveAccountOrder, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updateTaxRate, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type LoadedWorkspace } from './database'
+import { cleanedMappingName, clearTransactionCache, createAccount, createBalanceAdjustment, createCategory, createCategoryGroup, createPayeeMapping, createTransaction, deleteBudget, deleteCategoryGroup, deleteFxRate, deleteTransaction, deleteUnusedCategory, ensurePayees, linkBankAccount, normalizedMappingName, normalizedPayeeName, prefixMappingMatches, saveAccountOrder, saveBudget, saveCategoryGroupOrder, saveCategoryOrder, saveFxRate, saveYearlyFinancialPlans, updateAccountDetails, updateBalanceAdjustment, updateCategoryDefaultBudget, updateCategoryDetails, updateCategoryGroupName, updateCategoryHidden, updateOpeningBalance, updatePayeeDefaultCategory, updatePayeeDefaults, updatePayeeMapping, updateTaxRate, updateTransactionCategories, updateTransactionDetails, updateTransferDetails, WorkspaceNotLinkedError, type LoadedWorkspace } from './database'
 import { neon } from './neon'
 import { todayInParis } from '../shared/bank-data.ts'
 import { convertMinor } from './currency'
@@ -691,6 +692,15 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
     }
   }
 
+  async function deleteSelectedTransaction(transaction: Transaction) {
+    await removeTransaction(transaction, {
+      deleteTransaction: () => deleteTransaction(workspace.workspaceId, transaction.id),
+      clearTransactionCache: () => clearTransactionCache(workspace.workspaceId),
+      invalidateTransactionMonth, setWrittenData, reloadWorkspaceSnapshot, setSyncError, getErrorMessage,
+    })
+    setCategoryTarget(null)
+  }
+
   async function changeTransactionDetails(transactionId: string, date: string, payeeName: string, payeeId: string | undefined, categoryId: string, memo: string, rememberDefault: boolean, rememberMapping: boolean, mappingSource: string, matchingTransactionIds: string[]) {
     try {
       setSyncError('')
@@ -916,7 +926,7 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
           {modal === 'bank' && bankTarget && <BankLinkForm account={bankTarget} workspaceId={workspace.workspaceId} onComplete={() => window.location.reload()} />}
         </ModalShell>
       )}
-      {categoryTarget && <ModalShell title={categoryTarget.type === 'opening_balance' ? 'Edit opening balance' : categoryTarget.type === 'balance_adjustment' ? 'Edit balance adjustment' : categoryTarget.type === 'transfer' ? 'Edit transfer' : 'Edit transaction'} onClose={() => setCategoryTarget(null)}>
+      {categoryTarget && <TransactionEditor key={categoryTarget.id} transaction={categoryTarget} onDelete={() => deleteSelectedTransaction(categoryTarget)} title={categoryTarget.type === 'opening_balance' ? 'Edit opening balance' : categoryTarget.type === 'balance_adjustment' ? 'Edit balance adjustment' : categoryTarget.type === 'transfer' ? 'Edit transfer' : 'Edit transaction'} onClose={() => setCategoryTarget(null)}>
         {categoryTarget.type === 'opening_balance'
           ? <OpeningBalanceForm transaction={categoryTarget} onSubmit={(date, amountMinor) => changeOpeningBalance(categoryTarget.id, date, amountMinor)} />
           : categoryTarget.type === 'balance_adjustment'
@@ -924,7 +934,7 @@ function ExpenseApp({ workspace, userId, userName, refreshState, refreshStartedM
             : categoryTarget.type === 'transfer'
               ? <TransferDetailsForm transaction={categoryTarget} accounts={data.accounts} onSubmit={(date, destinationAccountId, memo) => changeTransferDetails(categoryTarget.id, date, destinationAccountId, memo)} />
               : <TransactionDetailsForm transaction={categoryTarget} transactions={data.transactions} categories={data.categories} payees={data.payees} mappings={data.payeeMappings} accounts={data.accounts} onSubmit={(date, payeeName, payeeId, categoryId, memo, rememberDefault, rememberMapping, mappingSource, matchingTransactionIds) => changeTransactionDetails(categoryTarget.id, date, payeeName, payeeId, categoryId, memo, rememberDefault, rememberMapping, mappingSource, matchingTransactionIds)} />}
-      </ModalShell>}
+      </TransactionEditor>}
     </div>
   )
 }
@@ -2000,6 +2010,31 @@ function AccountsPage({ accounts, pendingImportCounts, totalBalance, defaultCurr
       })}
     </div>}
   </div>
+}
+
+function TransactionEditor({ title, transaction, onClose, onDelete, children }: { title: string; transaction: Transaction; onClose: () => void; onDelete: () => Promise<void>; children: ReactNode }) {
+  const [confirming, setConfirming] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [error, setError] = useState('')
+  const label = transaction.type === 'transfer' ? 'Transfer' : transaction.type === 'opening_balance' ? 'Opening balance' : transaction.type === 'balance_adjustment' ? 'Balance adjustment' : transaction.payee
+  return <ModalShell title={confirming ? 'Delete transaction?' : title} onClose={() => { if (!deleting) onClose() }}>
+    <div hidden={confirming}>{children}</div>
+    {confirming ? <div className="transaction-delete-confirmation">
+      <p>Delete <strong>{label}</strong> for <strong>{formatMoney(Math.abs(transaction.amountMinor), transaction.currency)}</strong> on {formatShortDate(transaction.date)}?</p>
+      <p>This cannot be undone. Your account balances and reports will be recalculated.</p>
+      {transaction.source && transaction.source !== 'manual' && <p className="form-help">A future bank sync may import this transaction again.</p>}
+      {error && <p className="auth-error" role="alert">{error}</p>}
+      <div className="transaction-delete-actions">
+        <button type="button" className="secondary-button" disabled={deleting} autoFocus onClick={() => { setConfirming(false); setError('') }}>Cancel</button>
+        <button type="button" className="danger-button confirming" disabled={deleting} onClick={async () => {
+          if (deleting) return
+          setDeleting(true)
+          setError('')
+          try { await onDelete() } catch (cause) { setError(getErrorMessage(cause, 'Could not delete the transaction.')) } finally { setDeleting(false) }
+        }}><Trash2 size={15} />{deleting ? 'Deleting…' : 'Delete transaction'}</button>
+      </div>
+    </div> : <div className="transaction-delete-footer"><button type="button" className="danger-button" onClick={() => setConfirming(true)}><Trash2 size={15} />Delete transaction</button></div>}
+  </ModalShell>
 }
 
 function ModalShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {

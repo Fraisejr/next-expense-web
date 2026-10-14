@@ -1079,6 +1079,16 @@ export async function deleteFxRate(workspaceId: string, rateId: string) {
   if (!data?.length) throw new Error('The exchange rate could not be deleted.')
 }
 
+export async function deleteTransaction(workspaceId: string, transactionId: string) {
+  const { data, error } = await neon.from('transactions')
+    .delete()
+    .eq('workspace_id', workspaceId)
+    .eq('id', transactionId)
+    .select('id')
+  if (error) throw error
+  if (!data?.length) throw new Error('The transaction could not be deleted. It may already have been removed.')
+}
+
 export async function createTransaction(workspaceId: string, transaction: Transaction) {
   const hasNoCategory = transaction.type === 'transfer' || transaction.type === 'opening_balance' || transaction.type === 'balance_adjustment'
   if (hasNoCategory ? transaction.categoryId : !transaction.categoryId) {
