@@ -167,6 +167,12 @@ export function SettingsPage({ workspaceId, workspaceName, defaultCurrency, acco
       <p>Save a complete copy of {workspaceName} to this computer. The file contains your financial data, so keep it somewhere private.</p>
     </section>
 
+    <section className="panel settings-card">
+      <h2>Connected apps</h2>
+      <p>Manage ChatGPT, Codex, and other apps connected to your expenses.</p>
+      <a className="secondary-button" href="/oauth/connections">Manage connections</a>
+    </section>
+
     <section className="panel fx-settings">
       <div className="fx-settings-heading">
         <div className="settings-card-icon"><ArrowLeftRight size={21} /></div>

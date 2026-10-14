@@ -1,3 +1,4 @@
+import { McpConsent } from './McpConsent'
 import { formatCompactMoney, formatMoney, formatShortDate, fromMonthKey, getErrorMessage, monthName, parseMoneyToMinor, toMonthKey, uid } from './app-utils'
 import type { ReportView } from './features/reports/ReportsPage'
 import { PageLoader } from './features/PageLoader'
@@ -178,6 +179,8 @@ function AuthenticatedApp() {
 
   if (session.isPending) return <FullPageStatus message="Checking your secure session…" />
   if (!session.data) return <AuthScreen />
+
+  if (['/oauth/consent', '/oauth/connections'].includes(window.location.pathname)) return <McpConsent />
 
   return <WorkspaceApp key={session.data.user.id} userId={session.data.user.id} userName={session.data.user.name ?? session.data.user.email ?? 'Michael'} />
 }
@@ -963,7 +966,7 @@ function AuthScreen() {
     setPending(true)
     setError('')
     try {
-      const result = await neon.auth.signIn.social({ provider: 'google', callbackURL: window.location.origin })
+      const result = await neon.auth.signIn.social({ provider: 'google', callbackURL: window.location.pathname === '/oauth/consent' ? window.location.href : window.location.origin })
       if (result?.error) throw result.error
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Google sign-in failed. Please try again.')

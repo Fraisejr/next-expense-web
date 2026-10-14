@@ -254,3 +254,12 @@ Neon before deploying clients that reference new columns. The SQL
 065. Verify new columns through the Data API, including write-schema validation,
 before considering a migration deployed.
 Verify the transition policy with `npm run test:bank-policy`.
+
+## ChatGPT and Codex MCP
+
+The remote MCP server at `/api/mcp` exposes authenticated expense, income, payee,
+budget and reporting tools. It uses Neon sign-in with workspace consent and a
+separate restricted server database credential. See
+[server/mcp/README.md](server/mcp/README.md) for provisioning, Vercel deployment,
+connection instructions and tests. Connected clients can be revoked from
+`/oauth/connections` in the web app.
