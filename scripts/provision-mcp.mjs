@@ -2,12 +2,13 @@ import { Pool, neonConfig } from '@neondatabase/serverless'
 import { randomBytes } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 
-// Run only after migration 074 using the local owner connection. Never log
-// passwords or upload this owner connection to Vercel.
+// Use the local owner connection only for provisioning. Verify permissions
+// through a separate login: Neon owners cannot necessarily SET ROLE to it.
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required for provisioning.')
 neonConfig.webSocketConstructor = WebSocket
 const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 const password = randomBytes(32).toString('hex')
+let created = false
 try {
   const client = await pool.connect()
   try {
@@ -16,19 +17,24 @@ try {
     if (existing.rowCount) throw new Error('MCP login already exists. Rotate its password explicitly instead of overwriting it.')
     await client.query(`create role next_expense_mcp login password '${password}' nosuperuser nocreatedb nocreaterole noreplication nobypassrls`)
     await client.query('grant expense_mcp_runtime to next_expense_mcp')
-    const connection = new URL(process.env.DATABASE_URL)
-    connection.username = 'next_expense_mcp'; connection.password = password
-    await client.query('set local role next_expense_mcp')
-    await client.query('select count(*) from expense_mcp.grants')
-    await client.query('savepoint permission_check')
-    let denied = false
-    try { await client.query('select id from public.transactions limit 0') } catch (error) { denied = error.code === '42501' }
-    await client.query('rollback to savepoint permission_check')
-    await client.query('reset role')
-    if (!denied) throw new Error('MCP role unexpectedly has direct financial table access.')
-    await writeFile('.env.mcp.local', `MCP_DATABASE_URL=${connection.href}\n`, { mode: 0o600, flag: 'wx' })
     await client.query('commit')
-    console.log('Created restricted MCP login. Server credential saved to ignored .env.mcp.local (mode 0600).')
+    created = true
   } catch (error) { await client.query('rollback'); throw error }
   finally { client.release() }
+
+  const connection = new URL(process.env.DATABASE_URL)
+  connection.username = 'next_expense_mcp'; connection.password = password
+  const restricted = new Pool({ connectionString: connection.href })
+  try {
+    await restricted.query('select count(*) from expense_mcp.grants')
+    let denied = false
+    try { await restricted.query('select id from public.transactions limit 0') } catch (error) { denied = error.code === '42501' }
+    if (!denied) throw new Error('MCP role unexpectedly has direct financial table access.')
+  } finally { await restricted.end() }
+  await writeFile('.env.mcp.local', `MCP_DATABASE_URL=${connection.href}\n`, { mode: 0o600, flag: 'wx' })
+  console.log('Created and verified restricted MCP login. Credential saved to ignored .env.mcp.local (mode 0600).')
+} catch (error) {
+  // Only remove the login created by this invocation, never an existing one.
+  if (created) await pool.query('drop role next_expense_mcp')
+  throw error
 } finally { await pool.end() }
