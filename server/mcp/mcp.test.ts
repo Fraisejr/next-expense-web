@@ -25,6 +25,8 @@ test('OAuth discovery, missing authorization, invalid grants and origins', async
   assert.equal((await discovery.json()).resource, settings.resource)
   const rewritten = await handle(new Request(`${settings.origin}/api/mcp-oauth?mcp_route=metadata`), settings, store)
   assert.equal((await rewritten.json()).issuer, settings.origin)
+  const oidc = await handle(new Request(`${settings.origin}/api/mcp-oauth?mcp_route=openid`), settings, store)
+  assert.equal(oidc.status, 404, 'OAuth-only server must not advertise OIDC')
   const missing = await handle(request({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, ''), settings, store)
   assert.equal(missing.status, 401)
   assert.match(missing.headers.get('www-authenticate') || '', /resource_metadata/)

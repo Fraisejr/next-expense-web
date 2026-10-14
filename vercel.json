@@ -32,7 +32,7 @@
     },
     {
       "source": "/.well-known/openid-configuration",
-      "destination": "/api/mcp-oauth?mcp_route=metadata"
+      "destination": "/api/mcp-oauth?mcp_route=openid"
     },
     {
       "source": "/api/mcp-oauth/:action",
