@@ -45,7 +45,7 @@ export function McpConsent() {
     {details ? <>
       {request && <>
       <p><strong>{details.client_name}</strong> requests access to your expenses.</p>
-      <p>{details.scope.includes('expenses:write') ? 'Allow this connection to read transactions, accounts, categories and budgets, record expenses and income, edit transaction details, create payees, and set budgets.' : 'Allow this connection to read transactions, accounts, categories, payees and budgets.'}</p>
+      <p>{details.scope.includes('expenses:write') ? 'Allow this connection to read transactions, accounts, categories, budgets and timesheets, record expenses and income, edit transaction details, create payees, and set budgets.' : 'Allow this connection to read transactions, accounts, categories, payees, budgets and timesheets.'}</p>
       <p>Returns to: {new URL(details.redirect_uri).origin}</p>
       <label>Workspace<select value={workspace} onChange={event => setWorkspace(event.target.value)}>{details.memberships.map(member => <option key={member.workspace_id} value={member.workspace_id} disabled={member.role === 'viewer' && details.scope.includes('expenses:write')}>{member.name} ({member.role})</option>)}</select></label>
       <div className="form"><button className="primary-button" disabled={pending || !workspace} onClick={() => void decide('allow')}>Allow access</button><button disabled={pending} onClick={() => void decide('deny')}>Deny</button></div>

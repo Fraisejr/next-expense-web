@@ -1504,3 +1504,14 @@ h2 { font-family: 'Newsreader', serif; font-size: 22px; line-height: 1.15; lette
   .net-worth-hero { align-items: stretch; flex-direction: column; }
   .net-worth-total { text-align: left; }
 }
+
+.kleer-mappings { margin: 24px; padding: 20px; border: 1px solid #dedfd8; border-radius: 12px; background: #fafbf8; }
+.kleer-mappings summary { cursor: pointer; font-weight: 700; }
+.kleer-mappings > p { margin: 12px 0 18px; color: #626b62; font-size: 13px; }
+.kleer-mapping-row { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(230px, 3fr) minmax(110px, 1fr) auto; gap: 12px; align-items: end; padding: 12px 0; border-top: 1px solid #e3e5df; }
+.kleer-mapping-row > div { display: grid; gap: 5px; padding-bottom: 8px; }
+.kleer-mapping-row > div span { font-size: 11px; color: #626b62; }
+.kleer-mapping-row label { display: grid; gap: 6px; font-size: 12px; }
+.kleer-mapping-row input { min-width: 0; width: 100%; padding: 9px; border: 1px solid #cbd1c7; border-radius: 7px; background: white; color: #263329; }
+.kleer-mapping-row [role="alert"] { grid-column: 1 / -1; color: #a13b32; }
+@media (max-width: 800px) { .kleer-mapping-row { grid-template-columns: 1fr; } .kleer-mappings { margin: 16px; } }

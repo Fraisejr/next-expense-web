@@ -271,7 +271,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string,
     allRows('timesheet_clients', 'id,name,currency,sort_order,active', 'sort_order'),
     allRows('timesheet_client_rates', 'client_id,effective_from,hourly_rate_minor', 'effective_from', 'client_id'),
     allRows('timesheet_client_forecasts', 'client_id,forecast_year,hours_per_day,vacation_days_remaining', 'forecast_year', 'client_id'),
-    allRows('time_codes', 'id,name,sort_order,client_id,hidden_from_month', 'sort_order'),
+    allRows('time_codes', 'id,name,sort_order,client_id,hidden_from_month,kleer_project,kleer_activity', 'sort_order'),
     loadTransactionPage(workspaceId, { startDate: monthStart, endDate: monthEnd }),
     neon.rpc('workspace_account_balances', { p_workspace_id: workspaceId }),
     allRows('bank_connections', 'id,account_id,status,last_synced_at,metadata'),
@@ -471,6 +471,7 @@ async function loadWorkspaceWithRetries(retriesRemaining: number, month: string,
     sortOrder: number(row.sort_order),
     clientId: (row.client_id as string | null) ?? undefined,
     hiddenFromMonth: (row.hidden_from_month as string | null)?.slice(0, 7) || undefined,
+    kleerMapping: row.kleer_project && row.kleer_activity ? { project: String(row.kleer_project), activity: String(row.kleer_activity) } : undefined,
   }))
   const bankImportCandidates: BankImportCandidate[] = ((checkedCandidateRows.data ?? []) as unknown as Row[])
     .filter((row) => row.status === 'pending')

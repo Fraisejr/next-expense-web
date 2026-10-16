@@ -7,7 +7,7 @@ import type { Store } from './store.ts'
 
 const settings = { origin: 'https://expense.example', resource: 'https://expense.example/api/mcp', databaseUrl: 'unused', dataApiUrl: 'https://neon.example/rest/v1' }
 const token = 'a'.repeat(43)
-const store: Store = { query: async (sql, args) => sql.includes('execute_tool') ? [{ result: { id: 'workspace', received: args?.[1] } }] : [{ scope: 'expenses:read expenses:write' }] }
+const store: Store = { query: async (sql, args) => /expense_mcp\.(execute_tool|read_timesheet)/.test(sql) ? [{ result: { id: 'workspace', received: args?.[1] } }] : [{ scope: 'expenses:read expenses:write' }] }
 const request = (value: unknown, authorization = `Bearer ${token}`) => new Request(settings.resource, { method: 'POST', headers: { Authorization: authorization, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' }, body: JSON.stringify(value) })
 
 test('configuration fails closed and redirect validation excludes unsafe schemes', () => {
@@ -40,16 +40,16 @@ test('MCP protocol initializes, discovers tools and executes through scoped SQL'
   assert.equal((await initialized.json()).result.serverInfo.name, 'next-expense')
   const listed = await handle(request({ jsonrpc: '2.0', id: 2, method: 'tools/list' }), settings, store)
   const tools = (await listed.json()).result.tools
-  assert.equal(tools.length, 11)
+  assert.equal(tools.length, 13)
   const called = await handle(request({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'get_workspace', arguments: {} } }), settings, store)
   assert.equal(JSON.parse((await called.json()).result.content[0].text).received, 'get_workspace')
 })
 test('read-only connection hides write tools and invalid input never reaches SQL', async () => {
   const readOnly: Store = { query: async () => [{ scope: 'expenses:read' }] }
   const response = await handle(request({ jsonrpc: '2.0', id: 1, method: 'tools/list' }), settings, readOnly)
-  assert.equal((await response.json()).result.tools.length, 7)
+  assert.equal((await response.json()).result.tools.length, 9)
   let calls = 0
-  const spy: Store = { query: async sql => { if (sql.includes('execute_tool')) calls++; return [{ scope: 'expenses:read expenses:write' }] } }
+  const spy: Store = { query: async sql => { if (/expense_mcp\.(execute_tool|read_timesheet)/.test(sql)) calls++; return [{ scope: 'expenses:read expenses:write' }] } }
   for (const args of [{ start_date: '2020-02-30', end_date: '2020-03-01' }, { start_date: '2020-03-02', end_date: '2020-03-01' }]) {
     const response = await handle(request({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_transactions', arguments: args } }), settings, spy)
     const body = await response.json()
@@ -63,4 +63,38 @@ test('OAuth token exchange enforces resource and verifier before querying', asyn
   assert.equal(response.status, 400)
   assert.equal((await response.json()).error, 'invalid_target')
   assert.equal(hash(token).length, 64)
+})
+
+test('timesheet tools are read-only, enforce dates, and use the private timesheet function', async () => {
+  const calls: { sql: string; args?: unknown[] }[] = []
+  const database: Store = { query: async (sql, args) => {
+    if (sql.includes('read_timesheet')) { calls.push({ sql, args }); return [{ result: { entries: [], total_hours: 0 } }] }
+    return [{ scope: 'expenses:read' }]
+  } }
+  const listed = await handle(request({ jsonrpc: '2.0', id: 1, method: 'tools/list' }), settings, database)
+  const tools = (await listed.json()).result.tools
+  for (const name of ['read_timesheet', 'list_time_codes']) {
+    const descriptor = tools.find((tool: { name: string }) => tool.name === name)
+    assert.equal(descriptor.annotations.readOnlyHint, true)
+    assert.equal(descriptor.annotations.destructiveHint, false)
+  }
+  const args = { start_date: '2026-10-05', end_date: '2026-10-11', limit: 1, revision: 'a'.repeat(32) }
+  const read = await handle(request({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'read_timesheet', arguments: args } }), settings, database)
+  assert.equal((await read.json()).result.isError, undefined)
+  assert.match(calls[0].sql, /expense_mcp.read_timesheet/)
+  assert.equal(calls[0].args?.[0], hash(token))
+  assert.equal(calls[0].args?.[1], 'read_timesheet')
+  assert.deepEqual(JSON.parse(String(calls[0].args?.[2])), { ...args, offset: 0 })
+  for (const invalid of [
+    { start_date: '2026-10-11', end_date: '2026-10-05' },
+    { start_date: '2026-02-30', end_date: '2026-03-01' },
+    { start_date: '2025-01-01', end_date: '2026-01-02' },
+    { start_date: '2026-10-05', end_date: '2026-10-11', limit: 101 },
+    { start_date: '2026-10-05', end_date: '2026-10-11', client_id: 'not-an-id' },
+  ]) {
+    const response = await handle(request({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'read_timesheet', arguments: invalid } }), settings, database)
+    const value = await response.json()
+    assert.ok(value.error || value.result.isError)
+  }
+  assert.equal(calls.length, 1, 'Invalid requests never query the timesheet')
 })

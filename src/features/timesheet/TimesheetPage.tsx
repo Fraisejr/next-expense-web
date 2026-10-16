@@ -1,3 +1,4 @@
+import { KleerMappings } from './KleerMappings'
 import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { ArrowDown, ArrowUp, BriefcaseBusiness, CalendarDays, Check, ChevronDown, CircleAlert, Clock3, Eye, EyeOff, GripVertical, LoaderCircle, MessageSquareText, Minus, Plus } from 'lucide-react'
 import { loadRevenueRecognitionEntries, loadTimesheetMonth, loadTimeEntries, saveTimeComment, saveTimeEntry } from './api'
@@ -342,6 +343,8 @@ export function TimesheetPage({ workspaceId, month, defaultCurrency, codes, clie
         <div className="time-comments-heading"><MessageSquareText size={18} /><div><span className="eyebrow">Monthly comments</span><h3>What did you work on?</h3><p>These notes belong only to this item in {monthName.format(monthDate)}.</p></div></div>
         <div className="time-comment-list">{displayedCodes.map((code) => <TimeCommentField key={code.id} code={code} value={commentMap.get(code.id) ?? ''} onSave={(comment) => changeComment(code.id, comment)} />)}</div>
       </section>}
+
+      <KleerMappings codes={codes} onSave={updateCode} />
 
       {hiddenCodes.length > 0 && <div className="hidden-time-codes"><button type="button" onClick={() => setShowHidden((current) => !current)}><EyeOff size={15} />{hiddenCodes.length} hidden {hiddenCodes.length === 1 ? 'code' : 'codes'}<ChevronDown className={showHidden ? 'expanded' : ''} size={15} /></button>{showHidden && <div>{hiddenCodes.map((code) => <TimeCodeEditor key={code.id} code={code} month={month} hidden onSave={updateCode} />)}</div>}</div>}
       {error && monthReady && <p className="timesheet-error" role="alert">{error}</p>}

@@ -173,12 +173,15 @@ export type TimesheetClientForecast = {
   vacationDaysRemaining: number
 }
 
+export type KleerMapping = { project: string; activity: string }
+
 export type TimeCode = {
   id: string
   name: string
   sortOrder: number
   clientId?: string
   hiddenFromMonth?: string
+  kleerMapping?: KleerMapping
 }
 
 export type TimeEntry = {

@@ -84,6 +84,8 @@ export async function updateTimeCode(workspaceId: string, code: TimeCode) {
     name,
     client_id: code.clientId ?? null,
     hidden_from_month: code.hiddenFromMonth ? `${code.hiddenFromMonth}-01` : null,
+    kleer_project: code.kleerMapping?.project.trim() || null,
+    kleer_activity: code.kleerMapping?.activity.trim() || null,
   }).eq('workspace_id', workspaceId).eq('id', code.id).select('id')
   if (error) throw error
   if (!data?.length) throw new Error('The time code could not be updated.')

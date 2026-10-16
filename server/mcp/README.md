@@ -7,7 +7,8 @@ Neon sign-in and an explicit workspace consent screen. No OpenAI API key is need
 ## Tools
 
 Read tools: `get_workspace`, `list_accounts`, `list_categories`, `list_payees`,
-`list_transactions`, `spending_summary`, `list_budgets`.
+`list_transactions`, `spending_summary`, `list_budgets`, `list_time_codes`,
+`read_timesheet`.
 
 Write tools: `create_payee`, `create_transaction`, `update_transaction`, `set_budget`.
 Writes require both `expenses:write` consent and current owner/member membership.
@@ -136,3 +137,58 @@ Official references:
 - [OpenAI MCP authentication](https://developers.openai.com/plugins/build/auth)
 - [Codex MCP connections](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)
 - [Vercel Node.js Functions](https://vercel.com/docs/functions/runtimes/node-js)
+
+
+## Timesheet reads and weekly reporting
+
+Apply `076_mcp_timesheet_reads.sql` before deploying this version. It adds the
+private read function and optional Kleer project/activity mapping columns to time
+codes. It grants no direct table access to the runtime. Existing `expenses:read`
+connections can use the two new read tools; no timesheet write tool is exposed.
+The web timesheet has a **Kleer reporting mappings** editor. Project and activity
+must be filled together or both cleared. Kleer selects its customer from the
+project, so customer is not stored as a separate destination mapping. Source
+billing client names stay independent from destination projects.
+
+`list_time_codes` lists all source codes, including hidden codes and inactive
+clients, with IDs, names and saved `reporting_mapping` objects. An unmapped code
+returns `reporting_mapping: null`. Both tools support `client_id` filtering.
+
+`read_timesheet` accepts inclusive `start_date` and `end_date` (maximum 366 days),
+optional `time_code_id`, and `limit`/`offset` (up to 100 entries per page). It
+returns recorded positive hours only, with dates preserved as YYYY-MM-DD, exact
+integer hours and minutes, source code/client IDs and names, source updated_at,
+a stable workspace/code/date `entry_key`, the saved Kleer project/activity and
+the corresponding `month_comment`/`comment_month`. Monthly notes describe a whole
+month and must not be presented as verified daily work descriptions. No billing
+rates or revenue forecasts are exposed.
+
+The response includes full-range `total_entries`, `total_hours`, `total_minutes`,
+`unmapped_entries`, a content `revision`, and an explicit nullable `next_offset`.
+Pass the first page's revision on subsequent requests. Any change in the matching
+entries, names, mappings or notes invalidates it; restart the read from offset 0.
+Totals cover the whole filtered range and must not be added together across pages.
+
+For a later weekly reporting task:
+
+1. Determine the exact week dates and intended source codes/client.
+2. Read every page with the same revision. Reconcile entry count and sum of hours
+   against the full-range totals before copying anything.
+3. Stop if `unmapped_entries` is nonzero. Use exact saved project/activity labels;
+   never infer the Kleer customer from the source billing client.
+4. Read existing destination rows and compare dates/project/activity/hours before
+   writing, so reruns cannot duplicate hours. Flag ambiguous rows or differences.
+   A locked report needs user attention; do not unlock it automatically.
+5. Summarize what was copied and what remains unresolved. Only create a recurring
+   task after its schedule, destination and reporting behavior have been agreed.
+
+The current OAuth refresh-token lifetime is an absolute 30 days. Scheduled runs
+must surface a reconnect requirement when authorization expires; authentication
+failure must never be interpreted as an empty timesheet. Browser access to Kleer
+is separate from the MCP connection and must also remain available to that task.
+
+The real PostgreSQL regression test is `scripts/test-mcp-timesheet.sql`, using a
+disposable local schema with 060, 064, 066, 074 and 076 applied. It checks complete
+and filtered totals, hidden/inactive/unassigned work, cross-month notes, saved
+mappings, page revisions, empty ranges, isolated workspaces, viewer read access,
+expiry, revocation and removed memberships. All fixtures roll back.
